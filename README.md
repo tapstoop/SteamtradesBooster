@@ -2,6 +2,9 @@
 
 The essential trading companion for SteamTrades. Make smarter trades in seconds.
 
+<img width="1280" height="320" alt="logo" src="https://github.com/user-attachments/assets/1425bb0e-6dd1-4eb2-9dc7-5011d3275894" />
+
+
 ## Why SteamTrades Booster?
 
 Trading on SteamTrades means juggling dozens of prices, spotting deals, and evaluating if a trade is actually worth your time. **SteamTrades Booster brings market intelligence directly into your workflow** — real-time pricing from GG.deals, visual deal labels, and a powerful trade simulator to validate exchanges before you commit.
