@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "SteamTrades Price Tracker",
+  "version": "0.1.0",
+  "description": "Overlay GG.deals prices on steamtrades.com listings",
+  "permissions": ["storage", "alarms", "unlimitedStorage"],
+  "host_permissions": [
+    "https://www.steamtrades.com/*",
+    "https://steamtrades.com/*",
+    "https://store.steampowered.com/*",
+    "https://api.steampowered.com/*",
+    "https://gg.deals/*",
+    "https://api.gg.deals/*"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.steamtrades.com/*", "https://steamtrades.com/*"],
+      "js": ["dist/content.js"],
+      "css": ["styles/content.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://gg.deals/game/*"],
+      "js": ["dist/ggdeals-scraper.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "SteamTrades Price Tracker"
+  }
+}

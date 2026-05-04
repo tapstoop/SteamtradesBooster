@@ -1,0 +1,18 @@
+node_modules/
+dist/
+*.log
+
+# Agent/coding tool configs
+.claude/
+.playwright/
+.playwright-cli/
+.playwright-mcp/
+.superpowers/
+
+# Docs and .md files not belonging in repo (except README)
+*.md
+!README.md
+docs/
+
+# Test results
+test-results/

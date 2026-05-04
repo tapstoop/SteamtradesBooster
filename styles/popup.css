@@ -1,0 +1,351 @@
+/* styles/popup.css */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 360px;
+  min-height: 400px;
+  background: #1b2838;
+  color: #c6d4df;
+  font-family: 'Segoe UI', sans-serif;
+  font-size: 12px;
+}
+
+#tabs {
+  display: flex;
+  background: #171d25;
+  border-bottom: 1px solid #2a3f5f;
+}
+
+.tab {
+  flex: 1;
+  padding: 9px 6px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #8a9bb0;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+}
+.tab.active { color: #66c0f4; border-bottom-color: #66c0f4; }
+.tab:hover:not(.active) { color: #c6d4df; }
+
+.tab-content { display: none; padding: 12px; }
+.tab-content.active { display: block; }
+
+/* Settings */
+.settings-section { margin-bottom: 14px; }
+.settings-label {
+  color: #8a9bb0;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+.settings-input {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  color: #66c0f4;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-family: monospace;
+  margin-bottom: 4px;
+}
+.settings-input:focus { outline: none; border-color: #66c0f4; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  cursor: pointer;
+  border: 1px solid #2a2a4e;
+  background: #1a1a2e;
+  color: #555;
+  user-select: none;
+}
+.chip.active { background: #1a3a5e; border-color: #2a5a8e; color: #7fb3ff; }
+.chip.warn { border-color: #5a5a00; background: #2a2a1a; color: #cccc55; }
+
+.toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px solid #1e2d3d;
+}
+.toggle-row:last-child { border-bottom: none; }
+.toggle-row label { color: #c6d4df; font-size: 11px; }
+
+.toggle {
+  appearance: none;
+  width: 32px;
+  height: 16px;
+  border-radius: 10px;
+  background: #1a1a2e;
+  border: 1px solid #2a2a4e;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.toggle::after {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #444;
+  top: 1px;
+  left: 1px;
+  transition: left 0.2s, background 0.2s;
+}
+.toggle:checked { background: #1a3a5e; border-color: #2a5a8e; }
+.toggle:checked::after { left: 17px; background: #66c0f4; }
+
+.fee-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 10px;
+  color: #c6d4df;
+}
+.fee-input {
+  width: 40px;
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  color: #c6d4df;
+  padding: 2px 4px;
+  font-size: 10px;
+  text-align: center;
+}
+
+.btn-danger {
+  background: #2a1a1a;
+  border: 1px solid #5a2a2a;
+  color: #ff8888;
+  padding: 5px 10px;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  width: 100%;
+  margin-top: 6px;
+}
+.btn-danger:hover { background: #3a1a1a; }
+
+/* PHASE 2A: Pop-out button */
+#pop-out-btn {
+  flex: 0;
+  padding: 9px 8px;
+  font-size: 14px;
+  color: #8a9bb0;
+}
+#pop-out-btn:hover { color: #66c0f4; }
+
+.preference-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+}
+
+.preference-row label {
+  font-size: 12px;
+  color: #c6d4df;
+}
+
+.settings-select {
+  background: #0d1117;
+  color: #c6d4df;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  min-width: 100px;
+  cursor: pointer;
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: #66c0f4;
+}
+
+.cache-info { color: #555; font-size: 10px; line-height: 1.8; }
+
+/* Wishlist / Tradables Detailed */
+.game-list { display: flex; flex-direction: column; gap: 6px; }
+.game-card {
+  background: #111827;
+  border: 1px solid #2a3f5f;
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+.game-card-title { color: #c6d4df; font-size: 11px; margin-bottom: 4px; }
+.game-card-meta { color: #8a9bb0; font-size: 10px; }
+.game-card-meta .highlight { color: #ffd700; }
+.game-card-meta .high { color: #7fff7f; }
+.game-card-meta .low { color: #ff8888; }
+.game-card-meta .atl { color: #4ecdc4; }
+.game-card-range { font-size: 10px; margin-top: 3px; }
+.range-LOW { color: #ff8844; }
+.range-MID { color: #8a9bb0; }
+.range-HIGH { color: #7fff7f; }
+
+.empty-state { color: #555; text-align: center; padding: 30px 0; font-size: 11px; }
+.error-state { color: #ff8888; font-size: 10px; padding: 8px; background: #2a1a1a; border-radius: 3px; }
+
+/* Tradables */
+.tradable-add-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.btn-add {
+  background: #1a3a5e;
+  border: 1px solid #2a5a8e;
+  color: #66c0f4;
+  padding: 5px 10px;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.btn-add:hover { background: #1e4a78; }
+
+#s-tradable-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+
+.tradable-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  border: 1px solid;
+}
+.tradable-chip-ok {
+  background: #0d1a2e;
+  border-color: #2a5a8e;
+  color: #c6d4df;
+}
+.tradable-chip-miss {
+  background: #1a0d0d;
+  border-color: #5a2a2a;
+  color: #c6d4df;
+}
+.tradable-chip-name { flex: 1; }
+.tradable-chip-id {
+  color: #555;
+  font-size: 9px;
+  font-family: monospace;
+}
+.tradable-chip-unresolved {
+  color: #ff6666;
+  font-size: 9px;
+}
+.tradable-chip-remove {
+  background: none;
+  border: none;
+  color: #555;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.tradable-chip-remove:hover { color: #ff8888; }
+
+#s-tradable-candidates { margin-top: 4px; }
+.tradable-candidate {
+  padding: 5px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 3px;
+  color: #c6d4df;
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  margin-bottom: 3px;
+}
+.tradable-candidate:hover { background: #1a2a3e; border-color: #66c0f4; }
+
+.btn-refresh {
+  background: none;
+  border: 1px solid #2a3f5f;
+  color: #8a9bb0;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn-refresh:hover { color: #66c0f4; border-color: #66c0f4; }
+
+/* Was free badge */
+.badge-was-free {
+  display: inline-block;
+  background: #f1c40f;
+  color: #1b2838;
+  font-size: 9px;
+  font-weight: bold;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* Fetch free games button */
+.btn-fetch-free {
+  background: #1a3a5e;
+  border: 1px solid #2a5a8e;
+  color: #66c0f4;
+  padding: 4px 10px;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn-fetch-free:hover { background: #1e4a78; }
+.btn-fetch-free:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.scrape-progress {
+  margin: 8px 0;
+  padding: 8px;
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  border-radius: 4px;
+}
+
+.progress-bar {
+  height: 4px;
+  background: #1a1a2e;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #66c0f4, #4ecdc4);
+  transition: width 0.3s ease;
+}
+
+.progress-status {
+  font-size: 10px;
+  color: #8a9bb0;
+  line-height: 1.6;
+  max-height: 80px;
+  overflow-y: auto;
+  font-family: 'Segoe UI', sans-serif;
+}
+
+.progress-status .success { color: #7fff7f; }
+.progress-status .warn { color: #f1c40f; }
+.progress-status .error { color: #ff8888; }
+.progress-status .info { color: #66c0f4; }

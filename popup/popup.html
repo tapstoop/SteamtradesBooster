@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SteamTrades Price Tracker</title>
+  <link rel="stylesheet" href="../styles/popup.css">
+  <link rel="stylesheet" href="tradables.css">
+</head>
+<body>
+  <div id="tabs">
+    <button class="tab active" data-tab="deals">Wishlist</button>
+    <button class="tab" data-tab="tradablesDetailed">Tradables detailed</button>
+    <button class="tab" data-tab="tradables">Tradables</button>
+    <button class="tab" data-tab="settings">⚙ Settings</button>
+    <button id="pop-out-btn" class="tab" title="Open in new tab" style="flex:0; padding: 9px 8px;">↗</button>
+  </div>
+  <div id="tab-deals" class="tab-content active"></div>
+  <div id="tab-tradablesDetailed" class="tab-content"></div>
+  <div id="tab-tradables" class="tab-content"></div>
+  <div id="tab-settings" class="tab-content"></div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

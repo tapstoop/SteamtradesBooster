@@ -1,0 +1,496 @@
+/* popup/tradables.css */
+
+/* ── Button Variants ────────────────────────────────────────────── */
+.btn-primary {
+  background: #1a3a5e;
+  border: 1px solid #2a5a8e;
+  color: #66c0f4;
+  padding: 5px 10px;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.btn-primary:hover { background: #1e4a78; }
+
+.btn-success {
+  background: #a1cd44;
+  border: none;
+  color: #171a21;
+  border-radius: 3px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn-success:hover { background: #b8e058; }
+.btn-success:disabled {
+  background: #4a5a2a;
+  color: #8a9bb0;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: #2a475e;
+  border: 1px solid #1b2838;
+  color: #c6d4df;
+  border-radius: 3px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn-secondary:hover { background: #3d6a8a; }
+
+/* ── Main Tradables Container ───────────────────────────────────── */
+.tradables-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ── Stats Bar ──────────────────────────────────────────────────── */
+.tradables-stats {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+  padding: 8px;
+  background: #16202d;
+  border-radius: 4px;
+  border: 1px solid #2a3f5f;
+}
+
+.stat-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: bold;
+  color: #66c0f4;
+}
+
+.stat-label {
+  font-size: 9px;
+  color: #8a9bb0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────────── */
+.tradables-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.tradables-search {
+  flex: 1;
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  padding: 5px 8px;
+  color: #c6d4df;
+  font-size: 11px;
+  font-family: inherit;
+}
+.tradables-search::placeholder { color: #555; }
+.tradables-search:focus { outline: none; border-color: #66c0f4; }
+
+.tradables-sort {
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  padding: 5px 4px;
+  color: #c6d4df;
+  font-size: 10px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tradables-sort:focus { outline: none; border-color: #66c0f4; }
+
+.btn-undo {
+  background: #2a4a2a;
+  border: 1px solid #3a6a3a;
+  color: #a1cd44;
+  padding: 5px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
+  animation: undo-pulse 0.3s ease-out;
+}
+.btn-undo:hover {
+  background: #3a6a3a;
+}
+
+@keyframes undo-pulse {
+  0% { transform: scale(0.95); opacity: 0.7; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ── List ────────────────────────────────────────────────────────── */
+.tradables-list {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 340px;
+  border: 1px solid #2a3f5f;
+  border-radius: 4px;
+  background: #111827;
+}
+
+.tradables-empty {
+  color: #555;
+  font-size: 11px;
+  padding: 20px;
+  text-align: center;
+}
+
+.tradables-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  border-bottom: 1px solid #1e2d3d;
+  min-height: 36px;
+}
+
+.tradables-item:last-child { border-bottom: none; }
+
+.tradables-item:hover {
+  background: #1a2030;
+}
+
+.tradables-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.tradables-name {
+  font-size: 11px;
+  color: #c6d4df;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tradables-appid {
+  font-size: 9px;
+  color: #66c0f4;
+  font-family: monospace;
+}
+
+.tradables-unresolved {
+  font-size: 9px;
+  color: #e74c3c;
+}
+
+.tradables-resolve-link {
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+
+.tradables-resolve-link:hover {
+  color: #66c0f4;
+}
+
+.tradables-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tradables-acq-input {
+  width: 56px;
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  padding: 2px 4px;
+  color: #c6d4df;
+  font-size: 10px;
+  font-family: inherit;
+  text-align: right;
+}
+.tradables-acq-input::placeholder { color: #555; font-size: 9px; }
+
+.tradables-remove {
+  background: transparent;
+  border: none;
+  color: #e74c3c;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  opacity: 0.6;
+}
+.tradables-remove:hover { opacity: 1; }
+
+/* ── Price Badge ─────────────────────────────────────────────────── */
+.tradables-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.tradables-price-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: default;
+}
+
+.tradables-price-badge.na {
+  background: #1a1a1a;
+  color: #555;
+}
+
+.tradables-price-badge.trade {
+  background: #0d2a28;
+  color: #4ecdc4;
+}
+
+.tradables-price-badge.deal {
+  background: #2a2200;
+  color: #ffd700;
+}
+
+/* ── Modal ───────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100000;
+}
+
+.modal-dialog {
+  background: #1b2838;
+  border: 1px solid #2a3f5f;
+  border-radius: 6px;
+  width: 90%;
+  max-width: 480px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid #2a3f5f;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 13px;
+  color: #c6d4df;
+  font-weight: 600;
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  color: #8a9bb0;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.modal-close:hover { color: #c6d4df; }
+
+.modal-body {
+  padding: 12px;
+  overflow-y: auto;
+}
+
+/* ── Import Sections ─────────────────────────────────────────────── */
+.import-input-section label {
+  display: block;
+  font-size: 10px;
+  color: #8a9bb0;
+  margin-bottom: 5px;
+}
+
+.import-input-section textarea {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  border-radius: 4px;
+  padding: 6px;
+  color: #c6d4df;
+  font-size: 11px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+.import-input-section textarea::placeholder { color: #555; }
+.import-input-section textarea:focus { outline: none; border-color: #66c0f4; }
+
+.import-preview-section {
+  margin-top: 12px;
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.preview-header span {
+  font-size: 11px;
+  color: #8a9bb0;
+}
+
+.preview-header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.btn-small {
+  background: #2a475e;
+  border: 1px solid #1b2838;
+  color: #c6d4df;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 9px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn-small:hover { background: #3d6a8a; }
+
+/* ── Filters ─────────────────────────────────────────────────────── */
+.preview-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.filter-label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  color: #c6d4df;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 2px;
+  background: #16202d;
+  border: 1px solid #2a3f5f;
+  user-select: none;
+}
+
+.filter-label input[type="checkbox"] {
+  margin: 0;
+  accent-color: #66c0f4;
+}
+
+/* ── Preview List ────────────────────────────────────────────────── */
+.preview-list {
+  max-height: 180px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+  border: 1px solid #2a3f5f;
+  border-radius: 4px;
+  padding: 3px;
+  background: #111827;
+}
+
+.preview-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 2px;
+  margin-bottom: 2px;
+  background: #16202d;
+}
+
+.preview-item:last-child { margin-bottom: 0; }
+
+.preview-checkbox {
+  margin: 0;
+  accent-color: #66c0f4;
+}
+
+.preview-name {
+  flex: 1;
+  font-size: 11px;
+  color: #c6d4df;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preview-appid {
+  font-size: 9px;
+  color: #66c0f4;
+  font-family: monospace;
+}
+
+/* ── Preview Actions ─────────────────────────────────────────────── */
+.preview-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ── Tradables Footer (Delete All + Snapshots) ───────────────────── */
+.tradables-footer {
+  padding-top: 6px;
+}
+
+.tradables-footer .tradables-sort {
+  font-size: 9px;
+  padding: 2px 4px;
+}
+
+/* ── Snapshot UI ─────────────────────────────────────────────────── */
+#t-snapshots-section {
+  background: #16202d;
+  border: 1px solid #2a3f5f;
+  border-radius: 4px;
+  padding: 6px;
+}
+
+#t-snapshot-select {
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  padding: 2px 4px;
+  color: #c6d4df;
+  font-size: 9px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+#t-snapshot-select:focus { outline: none; border-color: #66c0f4; }
