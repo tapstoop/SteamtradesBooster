@@ -11,6 +11,10 @@ Trading on SteamTrades means juggling dozens of prices, spotting deals, and eval
 
 Stop second-guessing trades. Start making confident offers.
 
+<img width="1280" height="800" alt="screenshotstore_1" src="https://github.com/user-attachments/assets/3e6c9784-5807-4656-ba61-9e078227bd92" />
+
+<img width="1153" height="601" alt="showcase" src="https://github.com/user-attachments/assets/247ca0dd-ffa0-4234-9e04-07c54f17de9e" />
+
 ---
 
 ## What You Get
