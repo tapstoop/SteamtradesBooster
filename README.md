@@ -2,8 +2,11 @@
 
 The essential trading companion for SteamTrades. Make smarter trades in seconds.
 
-<img width="1280" height="320" alt="logo" src="https://github.com/user-attachments/assets/1425bb0e-6dd1-4eb2-9dc7-5011d3275894" />
+> **A Chrome Web Store release is on its way — no installation hassle required. Stay tuned!**
+>
+> In the meantime, you can install it manually in minutes by following the guide below.
 
+<img width="1280" height="320" alt="logo" src="https://github.com/user-attachments/assets/1425bb0e-6dd1-4eb2-9dc7-5011d3275894" />
 
 ## Why SteamTrades Booster?
 
@@ -49,23 +52,99 @@ Build complete trades in a side panel workstation:
 
 ---
 
-## Quick Start
+## Installation
 
-1. Get a free API key at [api.gg.deals](https://api.gg.deals)  
-2. Install in Chrome → Developer mode → **Load unpacked** → select the extension folder  
-3. Open the popup → **Settings** → paste your API key and Steam profile URL  
-4. Visit any trade page on [steamtrades.com](https://www.steamtrades.com) — overlays and sidebar activate automatically
+### Step 1 — Prerequisites
 
----
+You need two free tools installed on your computer before you start:
 
-## Build
+- **Git** — download from [git-scm.com](https://git-scm.com/downloads) and run the installer (default options are fine)
+- **Node.js** — download from [nodejs.org](https://nodejs.org) and install the **LTS** version
+
+Once both are installed, open a terminal:
+- **Windows**: press `Win + R`, type `cmd`, press Enter
+- **macOS**: press `Cmd + Space`, type `Terminal`, press Enter
+- **Linux**: open your terminal application
+
+### Step 2 — Download and build
+
+Paste these commands one by one into your terminal:
 
 ```bash
+git clone https://github.com/tapstoop/SteamtradesBooster.git
+cd SteamtradesBooster
 npm install
 npm run build
 ```
 
-Load the `dist/` folder as an unpacked extension in Chrome.
+### Step 3 — Load the extension in your browser
+
+The extension works in any Chromium-based browser. Find yours below:
+
+<details>
+<summary><strong>Google Chrome</strong></summary>
+
+1. Click the three-dot menu `⋮` in the top-right corner
+2. Go to **Extensions** → **Manage Extensions**
+3. Toggle **Developer mode** on (top-right of the Extensions page)
+4. Click **Load unpacked** and select the `SteamtradesBooster` folder
+</details>
+
+<details>
+<summary><strong>Microsoft Edge</strong></summary>
+
+1. Click the three-dot menu `⋯` in the top-right corner
+2. Go to **Extensions** → **Manage Extensions**
+3. Toggle **Developer mode** on (left sidebar)
+4. Click **Load unpacked** and select the `SteamtradesBooster` folder
+</details>
+
+<details>
+<summary><strong>Opera / Opera GX</strong></summary>
+
+1. Click the Opera icon in the top-left corner
+2. Go to **Extensions** → **Manage Extensions**
+3. Toggle **Developer mode** on (top-right of the Extensions page)
+4. Click **Load unpacked** and select the `SteamtradesBooster` folder
+</details>
+
+<details>
+<summary><strong>Brave</strong></summary>
+
+1. Click the menu icon `☰` in the top-right corner
+2. Go to **Extensions**
+3. Toggle **Developer mode** on (top-right of the Extensions page)
+4. Click **Load unpacked** and select the `SteamtradesBooster` folder
+</details>
+
+<details>
+<summary><strong>Vivaldi</strong></summary>
+
+1. Click the Vivaldi logo in the top-left corner
+2. Go to **Tools** → **Extensions**
+3. Toggle **Developer mode** on (top-right of the Extensions page)
+4. Click **Load unpacked** and select the `SteamtradesBooster` folder
+</details>
+
+<details>
+<summary><strong>Yandex Browser</strong></summary>
+
+1. Click the menu icon `≡` in the top-right corner
+2. Go to **Add-ons**
+3. Scroll down and enable **Developer mode**
+4. Click **Load unpacked extension** and select the `SteamtradesBooster` folder
+</details>
+
+### Step 4 — Pin and configure
+
+1. Click the puzzle-piece icon in your browser toolbar and **pin** SteamTrades Booster so it stays visible
+2. Click the extension icon to open the popup, then go to **Settings**
+3. Paste your **GG.deals API key** — get one for free at [api.gg.deals](https://api.gg.deals)
+4. Paste your **Steam profile URL** (e.g. `https://steamcommunity.com/id/yourname`)
+
+### Step 5 — Use it
+
+Visit any trade page on [steamtrades.com](https://www.steamtrades.com). Price badges and the sidebar will appear automatically — no extra steps needed.
 
 ---
 

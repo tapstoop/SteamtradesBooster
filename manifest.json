@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "SteamTrades Price Tracker",
+  "name": "SteamTrades Booster",
   "version": "0.1.0",
-  "description": "Overlay GG.deals prices on steamtrades.com listings",
+  "description": "Enhance steamtrades.com with new UI features and price tracking",
   "permissions": ["storage", "alarms", "unlimitedStorage"],
   "host_permissions": [
     "https://www.steamtrades.com/*",
@@ -31,6 +31,6 @@
   ],
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "SteamTrades Price Tracker"
+    "default_title": "SteamTrades Booster"
   }
 }
