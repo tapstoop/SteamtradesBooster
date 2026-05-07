@@ -5,7 +5,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "mkdir -p dist/background && esbuild content/content.js --bundle --outfile=dist/content.js --format=iife && cp background/*.js dist/background/ && cp content/ggdeals-scraper.js dist/ggdeals-scraper.js",
+    "build": "node build.js",
     "build:watch": "esbuild content/content.js --bundle --outfile=dist/content.js --format=iife --watch"
   },
   "devDependencies": {
