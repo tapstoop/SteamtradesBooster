@@ -365,14 +365,12 @@ export function parseGameRows() {
 }
 
 /**
- * Inject checkboxes into tier 4 game elements.
- * Called after prioritization to add selection UI to non-wishlist/non-tradable games.
+ * Inject checkboxes into game elements.
+ * All tiers get a checkbox so users can manually re-fetch prices.
  * @param {{ tier: number, el: HTMLElement }[]} rows - prioritized rows
  */
 export function injectCheckboxes(rows) {
   rows.forEach(row => {
-    if (row.tier !== 4) return;
-
     const el = row.el;
     if (el.dataset.stptCheckbox) return; // already injected
 

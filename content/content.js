@@ -1,11 +1,10 @@
 // content/content.js
-import { parseGameRows, prioritize, injectCheckboxes, getSelectedTitles } from './parser.js';
+import { parseGameRows, prioritize, injectCheckboxes, getSelectedTitles, stripParentheses } from './parser.js';
 import { fuzzySetMatch, getDisplayRegion } from '../utils/similarity.js';
 import { TradeSimulator } from './trade-logic.js';
 import {
   injectSkeleton, replaceBadge, injectQuestionBadge, injectFuzzyBadge, injectNotFoundBadge, injectDismissedBadge, injectDelistedBadge,
-  SidebarWorkstation, initSidebar, addSidebarRow, updateSidebarRow, syncSidebarHeights,
-  updateFetchButton, setSkeletonLoading
+  SidebarWorkstation, updateSidebarRow, syncSidebarHeights, updateFetchButton, setSkeletonLoading
 } from './ui.js';
 
 let rowData = []; // Store row data for callback access
@@ -60,6 +59,8 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
     const appId = (res?.status === 'hit' || res?.status === 'resolved' || res?.status === 'delisted') ? res.appId : null;
     // Use confirmed title if available (from user selection or fuzzy match)
     const displayTitle = res?.title ?? row.title;
+    // Keep DOM in sync: el.dataset.stptTitle is the single source of truth
+    row.el.dataset.stptTitle = stripParentheses(displayTitle);
     return {
       ...row,
       title: displayTitle, // Update title to confirmed title
@@ -122,6 +123,9 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
       injectFuzzyBadge(row.el, row.resolution);
     }
   });
+
+  // QUICKFIX #3: Set up the floating fetch button for selective mode BEFORE checkbox init
+  setupFloatingFetchButton();
 
   // Wire up the Sidebar Workstation BEFORE price fetching
   // so all updateGamePrices() calls operate on populated pageGames
@@ -210,35 +214,34 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
     if (price != null) row.acqPrice = price;
   }
 
-  // Fetch missing prices for tier 1-2 (wishlist/tradables) immediately
-  const tier12missing = rowData.filter(r =>
-    r.appId && (r.tier === 1 || r.tier === 2) && r.el.querySelector('.stpt-skeleton') !== null
-  );
-  if (tier12missing.length > 0) {
-    setSkeletonLoading(tier12missing.map(r => r.el));
-    await fetchAndRender(tier12missing, settings);
-  }
-
-  // For tier 4: check settings mode
-  // Only inject checkboxes for rows that don't already have a badge (dismissed, ambiguous, not-found, fuzzy)
-  const tier4 = rowData.filter(r => r.tier > 2);
-  const tier4needsCheckbox = tier4.filter(r =>
-    r.el.querySelector('.stpt-badge') === null
-  );
-
   if (settings.selectiveFetch !== false) {
-    // Selective mode (default): inject checkboxes for tier-4 rows without badges
-    if (tier4needsCheckbox.length > 0) {
-      injectCheckboxes(tier4needsCheckbox);
+    // Selective mode (default): inject checkboxes for ALL games
+    const needsCheckbox = rowData; // ALL detected games get a checkbox
+    if (needsCheckbox.length > 0) {
+      injectCheckboxes(needsCheckbox);
 
+      // Checkbox changes update floating button (NOT auto-fetch)
       document.querySelectorAll('.stpt-game-checkbox').forEach(cb => {
-        cb.addEventListener('change', updateFetchButton);
+        cb.addEventListener('change', () => {
+          updateFetchButton();
+          updateFloatingFetchButton();
+        });
       });
 
       updateFetchButton();
+      updateFloatingFetchButton();
     }
   } else {
-    // Automatic mode: fetch uncached tier 4 games (with IntersectionObserver)
+    // Automatic mode: fetch tier 1-2 immediately, tier 4 via IntersectionObserver
+    const tier12missing = rowData.filter(r =>
+      r.appId && (r.tier === 1 || r.tier === 2) && r.el.querySelector('.stpt-skeleton') !== null
+    );
+    if (tier12missing.length > 0) {
+      setSkeletonLoading(tier12missing.map(r => r.el));
+      await fetchAndRender(tier12missing, settings);
+    }
+
+    const tier4 = rowData.filter(r => r.tier > 2);
     const tier4resolved = tier4.filter(r => r.appId && r.el.querySelector('.stpt-skeleton') !== null);
     if (tier4resolved.length > 0) {
       setupIntersectionObserver(tier4resolved, settings);
@@ -248,19 +251,188 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
   syncSidebarHeights(rowData.map(r => ({ el: r.el, appId: r.el.dataset.stptId })));
 })();
 
-async function handleFetchSelected(settings) {
+// ─── #3: Floating Fetch Button ──────────────────────
+let floatingFetchBtn = null;
+
+function setupFloatingFetchButton() {
+  if (floatingFetchBtn) return;
+
+  floatingFetchBtn = document.createElement('button');
+  floatingFetchBtn.id = 'stpt-floating-fetch-btn';
+  floatingFetchBtn.className = 'stpt-floating-fetch-btn';
+  floatingFetchBtn.style.display = 'none';
+  floatingFetchBtn.addEventListener('click', () => handleFetchSelected());
+  document.body.appendChild(floatingFetchBtn);
+}
+
+function updateFloatingFetchButton() {
+  if (!floatingFetchBtn) return;
+  const checkboxes = document.querySelectorAll('.stpt-game-checkbox:checked');
+  const count = checkboxes.length;
+
+  if (count > 0) {
+    floatingFetchBtn.style.display = 'flex';
+    floatingFetchBtn.textContent = `Fetch prices for ${count} game${count > 1 ? 's' : ''}`;
+  } else {
+    floatingFetchBtn.style.display = 'none';
+  }
+}
+
+function showResultOnButton(message, type = 'success', autoHideDelay = 4000) {
+  if (!floatingFetchBtn) return;
+
+  // Show the button as a result message
+  floatingFetchBtn.style.display = 'flex';
+  floatingFetchBtn.textContent = message;
+  floatingFetchBtn.disabled = true;
+  floatingFetchBtn.dataset.resultType = type;
+
+  // Clear previous timeout if any
+  if (floatingFetchBtn._resultTimeout) clearTimeout(floatingFetchBtn._resultTimeout);
+
+  floatingFetchBtn._resultTimeout = setTimeout(() => {
+    delete floatingFetchBtn.dataset.resultType;
+    floatingFetchBtn.disabled = false;
+    updateFloatingFetchButton(); // reverts to count or hides
+  }, autoHideDelay);
+}
+
+async function handleFetchSelected() {
+  const settings = currentSettings;
+  if (!settings) return;
+
   const selectedTitles = getSelectedTitles();
   if (selectedTitles.length === 0) return;
 
+  // Distinguish resolvable games (have appId) vs unresolved
   const selectedRows = rowData.filter(r =>
-    r.appId && r.tier > 2 && selectedTitles.includes(r.title)
+    selectedTitles.includes(r.title)
   );
 
-  if (selectedRows.length > 0) {
-    // Set skeletons to loading state
-    setSkeletonLoading(selectedRows.map(r => r.el));
-    await fetchAndRender(selectedRows, settings);
+  const resolvableRows = selectedRows.filter(r => r.appId);
+  const unresolvedCount = selectedRows.length - resolvableRows.length;
+
+  if (resolvableRows.length === 0) {
+    // None of the selected games could be resolved
+    const msg = unresolvedCount === 1
+      ? 'This game could not be resolved. Please resolve it first.'
+      : 'None of the selected games could be resolved.';
+    showResultOnButton(msg, 'error');
+    return;
+  }
+
+  // Disable button while fetching
+  if (floatingFetchBtn) {
+    floatingFetchBtn.disabled = true;
+    floatingFetchBtn.textContent = 'Fetching…';
+  }
+
+  // Set skeletons to loading state
+  setSkeletonLoading(resolvableRows.map(r => r.el));
+
+  let fetchedCount = 0;
+  let failedCount = 0;
+
+  let hasError = false;
+  try {
+    const prices = await sendMessage('GET_PRICES', {
+      appIds: resolvableRows.map(r => r.appId),
+      regions: settings.regions,
+    });
+
+    // Also fetch bundles for these appIds
+    const bundles = await sendMessage('GET_BUNDLES', {
+      appIds: resolvableRows.map(r => r.appId),
+    });
+
+    const region = getDisplayRegion(settings);
+    const priceMap = {};
+
+    resolvableRows.forEach(row => {
+      const priceData = prices[row.appId]?.[region];
+      row.inBundle = !!(bundles[row.appId]?.length);
+
+      const gameInfo = {
+        ...row,
+        settings,
+        cacheKey: row.cacheKey,
+        acqPrice: null,
+      };
+
+      if (priceData) {
+        fetchedCount++;
+        replaceBadge(row.el, priceData, gameInfo);
+        updateSidebarRow(row.el.dataset.stptId, gameInfo);
+
+        priceMap[row.appId] = {
+          price: _getBadgePrice(priceData, settings),
+          currency: priceData.prices?.currency ?? 'EUR',
+        };
+
+        // Uncheck the successfully fetched game
+        const checkbox = document.querySelector(
+          `.stpt-game-checkbox[data-stpt-title="${CSS.escape(row.title)}"]`
+        );
+        if (checkbox) checkbox.checked = false;
+      } else {
+        failedCount++;
+        // Remove skeleton, show N/A
+        const skel = row.el.querySelector('.stpt-skeleton');
+        if (skel) skel.remove();
+        replaceBadge(row.el, null, gameInfo);
+        updateSidebarRow(row.el.dataset.stptId, gameInfo);
+      }
+    });
+
+    if (Object.keys(priceMap).length > 0 && window.__stpt_workstation) {
+      window.__stpt_workstation.updateGamePrices(priceMap);
+    }
+  } catch (err) {
+    console.error('[STPT] Fetch selected error:', err);
+    hasError = true;
+    failedCount = resolvableRows.length;
+    // Remove skeletons
+    resolvableRows.forEach(row => {
+      const skel = row.el.querySelector('.stpt-skeleton');
+      if (skel) skel.remove();
+    });
+  } finally {
+    // Re-enable button & update UI
     updateFetchButton();
+    updateFloatingFetchButton();
+  }
+
+  // Show appropriate result on the floating button
+  if (hasError) {
+    showResultOnButton(
+      `An error occurred while fetching prices. Please try again.`,
+      'error'
+    );
+  } else if (unresolvedCount > 0 && fetchedCount === 0 && failedCount === 0) {
+    showResultOnButton(
+      `${unresolvedCount} game${unresolvedCount > 1 ? 's' : ''} could not be resolved.`,
+      'error'
+    );
+  } else if (failedCount > 0 && fetchedCount === 0) {
+    showResultOnButton(
+      `Failed to fetch ${failedCount} game${failedCount > 1 ? 's' : ''}.`,
+      'error'
+    );
+  } else if (failedCount > 0 && fetchedCount > 0) {
+    const parts = [`Fetched ${fetchedCount} successfully`];
+    if (failedCount > 0) parts.push(`${failedCount} couldn't be fetched`);
+    if (unresolvedCount > 0) parts.push(`${unresolvedCount} couldn't be resolved`);
+    showResultOnButton(parts.join(', ') + '.', 'warning');
+  } else if (fetchedCount > 0 && unresolvedCount > 0) {
+    showResultOnButton(
+      `Fetched ${fetchedCount} successfully, ${unresolvedCount} couldn't be resolved.`,
+      'warning'
+    );
+  } else if (fetchedCount > 0) {
+    showResultOnButton(
+      `Fetched ${fetchedCount} game${fetchedCount > 1 ? 's' : ''} successfully.`,
+      'success'
+    );
   }
 }
 
@@ -340,6 +512,13 @@ document.addEventListener('stpt-resolve', async e => {
   try {
     const { appId, title, cacheKey } = e.detail;
     const rowEl = e.target;
+    // Sync DOM attribute to resolved title
+    rowEl.dataset.stptTitle = stripParentheses(title);
+    // Also sync the checkbox data-stpt-title so getSelectedTitles() stays correct
+    const cb = rowEl.previousElementSibling?.classList?.contains('stpt-game-checkbox')
+      ? rowEl.previousElementSibling
+      : rowEl.parentNode.querySelector('.stpt-game-checkbox');
+    if (cb) cb.dataset.stptTitle = rowEl.dataset.stptTitle;
     const settings = await sendMessage('GET_SETTINGS');
 
     if (!settings.apiKey) {
@@ -358,7 +537,7 @@ document.addEventListener('stpt-resolve', async e => {
     const row = rowData.find(r => r.el === rowEl);
     if (row) {
       row.appId = appId;
-      row.title = title;
+      row.title = rowEl.dataset.stptTitle; // keep in sync with DOM
       row.cacheKey = cacheKey ?? row.cacheKey;
       row.fuzzy = false;
       row.resolution = { status: 'resolved', appId };
