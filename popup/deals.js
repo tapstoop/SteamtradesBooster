@@ -52,13 +52,26 @@ let dealsState = null;
  */
 function applySettingsToCards(cards, settings) {
   const region = getDisplayRegion(settings);
+  const allRegions = settings?.regions ?? [region];
   for (const card of cards) {
-    const data = card.pricesPerRegion?.[region];
+    // Try display region first, then fallback to any available region
+    let data = card.pricesPerRegion?.[region];
+    let usedRegion = region;
+    if (!data && card.pricesPerRegion) {
+      for (const fallback of allRegions) {
+        if (card.pricesPerRegion[fallback]) {
+          data = card.pricesPerRegion[fallback];
+          usedRegion = fallback;
+          break;
+        }
+      }
+    }
     if (!data) {
       card.bestCurrent = null;
       card.bestAtl = null;
       card.currency = settings.currency ?? 'EUR';
       card.pctAboveAtl = null;
+      card.usedRegion = null;
       continue;
     }
     const retail = data.prices?.currentRetail;
@@ -73,6 +86,7 @@ function applySettingsToCards(cards, settings) {
     card.pctAboveAtl = (card.bestCurrent != null && card.bestAtl > 0)
       ? ((card.bestCurrent - card.bestAtl) / card.bestCurrent) * 100
       : null;
+    card.usedRegion = usedRegion;
   }
 }
 
@@ -210,14 +224,28 @@ async function loadDeals(container) {
 
   let priceError = null;
 
-  // Fetch prices (try cache, fall through to API)
+  // Fetch prices (try cache first, then API for missing games)
   if (settings.apiKey) {
     let prices = null;
     try { prices = await msg('GET_CACHED_PRICES', { appIds, regions: settings.regions }); } catch {}
-    if (!prices || Object.keys(prices).length === 0) {
+
+    // Find appIds that are missing from cache completely
+    const cachedAppIds = prices ? Object.keys(prices) : [];
+    const missingAppIds = appIds.filter(id => !cachedAppIds.includes(id));
+
+    if (missingAppIds.length > 0) {
       try {
-        prices = await msg('GET_PRICES', { appIds, regions: settings.regions });
-        if (prices?.error) { priceError = prices.error; prices = null; }
+        const livePrices = await msg('GET_PRICES', { appIds: missingAppIds, regions: settings.regions });
+        if (livePrices?.error) { priceError = livePrices.error; }
+        else if (livePrices) {
+          // Merge live prices into cache results
+          prices = prices ?? {};
+          for (const id of Object.keys(livePrices)) {
+            if (livePrices[id]) {
+              prices[id] = livePrices[id];
+            }
+          }
+        }
       } catch (err) { priceError = err.message; }
     }
 
@@ -363,6 +391,7 @@ function renderGameList(body, cards, settings, sortMode) {
         <div class="game-card-title">${steamUrl ? `<a href="${steamUrl}" target="_blank" style="color:inherit;text-decoration:none;">${escapeHtml(c.title)}</a>` : escapeHtml(c.title)}</div>
         <div class="game-card-meta">
           <span class="${deal ? 'highlight' : ''}">${formatPrice(c.bestCurrent, c.currency)}</span>
+          <span style="color:#666;font-size:10px;text-transform:uppercase;margin-left:2px">(${c.usedRegion?.toUpperCase() ?? ''})</span>
           · ${atlLabel}: <span class="atl">${formatPrice(c.bestAtl, c.currency)}</span>
           ${c.pctAboveAtl != null ? `· <span>${Math.round(c.pctAboveAtl)}% above</span>` : ''}
           ${c.url ? `· <a href="${c.url}" target="_blank" style="color:#66c0f4;">GG.deals ↗</a>` : ''}
