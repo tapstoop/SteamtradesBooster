@@ -9,7 +9,8 @@
 export function normalizeTitle(title) {
   return title
     .toLowerCase()
-    .replace(/[™®:'.!?,\-\u2013\u2014]/g, '')  // Also strip en-dash (–) and em-dash (—)
+    .replace(/[™®:'.!?,\u2013\u2014]/g, '')   // Strip punctuation and en/em-dashes (–—)
+    .replace(/-/g, ' ')                        // Replace hyphens with spaces (e.g. "Half-Life 2" → "half life 2")
     .replace(/[•●○◆►►\-*]/g, '')  // Strip bullet characters
     .replace(/\s+/g, ' ')
     .trim();
@@ -21,8 +22,8 @@ export function normalizeTitle(title) {
  * Uses Jaccard similarity on word sets.
  */
 export function wordSimilarity(a, b) {
-  const wordsA = new Set(normalizeTitle(a).split(/\s+/).filter(w => w.length > 1));
-  const wordsB = new Set(normalizeTitle(b).split(/\s+/).filter(w => w.length > 1));
+  const wordsA = new Set(normalizeTitle(a).split(/\s+/).filter(w => w.length > 1 || /^\d+$/.test(w)));
+  const wordsB = new Set(normalizeTitle(b).split(/\s+/).filter(w => w.length > 1 || /^\d+$/.test(w)));
   if (wordsA.size === 0 || wordsB.size === 0) return 0;
 
   let intersection = 0;
