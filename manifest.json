@@ -9,6 +9,7 @@
     "https://steamtrades.com/*",
     "https://store.steampowered.com/*",
     "https://api.steampowered.com/*",
+    "https://steamcommunity.com/*",
     "https://gg.deals/*",
     "https://api.gg.deals/*"
   ],

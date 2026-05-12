@@ -27,14 +27,14 @@ export function extractSteamId(input) {
 
 export async function resolveVanityUrl(vanityUrl) {
   const match = vanityUrl.match(/steamcommunity\.com\/id\/([^/]+)/);
-  const vanityName = match ? match[1] : vanityUrl;
+  if (!match) return null;
+  const vanityName = match[1];
   try {
-    const resp = await fetch(`https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?vanityurl=${encodeURIComponent(vanityName)}`);
+    const resp = await fetch(`https://steamcommunity.com/id/${encodeURIComponent(vanityName)}/?xml=1`);
     if (!resp.ok) return null;
-    const data = await resp.json();
-    if (data.response?.success === 1 && data.response?.steamid) {
-      return data.response.steamid;
-    }
+    const text = await resp.text();
+    const idMatch = text.match(/<steamID64>(\d{17})<\/steamID64>/);
+    if (idMatch) return idMatch[1];
   } catch (err) {
     console.warn('[profile] ResolveVanityURL error:', err.message);
   }
@@ -45,13 +45,9 @@ export async function parseSteamIdInput(input) {
   if (!input) return null;
   const directId = extractSteamId(input);
   if (directId) return directId;
-  if (input.includes('/id/') || !/^\d{17}$/.test(input.trim())) {
+  if (input.includes('/id/')) {
     const resolved = await resolveVanityUrl(input);
     if (resolved) return resolved;
-  }
-  const trimmed = input.trim();
-  if (/^\d{17}$/.test(trimmed)) {
-    return trimmed;
   }
   return null;
 }
