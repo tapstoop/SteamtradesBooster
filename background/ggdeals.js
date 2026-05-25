@@ -32,7 +32,16 @@ async function fetchBatch(apiKey, appIds, region) {
   if (resp.status === 429) {
     throw { rateLimited: true, resetAt: rateLimitState.resetAt };
   }
-  if (!resp.ok) throw new Error(`GG.deals API error: ${resp.status}`);
+  if (!resp.ok) {
+    let apiMessage = resp.statusText;
+    try {
+      const body = await resp.json();
+      apiMessage = body?.data?.message ?? body?.message ?? resp.statusText;
+    } catch {
+      // Body not valid JSON (e.g. HTML error page from proxy/CDN)
+    }
+    throw new Error(`GG.deals API error: ${resp.status} — ${apiMessage}`);
+  }
 
   const json = await resp.json();
   const data = json.data ?? {};
