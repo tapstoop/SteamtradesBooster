@@ -1,6 +1,6 @@
 {
   "name": "steamtrades-price-tracker",
-  "version": "0.1.1b",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "test": "vitest run",
