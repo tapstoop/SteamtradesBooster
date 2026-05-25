@@ -24,7 +24,7 @@ function updateRateLimit(resp) {
 }
 
 async function fetchBatch(apiKey, appIds, region) {
-  const url = `${BASE_URL}/prices/by-steam-app-id/?ids=${appIds.join(',')}&key=${apiKey}&region=${region}`;
+  const url = `${BASE_URL}/prices/by-steam-app-id/?ids=${appIds.join(',')}&key=${encodeURIComponent(apiKey)}&region=${encodeURIComponent(region)}`;
   const resp = await fetch(url);
 
   updateRateLimit(resp);
@@ -266,7 +266,7 @@ export async function getSubApps(subId) {
 }
 
 export async function getBundles(apiKey, appIds) {
-  const url = `${BASE_URL}/bundles/?ids=${appIds.join(',')}&key=${apiKey}`;
+  const url = `${BASE_URL}/bundles/?ids=${appIds.join(',')}&key=${encodeURIComponent(apiKey)}`;
   try {
     const resp = await fetch(url);
     updateRateLimit(resp);
