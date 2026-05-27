@@ -122,8 +122,8 @@ export async function initTradables(container) {
   let undoRenderTimeout = null; // For debounced undo bar rendering
 
   // Currency from settings (default EUR)
-  const currency = settings.currency || 'EUR';
-  const currencySymbol = currency === 'USD' ? '$' : '€';
+  let currency = settings.currency || 'EUR';
+  let currencySymbol = currency === 'USD' ? '$' : '€';
 
   /**
    * Load cached prices first (no API calls), then optionally refresh.
