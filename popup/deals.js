@@ -321,7 +321,11 @@ function renderDeals(container) {
   if (!settings.apiKey) {
     summary.innerHTML = `${cards.length} games on wishlist — <span style="color:#66c0f4">Add GG.deals API key for prices</span>`;
   } else if (priceError) {
-    summary.innerHTML = `${cards.length} games on wishlist — <span style="color:#e74c3c">Price error: ${escapeHtml(priceError)}</span>`;
+    // Split error message and actionable hint onto separate lines
+    const errorParts = priceError.split('\n');
+    const mainError = escapeHtml(errorParts[0]);
+    const hint = errorParts.slice(1).map(h => `<br><span style="font-size:10px;color:#e8a735">${escapeHtml(h)}</span>`).join('');
+    summary.innerHTML = `${cards.length} games on wishlist — <span style="color:#e74c3c">Price error: ${mainError}</span>${hint}`;
   } else {
     summary.textContent = `${cards.length} games on wishlist — ${withPrices} with prices`;
   }

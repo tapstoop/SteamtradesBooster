@@ -40,7 +40,14 @@ async function fetchBatch(apiKey, appIds, region) {
     } catch {
       // Body not valid JSON (e.g. HTML error page from proxy/CDN)
     }
-    throw new Error(`GG.deals API error: ${resp.status} — ${apiMessage}`);
+    // Provide actionable hints for common errors
+    let hint = '';
+    if (resp.status === 400) {
+      hint = '\nCheck: Is your GG.deals account confirmed? Click the verification link in your email after registering.';
+    } else if (resp.status === 401 || resp.status === 403) {
+      hint = '\nCheck: Is your API key correct? Go to GG.deals Settings to verify or regenerate it.';
+    }
+    throw new Error(`GG.deals API error: ${resp.status} — ${apiMessage}${hint}`);
   }
 
   const json = await resp.json();
