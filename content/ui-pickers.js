@@ -145,7 +145,7 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
       results.items.forEach(item => {
         const resultItem = document.createElement('div');
         resultItem.className = 'stpt-cand-item';
-        resultItem.innerHTML = `<span>${item.name}</span><span style="color:#555;font-size:9px;">App ${item.id}</span>`;
+        resultItem.innerHTML = `<span>${escapeHtml(item.name)}</span><span style="color:#555;font-size:9px;">App ${escapeHtml(String(item.id))}</span>`;
         resultItem.addEventListener('click', async () => {
           picker.remove();
           await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: String(item.id), title: item.name });
