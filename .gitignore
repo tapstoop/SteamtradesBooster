@@ -1,6 +1,8 @@
 node_modules/
 dist/
 *.log
+*.zip
+steamtrades_booster_v*/
 
 # Agent/coding tool configs
 .claude/
