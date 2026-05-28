@@ -2,16 +2,64 @@
 
 /**
  * Parse bulk input string into array of non-empty trimmed entries.
- * Supports newline-separated entries and comma-separated entries when the comma
- * is followed by whitespace, preserving titles like "Warhammer 40,000".
+ * Supports newline-separated and comma-separated entries while preserving
+ * comma-thousands inside title text, such as "Warhammer 40,000".
  */
 export function parseInput(input) {
   if (!input || !input.trim()) return [];
   return input
     .split(/\r?\n/)
-    .flatMap(line => line.split(/,+\s+(?=\S)|,+(?=\s*[A-Za-z])/))
+    .flatMap(splitInputLine)
     .map(s => s.trim())
     .filter(Boolean);
+}
+
+function splitInputLine(line) {
+  const numericCsv = /^\s*\d+(?:\s*,\s*\d+)+\s*$/.test(line);
+  if (numericCsv) {
+    return line.split(',');
+  }
+
+  const entries = [];
+  let token = '';
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char !== ',') {
+      token += char;
+      continue;
+    }
+
+    if (isThousandsComma(line, i, token)) {
+      token += char;
+      continue;
+    }
+
+    entries.push(token);
+    token = '';
+
+    while (line[i + 1] === ',' || /\s/.test(line[i + 1] || '')) {
+      i++;
+    }
+  }
+
+  entries.push(token);
+  return entries;
+}
+
+function isThousandsComma(line, commaIndex, token) {
+  const before = line.slice(0, commaIndex).match(/(\d+)$/)?.[1] ?? '';
+  const after = line.slice(commaIndex + 1).match(/^(\d+)/)?.[1] ?? '';
+  const afterEnd = commaIndex + 1 + after.length;
+  const tokenHasText = /[^\d\s]/.test(token);
+
+  return (
+    tokenHasText &&
+    before.length >= 1 &&
+    before.length <= 3 &&
+    after.length === 3 &&
+    !/\d/.test(line[afterEnd] || '')
+  );
 }
 
 /**

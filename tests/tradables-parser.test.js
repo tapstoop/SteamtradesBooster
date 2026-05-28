@@ -15,6 +15,14 @@ describe('parseInput', () => {
     expect(parseInput('Warhammer 40,000, Game B')).toEqual(['Warhammer 40,000', 'Game B']);
   });
 
+  it('splits compact numeric App ID CSV input', () => {
+    expect(parseInput('236850,1145360')).toEqual(['236850', '1145360']);
+  });
+
+  it('splits compact numeric App ID CSV input with more than two IDs', () => {
+    expect(parseInput('236850,1145360,367520')).toEqual(['236850', '1145360', '367520']);
+  });
+
   it('splits by newline', () => {
     expect(parseInput('Game A\nGame B\nGame C')).toEqual(['Game A', 'Game B', 'Game C']);
   });
