@@ -2,6 +2,16 @@
 import { getDisplayRegion } from '../utils/similarity.js';
 
 const DEALS_CACHE_KEY = 'deals_cards_cache';
+const DEALS_REFRESH_OPTIONS_KEY = 'dealsRefreshOptions';
+const CACHE_AGE_OPTIONS = {
+  '1d': 1 * 24 * 60 * 60 * 1000,
+  '3d': 3 * 24 * 60 * 60 * 1000,
+  '1w': 7 * 24 * 60 * 60 * 1000,
+  '2w': 14 * 24 * 60 * 60 * 1000,
+  '1m': 30 * 24 * 60 * 60 * 1000,
+  '1y': 365 * 24 * 60 * 60 * 1000,
+  forever: Infinity,
+};
 
 function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
@@ -31,6 +41,43 @@ function formatTimestamp(ts) {
   return `${m}m ago`;
 }
 
+export function formatRefreshDate(ts) {
+  if (!ts) return '';
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date);
+}
+
+export function getCardRefreshTimestamp(card, settings = {}) {
+  const region = getDisplayRegion(settings);
+  const allRegions = settings?.regions ?? [region];
+  const preferred = card.pricesPerRegion?.[region]?.cachedAt;
+  if (preferred) return preferred;
+
+  for (const fallback of allRegions) {
+    const cachedAt = card.pricesPerRegion?.[fallback]?.cachedAt;
+    if (cachedAt) return cachedAt;
+  }
+
+  return null;
+}
+
+export function getStaleAppIds(appIds, prices, regions, maxAgeMs, now = Date.now()) {
+  if (maxAgeMs === Infinity) return appIds.filter(id => !regions.every(region => prices?.[id]?.[region]));
+
+  return appIds.filter(id => {
+    for (const region of regions) {
+      const cachedAt = prices?.[id]?.[region]?.cachedAt;
+      if (!cachedAt || now - cachedAt > maxAgeMs) return true;
+    }
+    return false;
+  });
+}
+
 const FREE_THRESHOLD_CENTS = 10;
 let progressListener = null;
 
@@ -42,6 +89,23 @@ async function getSortMode() {
 }
 async function setSortMode(mode) {
   try { await chrome.storage.local.set({ dealsSortMode: mode }); } catch {}
+}
+
+async function getRefreshOptions() {
+  try {
+    const r = await new Promise(resolve => chrome.storage.local.get(DEALS_REFRESH_OPTIONS_KEY, resolve));
+    const stored = r[DEALS_REFRESH_OPTIONS_KEY] ?? {};
+    return {
+      ignoreCached: Boolean(stored.ignoreCached),
+      maxAge: Object.hasOwn(CACHE_AGE_OPTIONS, stored.maxAge) ? stored.maxAge : '1w',
+    };
+  } catch {
+    return { ignoreCached: false, maxAge: '1w' };
+  }
+}
+
+async function setRefreshOptions(options) {
+  try { await chrome.storage.local.set({ [DEALS_REFRESH_OPTIONS_KEY]: options }); } catch {}
 }
 
 let dealsState = null;
@@ -87,6 +151,7 @@ function applySettingsToCards(cards, settings) {
       ? ((card.bestCurrent - card.bestAtl) / card.bestCurrent) * 100
       : null;
     card.usedRegion = usedRegion;
+    card.refreshTimestamp = data.cachedAt ?? null;
   }
 }
 
@@ -104,9 +169,29 @@ chrome.runtime.onMessage.addListener((message) => {
 export async function initDeals(container) {
   if (!container.querySelector('#deals-header')) {
     container.innerHTML = `
-      <div id="deals-header" style="display:flex; justify-content:space-between; align-items:center; padding:0 0 6px;">
-        <div style="display:flex; gap:6px; align-items:center;">
+      <div id="deals-header" style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:0 0 6px;">
+        <div class="deals-refresh-row">
           <button class="btn-refresh" id="deals-refresh">↻ Refresh</button>
+          <label class="deals-cache-control" title="When enabled, only prices older than this age are refreshed.">
+            <input type="checkbox" id="deals-ignore-cache">
+            <span>Ignore cached prices from:</span>
+          </label>
+          <select id="deals-cache-age" class="deals-compact-select" title="Cached price age">
+            <option value="1d">1 day</option>
+            <option value="3d">3 days</option>
+            <option value="1w">1 week</option>
+            <option value="2w">2 weeks</option>
+            <option value="1m">1 month</option>
+            <option value="1y">1 year</option>
+            <option value="forever">Forever</option>
+          </select>
+        </div>
+        <span id="deals-cache-status" style="font-size:9px; color:#555; white-space:nowrap;"></span>
+      </div>
+      <div id="deals-summary" style="font-size:11px;color:#8a9bb0;padding:0 0 6px"></div>
+      <div id="deals-tools">
+        <div id="deals-free-section"></div>
+        <div class="deals-sort-row">
           <select id="deals-sort" class="tradables-sort" title="Sort by" style="font-size:10px; padding:2px 4px;">
             <option value="best-deal">Best Deal</option>
             <option value="name-asc">Name A→Z</option>
@@ -115,13 +200,23 @@ export async function initDeals(container) {
             <option value="price-desc">Price ↓</option>
           </select>
         </div>
-        <span id="deals-cache-status" style="font-size:9px; color:#555;"></span>
       </div>
-      <div id="deals-summary" style="font-size:11px;color:#8a9bb0;padding:0 0 6px"></div>
-      <div id="deals-free-section" style="display:none;padding:6px 0;border-bottom:1px solid #333;margin-bottom:6px"></div>
       <div id="deals-body"></div>
     `;
-    container.querySelector('#deals-refresh').addEventListener('click', () => loadDeals(container));
+    const refreshOptions = await getRefreshOptions();
+    const ignoreCache = container.querySelector('#deals-ignore-cache');
+    const cacheAge = container.querySelector('#deals-cache-age');
+    ignoreCache.checked = refreshOptions.ignoreCached;
+    cacheAge.value = refreshOptions.maxAge;
+    cacheAge.disabled = !ignoreCache.checked;
+    container.querySelector('#deals-refresh').addEventListener('click', () => loadDeals(container, { manualRefresh: true }));
+    ignoreCache.addEventListener('change', async (e) => {
+      cacheAge.disabled = !e.target.checked;
+      await setRefreshOptions({ ignoreCached: e.target.checked, maxAge: cacheAge.value });
+    });
+    cacheAge.addEventListener('change', async (e) => {
+      await setRefreshOptions({ ignoreCached: ignoreCache.checked, maxAge: e.target.value });
+    });
     container.querySelector('#deals-sort').addEventListener('change', async (e) => {
       await setSortMode(e.target.value);
       if (dealsState) {
@@ -157,16 +252,19 @@ export async function initDeals(container) {
   await loadDeals(container);
 }
 
-async function loadDeals(container) {
+async function loadDeals(container, options = {}) {
+  return loadDealsInternal(container, options);
+}
+
+async function loadDealsInternal(container, { manualRefresh = false } = {}) {
   const summary = container.querySelector('#deals-summary');
   const freeSection = container.querySelector('#deals-free-section');
   const body = container.querySelector('#deals-body');
-  const cacheStatus = container.querySelector('#deals-cache-status');
 
   const sortMode = await getSortMode();
+  const refreshOptions = await getRefreshOptions();
   body.innerHTML = '<div class="empty-state">Loading wishlist…</div>';
   summary.textContent = '';
-  freeSection.style.display = 'none';
   freeSection.innerHTML = '';
 
   const settings = await msg('GET_SETTINGS');
@@ -224,18 +322,25 @@ async function loadDeals(container) {
 
   let priceError = null;
 
-  // Fetch prices (try cache first, then API for missing games)
+  // Fetch prices. Initial loads fill missing cached entries; manual refreshes either
+  // bypass all cache or refresh only entries older than the selected age.
   if (settings.apiKey) {
+    const regions = settings.regions ?? [getDisplayRegion(settings)];
     let prices = null;
-    try { prices = await msg('GET_CACHED_PRICES', { appIds, regions: settings.regions }); } catch {}
+    try { prices = await msg('GET_CACHED_PRICES', { appIds, regions }); } catch {}
 
-    // Find appIds that are missing from cache completely
-    const cachedAppIds = prices ? Object.keys(prices) : [];
-    const missingAppIds = appIds.filter(id => !cachedAppIds.includes(id));
+    let appIdsToFetch = [];
+    if (manualRefresh && !refreshOptions.ignoreCached) {
+      appIdsToFetch = appIds;
+    } else if (manualRefresh && refreshOptions.ignoreCached) {
+      appIdsToFetch = getStaleAppIds(appIds, prices, regions, CACHE_AGE_OPTIONS[refreshOptions.maxAge]);
+    } else {
+      appIdsToFetch = getStaleAppIds(appIds, prices, regions, Infinity);
+    }
 
-    if (missingAppIds.length > 0) {
+    if (appIdsToFetch.length > 0) {
       try {
-        const livePrices = await msg('GET_PRICES', { appIds: missingAppIds, regions: settings.regions });
+        const livePrices = await msg(manualRefresh ? 'REFRESH_PRICES' : 'GET_PRICES', { appIds: appIdsToFetch, regions });
         if (livePrices?.error) { priceError = livePrices.error; }
         else if (livePrices) {
           // Merge live prices into cache results
@@ -313,6 +418,8 @@ function renderDeals(container) {
   const cacheStatus = container.querySelector('#deals-cache-status');
 
   const { cards, settings, withPrices, freeGamesCount, priceError, sortMode, savedAt } = dealsState;
+  const sortSelect = container.querySelector('#deals-sort');
+  if (sortSelect && sortSelect.value !== sortMode) sortSelect.value = sortMode;
 
   // Header timestamp
   cacheStatus.textContent = savedAt ? `Last: ${formatTimestamp(savedAt)}` : '';
@@ -334,15 +441,16 @@ function renderDeals(container) {
   if (freeGamesCount > 0) {
     const freeGames = cards.filter(c => c.isFree);
     const fetchedCount = freeGames.filter(c => c.scrapedAtl != null).length;
-    freeSection.style.display = 'block';
     freeSection.innerHTML = `
-      <div style="font-size:11px;color:#f1c40f;margin-bottom:4px">
+      <div style="font-size:11px;color:#f1c40f;">
         ⚠ ${freeGamesCount} games were FREE (giveaway) ${fetchedCount > 0 ? `✓ ${fetchedCount} fetched` : ''}
       </div>
       <button class="btn-fetch-free" id="fetch-free-btn" style="font-size:10px;padding:2px 8px;${fetchedCount === freeGamesCount ? 'opacity:0.5' : ''}">
         ${fetchedCount === freeGamesCount ? 'Already fetched' : 'Fetch better ATL'}
       </button>
-      <div id="fetch-free-status" style="font-size:10px;color:#8a9bb0;margin-top:4px"></div>`;
+      <div id="fetch-free-status" style="font-size:10px;color:#8a9bb0;"></div>`;
+  } else {
+    freeSection.innerHTML = '';
   }
 
   renderGameList(body, cards, settings, sortMode);
@@ -367,6 +475,8 @@ function renderGameList(body, cards, settings, sortMode) {
 
   body.innerHTML = `<div class="game-list">${cards.map(c => {
     const steamUrl = c.appId ? `https://store.steampowered.com/app/${c.appId}` : null;
+    const refreshDate = formatRefreshDate(getCardRefreshTimestamp(c, settings));
+    const titleSuffix = refreshDate ? ` <span class="game-card-refresh">- Last refresh ${refreshDate}</span>` : '';
 
     if (c.isFree) {
       const atlDisplay = c.scrapedAtl != null
@@ -376,6 +486,7 @@ function renderGameList(body, cards, settings, sortMode) {
       return `<div class="game-card">
         <div class="game-card-title">
           ${steamUrl ? `<a href="${steamUrl}" target="_blank" style="color:inherit;text-decoration:none;">${escapeHtml(c.title)}</a>` : escapeHtml(c.title)}
+          ${titleSuffix}
           <span class="badge-was-free">Was free</span>
         </div>
         <div class="game-card-meta">
@@ -392,7 +503,7 @@ function renderGameList(body, cards, settings, sortMode) {
         && (c.historicalRetail == null || c.historicalKeyshops < c.historicalRetail)
         ? 'Keyshop ATL' : 'ATL';
       return `<div class="game-card">
-        <div class="game-card-title">${steamUrl ? `<a href="${steamUrl}" target="_blank" style="color:inherit;text-decoration:none;">${escapeHtml(c.title)}</a>` : escapeHtml(c.title)}</div>
+        <div class="game-card-title">${steamUrl ? `<a href="${steamUrl}" target="_blank" style="color:inherit;text-decoration:none;">${escapeHtml(c.title)}</a>` : escapeHtml(c.title)}${titleSuffix}</div>
         <div class="game-card-meta">
           <span class="${deal ? 'highlight' : ''}">${formatPrice(c.bestCurrent, c.currency)}</span>
           <span style="color:#666;font-size:10px;text-transform:uppercase;margin-left:2px">(${c.usedRegion?.toUpperCase() ?? ''})</span>
@@ -404,7 +515,7 @@ function renderGameList(body, cards, settings, sortMode) {
     }
 
     return `<div class="game-card" style="opacity:0.7">
-      <div class="game-card-title">${steamUrl ? `<a href="${steamUrl}" target="_blank" style="color:inherit;text-decoration:none;">${escapeHtml(c.title)}</a>` : escapeHtml(c.title)}</div>
+      <div class="game-card-title">${steamUrl ? `<a href="${steamUrl}" target="_blank" style="color:inherit;text-decoration:none;">${escapeHtml(c.title)}</a>` : escapeHtml(c.title)}${titleSuffix}</div>
       <div class="game-card-meta" style="color:#666">
         ${c.appId ? `App ID: ${c.appId}` : 'Unresolved'} — Price unavailable
       </div>

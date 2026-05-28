@@ -287,6 +287,73 @@ body {
 }
 .btn-refresh:hover { color: #66c0f4; border-color: #66c0f4; }
 
+.deals-refresh-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.deals-cache-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #8a9bb0;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.deals-cache-control input {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.deals-compact-select {
+  background: #0d1117;
+  color: #c6d4df;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.deals-compact-select:disabled {
+  color: #555;
+  cursor: not-allowed;
+}
+
+#deals-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #333;
+  margin-bottom: 6px;
+}
+
+#deals-free-section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.deals-sort-row {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.game-card-refresh {
+  color: #66798c;
+  font-size: 10px;
+  font-weight: normal;
+}
+
 /* Was free badge */
 .badge-was-free {
   display: inline-block;
