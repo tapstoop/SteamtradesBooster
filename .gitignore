@@ -13,6 +13,7 @@ steamtrades_booster_v*/
 
 # Docs and .md files not belonging in repo (except README)
 *.md
+!AGENTS.md
 !README.md
 docs/
 
