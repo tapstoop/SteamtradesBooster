@@ -114,8 +114,31 @@ describe('resolveTitle', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it('tries fallback search terms when primary results are ambiguous and unconfident', async () => {
+    fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          items: [
+            { id: 999001, name: 'Random Edition Game', type: 'app' },
+            { id: 999002, name: 'Another Unrelated Game', type: 'app' },
+          ]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          items: [{ id: 367520, name: 'Hollow Knight', type: 'app' }]
+        })
+      });
+
+    const result = await resolveTitle('Hollow Knight - Deluxe Edition');
+    expect(result).toMatchObject({ appId: '367520', status: 'resolved', type: 'app' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('returns not-found when Steam returns empty', async () => {
-    fetch.mockResolvedValueOnce({
+    fetch.mockResolvedValue({
       ok: true,
       json: async () => ({ items: [] })
     });

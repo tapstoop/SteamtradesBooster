@@ -1,5 +1,5 @@
 // background/service-worker.js
-import { getPrices, getCachedPrices, getBundles, getRateLimitState, getPriceCacheKeys } from './ggdeals.js';
+import { getPrices, getCachedPrices, getBundles, getRateLimitState, getPriceCacheKeys, getPriceResult } from './ggdeals.js';
 import { resolveTitle, confirmResolution } from './resolver.js';
 import { fetchProfile, getCachedProfile } from './profile.js';
 import { cacheGet, cacheSet, cacheClear, setDismissed, setUndismissed, isDismissed, setDelisted, setUndelisted } from './cache.js';
@@ -177,12 +177,17 @@ async function buildDiagnosticLog() {
 }
 
 function normalizePriceMessageItems(msg) {
-  if (Array.isArray(msg.items)) return msg.items;
-  return (msg.appIds ?? []).map(id => ({ id, type: 'app' }));
+  if (Array.isArray(msg.items)) {
+    return msg.items.map(item => ({
+      id: String(item.id ?? item.appId),
+      type: ['app', 'bundle', 'sub'].includes(item.type) ? item.type : 'app',
+    })).filter(item => item.id && item.id !== 'undefined');
+  }
+  return (msg.appIds ?? []).map(id => ({ id: String(id), type: 'app' })).filter(item => item.id && item.id !== 'undefined');
 }
 
-function priceMessageIds(msg) {
-  return normalizePriceMessageItems(msg).map(item => String(item.id ?? item.appId));
+function priceMessageTargets(msg) {
+  return normalizePriceMessageItems(msg).map(item => ({ id: String(item.id ?? item.appId), type: item.type ?? 'app' }));
 }
 
 // --- Alarm: Daily Snapshot ---
@@ -209,7 +214,7 @@ chrome.alarms.onAlarm.addListener(async alarm => {
   for (const region of settings.regions) {
     for (const item of appIds) {
       const appId = item.id;
-      const data = prices[appId]?.[region];
+      const data = getPriceResult(prices, appId, item.type)?.[region];
       if (!data) continue;
       await writeSnapshot({
         appId,
@@ -328,21 +333,23 @@ async function handleMessage(msg) {
       const regions = msg.regions ?? settings.regions;
       if (!settings.apiKey) return { error: 'No API key set' };
       const items = normalizePriceMessageItems(msg);
-      const ids = priceMessageIds(msg);
+      const targets = priceMessageTargets(msg);
       const prices = await getPrices(settings.apiKey, items, regions);
       // Broadcast PRICE_UPDATED to all tabs for each app that got fresh data
       if (prices) {
         const region = getDisplayRegion({ ...settings, regions });
-        for (const appId of ids) {
-          if (prices[appId]?.[region]) {
+        for (const target of targets) {
+          const typedRegionData = getPriceResult(prices, target.id, target.type);
+          if (typedRegionData?.[region]) {
             try {
               chrome.tabs.query({}, tabs => {
                 tabs.forEach(tab => {
                   chrome.tabs.sendMessage(tab.id, {
                     type: 'PRICE_UPDATED',
-                    appId,
+                    appId: target.id,
+                    itemType: target.type,
                     region,
-                    priceData: prices[appId][region],
+                    priceData: typedRegionData[region],
                   }).catch(() => {});
                 });
               });
@@ -461,7 +468,7 @@ async function handleMessage(msg) {
       if (!settings.apiKey) return { error: 'No API key set' };
       const regions = msg.regions ?? settings.regions;
       const items = normalizePriceMessageItems(msg);
-      const appIds = priceMessageIds(msg);
+      const targets = priceMessageTargets(msg);
       if (items.length === 0) return {};
       // Remove only price keys for these appIds (targeted, not cacheClear)
       const keysToDelete = getPriceCacheKeys(items, regions);
@@ -470,16 +477,18 @@ async function handleMessage(msg) {
       // Broadcast PRICE_UPDATED for each app (same as GET_PRICES)
       if (prices) {
         const region = getDisplayRegion({ ...settings, regions });
-        for (const appId of appIds) {
-          if (prices[appId]?.[region]) {
+        for (const target of targets) {
+          const typedRegionData = getPriceResult(prices, target.id, target.type);
+          if (typedRegionData?.[region]) {
             try {
               chrome.tabs.query({}, tabs => {
                 tabs.forEach(tab => {
                   chrome.tabs.sendMessage(tab.id, {
                     type: 'PRICE_UPDATED',
-                    appId,
+                    appId: target.id,
+                    itemType: target.type,
                     region,
-                    priceData: prices[appId][region],
+                    priceData: typedRegionData[region],
                   }).catch(() => {});
                 });
               });

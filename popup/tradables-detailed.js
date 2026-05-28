@@ -22,6 +22,17 @@ function formatPrice(amount, currency = 'EUR') {
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);
 }
 
+function normalizePriceType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+function readPriceRegion(prices, id, type = 'app', region) {
+  if (!prices || !id) return null;
+  const typed = prices[`${normalizePriceType(type)}:${id}`]?.[region];
+  if (typed) return typed;
+  return prices[id]?.[region] ?? null;
+}
+
 function rangeLabel(ratio, settings) {
   if (ratio >= (settings.rangeHighRatio ?? 3.0)) return 'HIGH';
   if (ratio >= (settings.rangeLowRatio ?? 1.5)) return 'MID';
@@ -73,9 +84,10 @@ export async function initTradablesDetailed(container) {
   for (let i = 0; i < tradables.length; i++) {
     const title = tradables[i];
     const appId = resolutions[i]?.appId;
+    const type = resolutions[i]?.type ?? 'app';
     if (!appId) continue;
 
-    const data = prices[appId]?.[region];
+    const data = readPriceRegion(prices, appId, type, region);
     if (!data) continue;
 
     const currentRetail = data.prices?.currentRetail;

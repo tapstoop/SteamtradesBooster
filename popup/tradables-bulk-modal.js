@@ -17,6 +17,22 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+export function buildPreviewItemHtml(entry, idx, borderColor) {
+  const tooltip = entry.confidence
+    ? `Auto-selected: closest match for '${entry.raw}' → '${entry.matchedName}' (${entry.confidence}%)`
+    : '';
+  const safeTooltip = escapeHtml(tooltip);
+  const safeName = escapeHtml(entry.matchedName || entry.raw);
+  const safeAppId = escapeHtml(entry.appId ?? '');
+  return `
+    <div class="preview-item" style="border-left: 3px solid ${borderColor};" title="${safeTooltip}">
+      <input type="checkbox" class="preview-checkbox" data-index="${idx}" ${entry.checked ? 'checked' : ''}>
+      <span class="preview-name">${safeName}</span>
+      ${entry.appId ? `<span class="preview-appid">#${safeAppId}</span>` : ''}
+    </div>
+  `;
+}
+
 export function categorizeResults(resolvedEntries) {
   return resolvedEntries.map(entry => {
     let category;
@@ -295,17 +311,7 @@ export function createBulkImportModal(onAdd, options = {}) {
     previewList.innerHTML = filtered.map((entry, idx) => {
       if (!entry.visible) return '';
       const config = CATEGORY_CONFIG[entry.category];
-      const tooltip = entry.confidence
-        ? `Auto-selected: closest match for '${entry.raw}' → '${entry.matchedName}' (${entry.confidence}%)`
-        : '';
-
-      return `
-        <div class="preview-item" style="border-left: 3px solid ${config.color};" title="${tooltip}">
-          <input type="checkbox" class="preview-checkbox" data-index="${idx}" ${entry.checked ? 'checked' : ''}>
-          <span class="preview-name">${entry.matchedName || entry.raw}</span>
-          ${entry.appId ? `<span class="preview-appid">#${entry.appId}</span>` : ''}
-        </div>
-      `;
+      return buildPreviewItemHtml(entry, idx, config.color);
     }).join('');
 
     // Re-attach checkbox listeners

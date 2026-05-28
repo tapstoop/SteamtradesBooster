@@ -6,7 +6,8 @@ import {
   getAddCount,
   toggleAllVisible,
   findDuplicateTradables,
-  prepareTradablesToAdd
+  prepareTradablesToAdd,
+  buildPreviewItemHtml
 } from '../popup/tradables-bulk-modal.js';
 
 describe('categorizeResults', () => {
@@ -152,5 +153,21 @@ describe('duplicate tradables', () => {
     );
     expect(prepared.increments).toEqual([{ index: 0, amount: 1, name: 'Hollow Knight' }]);
     expect(prepared.additions).toEqual([{ name: 'Celeste', appId: '504230', type: 'app', qty: 1 }]);
+  });
+});
+
+describe('buildPreviewItemHtml', () => {
+  it('escapes dynamic content in preview entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: '<img src=x onerror=alert(1)>',
+      matchedName: 'Bad "Name"',
+      appId: '123',
+      confidence: 95,
+      checked: true,
+    }, 0, '#fff');
+
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).toContain('Bad &quot;Name&quot;');
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
   });
 });

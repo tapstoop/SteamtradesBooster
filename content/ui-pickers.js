@@ -13,6 +13,34 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function normalizeGgDealsUrl(rawUrl) {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl, location.href);
+    const isHttp = parsed.protocol === 'https:' || parsed.protocol === 'http:';
+    const isGgDeals = parsed.hostname === 'gg.deals' || parsed.hostname.endsWith('.gg.deals');
+    return (isHttp && isGgDeals) ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function readTypedPrice(prices, id, type = 'app', region) {
+  if (!prices || !id) return null;
+  const typed = prices[`${type}:${id}`]?.[region];
+  if (typed) return typed;
+  return prices[id]?.[region] ?? null;
+}
+
+export function buildPopoverRefreshRequest(gameInfo, settings) {
+  const itemType = gameInfo.type ?? gameInfo.resolution?.type ?? 'app';
+  return {
+    type: 'REFRESH_PRICES',
+    payload: { items: [{ id: gameInfo.appId, type: itemType }], regions: settings.regions },
+    itemType,
+  };
+}
+
 function appendErrorLogLink(container) {
   const link = document.createElement('button');
   link.type = 'button';
@@ -257,8 +285,10 @@ export function openPopover(anchorEl, priceData, gameInfo) {
     }
   }
 
+  const safeUrl = normalizeGgDealsUrl(priceData?.url);
+  const safeTitle = escapeHtml(gameInfo.title ?? 'Unknown');
   pop.innerHTML = `
-    <div class="stpt-popover-title">${gameInfo.title ?? 'Unknown'}</div>
+    <div class="stpt-popover-title">${safeTitle}</div>
     ${cachedAt ? `
     <div class="stpt-popover-row stpt-popover-ts">
       <span class="stpt-popover-label">Updated</span>
@@ -289,17 +319,18 @@ export function openPopover(anchorEl, priceData, gameInfo) {
       <span class="stpt-popover-val atl" style="color:#7fff7f;font-weight:600;">${formatPrice(bestAtl, currency)}</span>
     </div>
     ` : ''}
-    ${priceData?.url ? `<a class="stpt-popover-link" href="${priceData.url}" target="_blank">View on GG.deals ↗</a>` : ''}
+    ${safeUrl ? `<a class="stpt-popover-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">View on GG.deals ↗</a>` : ''}
   `;
 
   // Acquisition price section for tradables
   if (gameInfo.tier === 2 && gameInfo.appId) {
     const acqSection = document.createElement('div');
     acqSection.className = 'stpt-acq-section';
+    const acqValue = Number.isFinite(gameInfo.acqPrice) ? (gameInfo.acqPrice / 100).toFixed(2) : '';
     acqSection.innerHTML = `
       <div style="color:#8a9bb0;margin-bottom:4px;">Acquisition price:</div>
       <input class="stpt-acq-input" type="number" step="0.01" placeholder="€0.00"
-             value="${gameInfo.acqPrice != null ? (gameInfo.acqPrice / 100).toFixed(2) : ''}">
+             value="${acqValue}">
       <button class="stpt-acq-save">Save</button>
       ${gameInfo.acqPrice != null && currentRetail != null ? `
         <div style="margin-top:6px;color:${currentRetail >= gameInfo.acqPrice ? '#7fff7f' : '#ff8888'}">
@@ -334,8 +365,9 @@ export function openPopover(anchorEl, priceData, gameInfo) {
       refreshBtn.disabled = true;
       try {
         const s = await sendMessage('GET_SETTINGS');
-        const prices = await sendMessage('GET_PRICES', { items: [{ id: gameInfo.appId, type: gameInfo.type ?? gameInfo.resolution?.type ?? 'app' }], regions: s.regions });
-        const freshPrice = prices[gameInfo.appId]?.[getDisplayRegion(s)] ?? null;
+        const refreshRequest = buildPopoverRefreshRequest(gameInfo, s);
+        const prices = await sendMessage(refreshRequest.type, refreshRequest.payload);
+        const freshPrice = readTypedPrice(prices, gameInfo.appId, refreshRequest.itemType, getDisplayRegion(s));
         const gameItem = anchorEl.closest('.stpt-game-item') ?? anchorEl.parentElement?.closest('.stpt-game-item');
         if (gameItem) {
           gameItem.querySelectorAll('.stpt-skeleton, .stpt-badge').forEach(e => e.remove());

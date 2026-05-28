@@ -24,12 +24,42 @@ function bundlePriceKey(bundleId, region) {
   return `bundle-price:${bundleId}:${region}`;
 }
 
+function subPriceKey(subId, region) {
+  return `sub-price:${subId}:${region}`;
+}
+
 function typedPriceKey(id, type, region) {
-  return type === 'bundle' ? bundlePriceKey(id, region) : priceKey(id, region);
+  if (type === 'bundle') return bundlePriceKey(id, region);
+  if (type === 'sub') return subPriceKey(id, region);
+  return priceKey(id, region);
 }
 
 function normalizePriceType(type) {
   return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+function typedResultKey(id, type = 'app') {
+  return `${normalizePriceType(type)}:${String(id)}`;
+}
+
+function readPriceResult(results, id, type = 'app') {
+  if (!results) return null;
+  const typed = results[typedResultKey(id, type)];
+  if (typed) return typed;
+  return results[String(id)] ?? null;
+}
+
+function writePriceResult(results, id, type, region, value) {
+  const normalizedType = normalizePriceType(type);
+  const stringId = String(id);
+  const typedKey = typedResultKey(stringId, normalizedType);
+  if (!results[typedKey]) results[typedKey] = {};
+  results[typedKey][region] = value;
+
+  // Backward compatibility for app-only callers.
+  if (!results[stringId] || normalizedType === 'app') {
+    results[stringId] = results[typedKey];
+  }
 }
 
 function normalizePriceItems(itemsOrIds) {
@@ -143,7 +173,7 @@ async function processQueue() {
             await cacheSet(typedPriceKey(id, job.type, job.region), priceData, PRICE_TTL);
           }
         }
-        job.resolve({ region: job.region, data });
+        job.resolve({ region: job.region, type: job.type, data });
       } catch (err) {
         if (err.rateLimited) {
           queue.unshift(job);
@@ -164,6 +194,7 @@ export async function getPrices(apiKey, itemsOrIds, regions) {
   const results = {};
   const toFetch = {};
   const subAppMap = {}; // Map Sub ID -> contained App IDs
+  const subFailedIds = new Set();
 
   // First, check for Sub IDs and resolve them to their contained apps
   for (const item of items) {
@@ -182,6 +213,8 @@ export async function getPrices(apiKey, itemsOrIds, regions) {
           }
         }
       }
+    } else {
+      subFailedIds.add(id);
     }
   }
 
@@ -189,14 +222,21 @@ export async function getPrices(apiKey, itemsOrIds, regions) {
     const missing = [];
     for (const item of items) {
       const id = item.id;
-      // Skip Sub IDs - they'll get prices from contained apps
+      // Sub IDs are either aggregated from contained apps or fail closed.
+      if (item.type === 'sub') {
+        const cachedSub = await cacheGet(typedPriceKey(id, 'sub', region));
+        if (cachedSub) {
+          writePriceResult(results, id, 'sub', region, { ...cachedSub.value, cachedAt: cachedSub.cachedAt });
+        }
+        continue;
+      }
+
+      // Skip Sub IDs with successful expansion - they are aggregated later.
       if (subAppMap[id]) continue;
 
       const cached = await cacheGet(typedPriceKey(id, item.type, region));
       if (cached) {
-        if (!results[id]) results[id] = {};
-        // cached is { value, cachedAt }
-        results[id][region] = { ...cached.value, cachedAt: cached.cachedAt };
+        writePriceResult(results, id, item.type, region, { ...cached.value, cachedAt: cached.cachedAt });
       } else {
         missing.push(item);
       }
@@ -229,21 +269,10 @@ export async function getPrices(apiKey, itemsOrIds, regions) {
   processQueue().catch(console.error);
 
   const batchResults = await Promise.all(fetchPromises);
-  const allFetchedPrices = {};
-  for (const { region, data } of batchResults) {
+  for (const { region, type, data } of batchResults) {
     for (const [id, priceData] of Object.entries(data)) {
-      if (priceData) {
-        if (!allFetchedPrices[id]) allFetchedPrices[id] = {};
-        allFetchedPrices[id][region] = { ...priceData, cachedAt: Date.now() };
-      }
-    }
-  }
-
-  // Merge fetched prices into results
-  for (const [id, regionData] of Object.entries(allFetchedPrices)) {
-    if (!results[id]) results[id] = {};
-    for (const [region, priceData] of Object.entries(regionData)) {
-      results[id][region] = priceData;
+      if (!priceData) continue;
+      writePriceResult(results, id, type, region, { ...priceData, cachedAt: Date.now() });
     }
   }
 
@@ -265,8 +294,7 @@ export async function getPrices(apiKey, itemsOrIds, regions) {
         // Use first app's URL as the bundle URL (GG.deals doesn't have bundle-specific URLs via API)
         const firstUrl = containedPrices[0].url;
 
-        results[subId] = results[subId] || {};
-        results[subId][region] = {
+        const aggregate = {
           title: `Bundle (${containedApps.length} games)`,
           url: firstUrl,
           prices: {
@@ -280,6 +308,18 @@ export async function getPrices(apiKey, itemsOrIds, regions) {
           isSub: true,
           containedApps,
         };
+        writePriceResult(results, subId, 'sub', region, aggregate);
+        await cacheSet(typedPriceKey(subId, 'sub', region), aggregate, PRICE_TTL);
+      }
+    }
+  }
+
+  // Mark sub IDs that could not be expanded as missing (fail closed).
+  for (const subId of subFailedIds) {
+    for (const region of regions) {
+      if (!readPriceResult(results, subId, 'sub')?.[region]) {
+        // Keep explicit empty object for typed key consumers.
+        if (!results[typedResultKey(subId, 'sub')]) results[typedResultKey(subId, 'sub')] = {};
       }
     }
   }
@@ -290,7 +330,6 @@ export async function getPrices(apiKey, itemsOrIds, regions) {
 /**
  * Cache-only version of getPrices — no API calls, only returns cached data.
  * Missing entries are simply omitted from the result.
- * Note: Does NOT handle Sub IDs (bundles) - use getPrices for that.
  */
 export async function getCachedPrices(itemsOrIds, regions) {
   const items = normalizePriceItems(itemsOrIds);
@@ -299,8 +338,7 @@ export async function getCachedPrices(itemsOrIds, regions) {
     for (const item of items) {
       const cached = await cacheGet(typedPriceKey(item.id, item.type, region));
       if (cached) {
-        if (!results[item.id]) results[item.id] = {};
-        results[item.id][region] = { ...cached.value, cachedAt: cached.cachedAt };
+        writePriceResult(results, item.id, item.type, region, { ...cached.value, cachedAt: cached.cachedAt });
       }
     }
   }
@@ -346,4 +384,8 @@ export function getRateLimitState() {
 export function getPriceCacheKeys(itemsOrIds, regions) {
   const items = normalizePriceItems(itemsOrIds);
   return items.flatMap(item => regions.map(region => typedPriceKey(item.id, item.type, region)));
+}
+
+export function getPriceResult(prices, id, type = 'app') {
+  return readPriceResult(prices, id, type);
 }

@@ -71,11 +71,21 @@ export function getCardRefreshTimestamp(card, settings = {}) {
 }
 
 export function getStaleAppIds(appIds, prices, regions, maxAgeMs, now = Date.now()) {
-  if (maxAgeMs === Infinity) return appIds.filter(id => !regions.every(region => prices?.[id]?.[region]));
+  const priceFor = (id) => {
+    if (prices?.[id]) return prices[id];
+    if (id.includes(':')) {
+      const rawId = id.split(':')[1];
+      return prices?.[rawId] ?? null;
+    }
+    return null;
+  };
+
+  if (maxAgeMs === Infinity) return appIds.filter(id => !regions.every(region => priceFor(id)?.[region]));
 
   return appIds.filter(id => {
+    const entryPrices = priceFor(id);
     for (const region of regions) {
-      const cachedAt = prices?.[id]?.[region]?.cachedAt;
+      const cachedAt = entryPrices?.[region]?.cachedAt;
       if (!cachedAt || now - cachedAt > maxAgeMs) return true;
     }
     return false;
@@ -113,6 +123,18 @@ async function setRefreshOptions(options) {
 }
 
 let dealsState = null;
+
+export function getDealsCacheIdentity(settings = {}) {
+  const steamId = String(settings?.steamId ?? '').trim().toLowerCase();
+  return steamId ? `steam:${steamId}` : 'steam:none';
+}
+
+function typedPriceResult(prices, id, type = 'app') {
+  if (!prices || !id) return null;
+  const typed = prices[`${type}:${id}`];
+  if (typed) return typed;
+  return prices[id] ?? null;
+}
 
 /**
  * Apply current settings (region + keyshops preference) to all cards at render time.
@@ -163,6 +185,13 @@ function applySettingsToCards(cards, settings) {
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type !== 'SETTINGS_UPDATED') return;
   if (dealsState) {
+    const nextIdentity = getDealsCacheIdentity(message.settings);
+    if (nextIdentity !== dealsState.cacheIdentity) {
+      dealsState = null;
+      const container = document.querySelector('#tab-deals');
+      if (container) loadDeals(container).catch(() => {});
+      return;
+    }
     // Update stored settings in dealsState
     Object.assign(dealsState.settings, message.settings);
     applySettingsToCards(dealsState.cards, message.settings);
@@ -230,20 +259,27 @@ export async function initDeals(container) {
     });
   }
 
-  // Session guard — instant when switching tabs
-  if (dealsState) {
+  const settings = await msg('GET_SETTINGS');
+  const cacheIdentity = getDealsCacheIdentity(settings);
+
+  // Session guard — instant when switching tabs, but only for the same Steam profile.
+  if (dealsState && dealsState.cacheIdentity === cacheIdentity) {
     renderDeals(container);
     return;
   }
+  dealsState = null;
 
   // Persistent cache — instant on popup reopen
   const snap = await new Promise(resolve => chrome.storage.local.get(DEALS_CACHE_KEY, resolve));
   if (snap[DEALS_CACHE_KEY]?.cards?.length) {
-    const { cards, savedAt } = snap[DEALS_CACHE_KEY];
-    const settings = await msg('GET_SETTINGS');
+    const { cards, savedAt, cacheIdentity: cachedIdentity } = snap[DEALS_CACHE_KEY];
+    if (cachedIdentity !== cacheIdentity) {
+      await loadDeals(container);
+      return;
+    }
     const sortMode = await getSortMode();
     applySettingsToCards(cards, settings);
-    dealsState = { cards, settings, sortMode, savedAt, withPrices: 0, freeGamesCount: 0, priceError: null };
+    dealsState = { cards, settings, sortMode, savedAt, withPrices: 0, freeGamesCount: 0, priceError: null, cacheIdentity };
     // Count priced cards
     for (const c of cards) {
       if (c.bestCurrent != null) dealsState.withPrices++;
@@ -272,7 +308,9 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
   freeSection.innerHTML = '';
 
   const settings = await msg('GET_SETTINGS');
+  const cacheIdentity = getDealsCacheIdentity(settings);
   if (!settings.steamId) {
+    dealsState = null;
     body.innerHTML = `<div class="error-state">No Steam ID set. Add your profile URL in Settings.${errorLogLink()}</div>`;
     return;
   }
@@ -305,6 +343,7 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
   const cards = profile.wishlist.map((title, i) => ({
     title,
     appId: resolutions[i]?.appId,
+    type: resolutions[i]?.type ?? 'app',
     pricesPerRegion: null,
     currency: 'EUR',
     isFree: false,
@@ -318,6 +357,8 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
   }));
 
   const priceItems = resolutions.filter(r => r?.appId).map(r => ({ id: r.appId, type: r.type ?? 'app' }));
+  const itemKey = (item) => `${item.type ?? 'app'}:${item.id}`;
+  const itemKeys = priceItems.map(itemKey);
   const appIds = priceItems.map(item => item.id);
   if (!appIds.length) {
     summary.textContent = `${profile.wishlist.length} games on wishlist`;
@@ -334,26 +375,26 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
     let prices = null;
     try { prices = await msg('GET_CACHED_PRICES', { items: priceItems, regions }); } catch {}
 
-    let appIdsToFetch = [];
+    let itemKeysToFetch = [];
     if (manualRefresh && !refreshOptions.ignoreCached) {
-      appIdsToFetch = appIds;
+      itemKeysToFetch = itemKeys;
     } else if (manualRefresh && refreshOptions.ignoreCached) {
-      appIdsToFetch = getStaleAppIds(appIds, prices, regions, CACHE_AGE_OPTIONS[refreshOptions.maxAge]);
+      itemKeysToFetch = getStaleAppIds(itemKeys, prices, regions, CACHE_AGE_OPTIONS[refreshOptions.maxAge]);
     } else {
-      appIdsToFetch = getStaleAppIds(appIds, prices, regions, Infinity);
+      itemKeysToFetch = getStaleAppIds(itemKeys, prices, regions, Infinity);
     }
 
-    if (appIdsToFetch.length > 0) {
+    if (itemKeysToFetch.length > 0) {
       try {
-        const itemsToFetch = priceItems.filter(item => appIdsToFetch.includes(item.id));
+        const itemsToFetch = priceItems.filter(item => itemKeysToFetch.includes(itemKey(item)));
         const livePrices = await msg(manualRefresh ? 'REFRESH_PRICES' : 'GET_PRICES', { items: itemsToFetch, regions });
         if (livePrices?.error) { priceError = livePrices.error; }
         else if (livePrices) {
           // Merge live prices into cache results
           prices = prices ?? {};
-          for (const id of Object.keys(livePrices)) {
-            if (livePrices[id]) {
-              prices[id] = livePrices[id];
+          for (const key of Object.keys(livePrices)) {
+            if (livePrices[key]) {
+              prices[key] = livePrices[key];
             }
           }
         }
@@ -364,10 +405,11 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
     if (prices) {
       for (const card of cards) {
         if (!card.appId) continue;
-        if (prices[card.appId]) {
-          card.pricesPerRegion = prices[card.appId]; // { eu: {...}, us: {...} }
+        const regionPrices = typedPriceResult(prices, card.appId, card.type ?? 'app');
+        if (regionPrices) {
+          card.pricesPerRegion = regionPrices; // { eu: {...}, us: {...} }
           // Grab URL from any available region
-          for (const r of Object.values(prices[card.appId])) {
+          for (const r of Object.values(regionPrices)) {
             if (r?.url) { card.url = r.url; card.ggdealsUrl = r.url; break; }
           }
         }
@@ -402,6 +444,7 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
   const cardsToStore = cards.map(c => ({
     title: c.title,
     appId: c.appId,
+    type: c.type ?? 'app',
     pricesPerRegion: c.pricesPerRegion,
     currency: c.currency,
     isFree: c.isFree,
@@ -409,10 +452,10 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
     url: c.url,
     ggdealsUrl: c.ggdealsUrl,
   }));
-  await new Promise(resolve => chrome.storage.local.set({ [DEALS_CACHE_KEY]: { cards: cardsToStore, savedAt: Date.now() } }, resolve));
+  await new Promise(resolve => chrome.storage.local.set({ [DEALS_CACHE_KEY]: { cards: cardsToStore, savedAt: Date.now(), cacheIdentity } }, resolve));
 
   const withPrices = cards.filter(c => c.bestCurrent != null).length;
-  dealsState = { cards, settings, sortMode, withPrices, freeGamesCount, priceError, savedAt: Date.now() };
+  dealsState = { cards, settings, sortMode, withPrices, freeGamesCount, priceError, savedAt: Date.now(), cacheIdentity };
   renderDeals(container);
 }
 

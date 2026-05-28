@@ -621,8 +621,10 @@ export class SidebarWorkstation {
     // priceMap: { appId: { price: numberInCents, currency: string } }
     if (!priceMap) return;
     this.pageGames.forEach(game => {
-      if (game.appId && priceMap[game.appId]) {
-        const data = priceMap[game.appId];
+      if (game.appId) {
+        const typedKey = `${game.type ?? 'app'}:${game.appId}`;
+        const data = priceMap[typedKey] ?? priceMap[game.appId];
+        if (!data) return;
         game.price = data.price ?? null;
         game.currency = data.currency ?? 'EUR';
       }

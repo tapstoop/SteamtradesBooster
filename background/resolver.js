@@ -109,65 +109,71 @@ export async function resolveTitle(title) {
   const cached = await cacheGet(key);
   if (cached?.value) return resultFromCache(cached.value, 'hit', key);
 
-  // Fetch from Steam
-  let items = [];
+  let bestAmbiguous = null;
+  let bestAmbiguousScore = 0;
+  let sawItems = false;
+
   try {
     for (const term of getSearchTerms(title)) {
-      items = await fetchSteamItems(term);
-      if (items.length > 0) break;
+      const items = await fetchSteamItems(term);
+      if (items.length === 0) continue;
+      sawItems = true;
+
+      // Single result
+      if (items.length === 1) {
+        const value = resolutionValue(items[0].id, items[0].type);
+        await cacheSet(key, value, RESOLVE_TTL);
+        return { ...value, status: 'resolved', cacheKey: key };
+      }
+
+      // Exact match for this search term
+      const normalizedTerm = normalizeTitle(term);
+      const exactMatch = items.find(item => normalizeTitle(item.name) === normalizedTerm);
+      if (exactMatch) {
+        const value = resolutionValue(exactMatch.id, exactMatch.type);
+        await cacheSet(key, value, RESOLVE_TTL);
+        return { ...value, status: 'resolved', cacheKey: key };
+      }
+
+      // No exact match — try fuzzy matching for this term
+      let bestMatch = null;
+      let bestScore = 0;
+      for (const item of items) {
+        const score = wordSimilarity(term, item.name);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = item;
+        }
+      }
+
+      if (bestMatch && bestScore >= SIMILARITY_THRESHOLD) {
+        const value = resolutionValue(bestMatch.id, bestMatch.type);
+        await cacheSet(key, value, RESOLVE_TTL);
+        return {
+          ...value,
+          status: 'resolved',
+          fuzzy: true,
+          similarity: Math.round(bestScore * 100),
+          title: bestMatch.name,
+          cacheKey: key
+        };
+      }
+
+      if (bestScore > bestAmbiguousScore) {
+        bestAmbiguousScore = bestScore;
+        bestAmbiguous = items;
+      } else if (!bestAmbiguous) {
+        bestAmbiguous = items;
+      }
     }
   } catch {
     return { status: 'not-found', cacheKey: key };
   }
 
-  if (items.length === 0) return { status: 'not-found', cacheKey: key };
-
-  // Single result or top result matches closely
-  if (items.length === 1) {
-    const value = resolutionValue(items[0].id, items[0].type);
-    await cacheSet(key, value, RESOLVE_TTL);
-    return { ...value, status: 'resolved', cacheKey: key };
-  }
-
-  // Check if any result is an exact match — pick it over showing ambiguous
-  const normalizedQuery = normalizeTitle(title);
-  const exactMatch = items.find(item => normalizeTitle(item.name) === normalizedQuery);
-  if (exactMatch) {
-    const value = resolutionValue(exactMatch.id, exactMatch.type);
-    await cacheSet(key, value, RESOLVE_TTL);
-    return { ...value, status: 'resolved', cacheKey: key };
-  }
-
-  // No exact match — try fuzzy matching
-  let bestMatch = null;
-  let bestScore = 0;
-
-  for (const item of items) {
-    const score = wordSimilarity(title, item.name);
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = item;
-    }
-  }
-
-  if (bestMatch && bestScore >= SIMILARITY_THRESHOLD) {
-    // High confidence match — auto-resolve with fuzzy status
-    const value = resolutionValue(bestMatch.id, bestMatch.type);
-    await cacheSet(key, value, RESOLVE_TTL);
-    return {
-      ...value,
-      status: 'resolved',
-      fuzzy: true,
-      similarity: Math.round(bestScore * 100),
-      title: bestMatch.name,
-      cacheKey: key
-    };
-  }
-
-  // No good match — multiple candidates, let user pick
+  if (!sawItems) return { status: 'not-found', cacheKey: key };
   return {
     status: 'ambiguous',
-    candidates: items.slice(0, 5).map(candidateFromItem),
+    candidates: (bestAmbiguous ?? []).slice(0, 5).map(candidateFromItem),
     cacheKey: key,
   };
 }

@@ -19,6 +19,7 @@ const {
   formatRefreshDate,
   getCardRefreshTimestamp,
   getStaleAppIds,
+  getDealsCacheIdentity,
 } = await import('../popup/deals.js');
 
 describe('formatRefreshDate', () => {
@@ -81,5 +82,26 @@ describe('getStaleAppIds', () => {
 
     expect(getStaleAppIds(['complete', 'missingRegion', 'missing'], prices, ['eu', 'us'], Infinity))
       .toEqual(['missingRegion', 'missing']);
+  });
+
+  it('supports typed price keys with app-id fallback', () => {
+    const now = Date.UTC(2026, 4, 12);
+    const day = 24 * 60 * 60 * 1000;
+    const prices = {
+      'bundle:232': { eu: { cachedAt: now - day } },
+      10: { eu: { cachedAt: now - day } },
+    };
+    expect(getStaleAppIds(['bundle:232', 'app:10', 'app:999'], prices, ['eu'], 7 * day, now))
+      .toEqual(['app:999']);
+  });
+});
+
+describe('getDealsCacheIdentity', () => {
+  it('normalizes steamId values into stable cache identity keys', () => {
+    expect(getDealsCacheIdentity({ steamId: '  76561198000000000 ' })).toBe('steam:76561198000000000');
+  });
+
+  it('returns steam:none when steamId is missing', () => {
+    expect(getDealsCacheIdentity({})).toBe('steam:none');
   });
 });
