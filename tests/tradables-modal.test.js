@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   categorizeResults,
   filterVisible,
+  getEntriesToAdd,
   getAddCount,
   toggleAllVisible
 } from '../popup/tradables-bulk-modal.js';
@@ -74,6 +75,27 @@ describe('getAddCount', () => {
       { category: 'exact', checked: true, visible: false }
     ];
     expect(getAddCount(entries)).toBe(1);
+  });
+});
+
+describe('getEntriesToAdd', () => {
+  it('excludes entries hidden by inactive filters', () => {
+    const entries = [
+      { category: 'exact', checked: true, visible: true, matchedName: 'Hollow Knight' },
+      { category: 'notfound', checked: true, visible: true, raw: 'Unknown Game' }
+    ];
+
+    expect(getEntriesToAdd(entries, new Set(['exact']))).toEqual([
+      { category: 'exact', checked: true, visible: true, matchedName: 'Hollow Knight' }
+    ]);
+  });
+
+  it('excludes unchecked unresolved entries', () => {
+    const entries = [
+      { category: 'notfound', checked: false, visible: true, raw: 'Unknown Game' }
+    ];
+
+    expect(getEntriesToAdd(entries, new Set(['notfound']))).toEqual([]);
   });
 });
 

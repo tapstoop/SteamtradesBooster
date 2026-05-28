@@ -7,6 +7,14 @@ describe('parseInput', () => {
     expect(parseInput('Game A, Game B, Game C')).toEqual(['Game A', 'Game B', 'Game C']);
   });
 
+  it('preserves commas inside titles', () => {
+    expect(parseInput('Warhammer 40,000\nGame B')).toEqual(['Warhammer 40,000', 'Game B']);
+  });
+
+  it('preserves comma-containing titles in comma-separated input', () => {
+    expect(parseInput('Warhammer 40,000, Game B')).toEqual(['Warhammer 40,000', 'Game B']);
+  });
+
   it('splits by newline', () => {
     expect(parseInput('Game A\nGame B\nGame C')).toEqual(['Game A', 'Game B', 'Game C']);
   });

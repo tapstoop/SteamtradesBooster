@@ -2,15 +2,17 @@
 
 /**
  * Parse bulk input string into array of non-empty trimmed entries.
-   * Supports comma, newline, or mixed separation.
-   */
-  export function parseInput(input) {
-    if (!input || !input.trim()) return [];
-    return input
-      .split(/[,\r\n]+/)
-      .map(s => s.trim())
-      .filter(Boolean);
-  }
+ * Supports newline-separated entries and comma-separated entries when the comma
+ * is followed by whitespace, preserving titles like "Warhammer 40,000".
+ */
+export function parseInput(input) {
+  if (!input || !input.trim()) return [];
+  return input
+    .split(/\r?\n/)
+    .flatMap(line => line.split(/,+\s+(?=\S)|,+(?=\s*[A-Za-z])/))
+    .map(s => s.trim())
+    .filter(Boolean);
+}
 
 /**
  * Classify a parsed entry as either an App ID (pure numeric) or a game name.

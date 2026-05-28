@@ -53,6 +53,10 @@ export function toggleAllVisible(entries, checked) {
   );
 }
 
+export function getEntriesToAdd(entries, activeFilters) {
+  return filterVisible(entries, activeFilters).filter(e => e.checked && e.visible);
+}
+
 /**
  * Resolve entries via background service worker.
  * Returns array of resolved entry objects.
@@ -264,8 +268,7 @@ export function createBulkImportModal(onAdd) {
       });
     });
 
-    const totalReady = resolvedEntries.filter(e => e.checked).length;
-    previewSummary.textContent = `${totalReady} of ${resolvedEntries.length} games ready to add`;
+    previewSummary.textContent = `${addCount} of ${resolvedEntries.length} games ready to add`;
     addCountSpan.textContent = addCount;
     addBtn.disabled = addCount === 0;
   }
@@ -306,14 +309,19 @@ export function createBulkImportModal(onAdd) {
     refreshPreview();
   });
 
-  addBtn.addEventListener('click', () => {
-    const toAdd = resolvedEntries.filter(e => e.checked && e.visible);
+  addBtn.addEventListener('click', async () => {
+    const toAdd = getEntriesToAdd(resolvedEntries, activeFilters);
     const tradables = toAdd.map(e => ({
       name: e.matchedName || e.raw,
       appId: e.appId
     }));
-    onAdd(tradables);
-    destroy();
+    addBtn.disabled = true;
+    try {
+      await onAdd(tradables);
+      destroy();
+    } finally {
+      addBtn.disabled = false;
+    }
   });
 
   // Focus trap and escape key

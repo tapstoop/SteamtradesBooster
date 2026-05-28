@@ -153,10 +153,10 @@ export async function initTradables(container) {
   }
 
   /**
-   * Fetch fresh prices from API for all tradables with resolved appIds.
-   * Now uses REFRESH_PRICES (cache bypass) so that page badges also update via broadcast.
+   * Fetch prices for all tradables with resolved appIds.
+   * Manual refresh bypasses cache; normal loads preserve cached prices if the API is unavailable.
    */
-  async function fetchPrices() {
+  async function fetchPrices({ refresh = false } = {}) {
     if (!settings.apiKey) return;
 
     const appIds = tradablesList
@@ -166,7 +166,7 @@ export async function initTradables(container) {
     if (appIds.length === 0) return;
 
     try {
-      const prices = await msg('REFRESH_PRICES', { appIds, regions: settings.regions });
+      const prices = await msg(refresh ? 'REFRESH_PRICES' : 'GET_PRICES', { appIds, regions: settings.regions });
       if (prices && !prices.error) {
         const region = getDisplayRegion(settings);
         for (const appId of appIds) {
@@ -394,7 +394,7 @@ export async function initTradables(container) {
       btn.textContent = '↻ Loading…';
       btn.disabled = true;
       try {
-        await fetchPrices();
+        await fetchPrices({ refresh: true });
         render();
         updateStats();
       } catch (err) {
