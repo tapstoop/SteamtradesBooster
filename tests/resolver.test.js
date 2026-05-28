@@ -15,7 +15,7 @@ global.chrome = {
 // Mock fetch for Steam search API
 global.fetch = vi.fn();
 
-import { resolveTitle, normalizeTitle } from '../background/resolver.js';
+import { resolveTitle, normalizeTitle, confirmResolution } from '../background/resolver.js';
 
 beforeEach(() => {
   Object.keys(store).forEach(k => delete store[k]);
@@ -44,11 +44,29 @@ describe('resolveTitle', () => {
     fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        items: [{ id: 1245620, name: 'Elden Ring' }]
+        items: [{ id: 1245620, name: 'Elden Ring', type: 'app' }]
       })
     });
     const result = await resolveTitle('Elden Ring');
-    expect(result).toMatchObject({ appId: '1245620', status: 'resolved' });
+    expect(result).toMatchObject({ appId: '1245620', type: 'app', status: 'resolved' });
+  });
+
+  it('preserves bundle result type', async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        items: [{ id: 232, name: 'Valve Complete Pack', type: 'bundle' }]
+      })
+    });
+    const result = await resolveTitle('Valve Complete Pack');
+    expect(result).toMatchObject({ appId: '232', type: 'bundle', status: 'resolved' });
+  });
+
+  it('returns confirmed resolution type from cache', async () => {
+    await confirmResolution('resolve:valve complete pack', '232', 'Valve Complete Pack', 'bundle');
+    const result = await resolveTitle('Valve Complete Pack');
+    expect(result).toMatchObject({ appId: '232', type: 'bundle', status: 'hit', title: 'Valve Complete Pack' });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('auto-resolves when top result exactly matches normalized title', async () => {
@@ -78,6 +96,22 @@ describe('resolveTitle', () => {
     const result = await resolveTitle('Dark Souls');
     expect(result.status).toBe('ambiguous');
     expect(result.candidates.length).toBe(2);
+  });
+
+  it('falls back to simplified edition titles after empty search results', async () => {
+    fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ items: [] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ items: [{ id: 367520, name: 'Hollow Knight', type: 'app' }] })
+      });
+
+    const result = await resolveTitle('Hollow Knight - Deluxe Edition');
+    expect(result).toMatchObject({ appId: '367520', status: 'resolved', type: 'app' });
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('returns not-found when Steam returns empty', async () => {

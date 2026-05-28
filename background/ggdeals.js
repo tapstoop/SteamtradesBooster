@@ -7,6 +7,10 @@ const BASE_URL = 'https://api.gg.deals/v1';
 const rateLimitState = {
   remaining: 100,
   resetAt: 0,
+  limit: null,
+  lastUpdatedAt: null,
+  lastCalls: [],
+  recent429s: [],
 };
 
 const queue = [];
@@ -16,18 +20,60 @@ function priceKey(appId, region) {
   return `price:${appId}:${region}`;
 }
 
-function updateRateLimit(resp) {
-  const remaining = parseInt(resp.headers.get('x-ratelimit-remaining') ?? '100');
-  const resetAt = parseInt(resp.headers.get('x-ratelimit-reset') ?? '0') * 1000;
-  rateLimitState.remaining = remaining;
-  rateLimitState.resetAt = resetAt;
+function bundlePriceKey(bundleId, region) {
+  return `bundle-price:${bundleId}:${region}`;
 }
 
-async function fetchBatch(apiKey, appIds, region) {
-  const url = `${BASE_URL}/prices/by-steam-app-id/?ids=${appIds.join(',')}&key=${encodeURIComponent(apiKey)}&region=${encodeURIComponent(region)}`;
+function typedPriceKey(id, type, region) {
+  return type === 'bundle' ? bundlePriceKey(id, region) : priceKey(id, region);
+}
+
+function normalizePriceType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+function normalizePriceItems(itemsOrIds) {
+  return (itemsOrIds ?? []).map(item => {
+    if (typeof item === 'object') {
+      const id = item.id ?? item.appId;
+      return { id: String(id), type: normalizePriceType(item.type) };
+    }
+    return { id: String(item), type: 'app' };
+  }).filter(item => item.id && item.id !== 'undefined');
+}
+
+function updateRateLimit(resp) {
+  const limit = parseInt(resp.headers.get('x-ratelimit-limit') ?? '');
+  const remaining = parseInt(resp.headers.get('x-ratelimit-remaining') ?? '100');
+  const resetAt = parseInt(resp.headers.get('x-ratelimit-reset') ?? '0') * 1000;
+  rateLimitState.limit = Number.isFinite(limit) ? limit : rateLimitState.limit;
+  rateLimitState.remaining = remaining;
+  rateLimitState.resetAt = resetAt;
+  rateLimitState.lastUpdatedAt = Date.now();
+}
+
+function recordApiCall(type, ids, region, status) {
+  rateLimitState.lastCalls.unshift({
+    type,
+    count: ids.length,
+    region,
+    status,
+    at: Date.now(),
+  });
+  rateLimitState.lastCalls = rateLimitState.lastCalls.slice(0, 10);
+  if (status === 429) {
+    rateLimitState.recent429s.unshift({ type, count: ids.length, region, at: Date.now(), resetAt: rateLimitState.resetAt });
+    rateLimitState.recent429s = rateLimitState.recent429s.slice(0, 10);
+  }
+}
+
+async function fetchBatch(apiKey, ids, region, type = 'app') {
+  const path = type === 'bundle' ? 'prices/by-steam-bundle-id' : 'prices/by-steam-app-id';
+  const url = `${BASE_URL}/${path}/?ids=${ids.join(',')}&key=${encodeURIComponent(apiKey)}&region=${encodeURIComponent(region)}`;
   const resp = await fetch(url);
 
   updateRateLimit(resp);
+  recordApiCall(type, ids, region, resp.status);
 
   if (resp.status === 429) {
     throw { rateLimited: true, resetAt: rateLimitState.resetAt };
@@ -91,10 +137,10 @@ async function processQueue() {
 
       const job = queue.shift();
       try {
-        const data = await fetchBatch(job.apiKey, job.appIds, job.region);
+        const data = await fetchBatch(job.apiKey, job.ids, job.region, job.type);
         for (const [id, priceData] of Object.entries(data)) {
           if (priceData) {
-            await cacheSet(priceKey(id, job.region), priceData, PRICE_TTL);
+            await cacheSet(typedPriceKey(id, job.type, job.region), priceData, PRICE_TTL);
           }
         }
         job.resolve({ region: job.region, data });
@@ -113,23 +159,26 @@ async function processQueue() {
   }
 }
 
-export async function getPrices(apiKey, appIds, regions) {
+export async function getPrices(apiKey, itemsOrIds, regions) {
+  const items = normalizePriceItems(itemsOrIds);
   const results = {};
   const toFetch = {};
   const subAppMap = {}; // Map Sub ID -> contained App IDs
 
   // First, check for Sub IDs and resolve them to their contained apps
-  for (const id of appIds) {
+  for (const item of items) {
+    if (item.type !== 'sub') continue;
+    const id = item.id;
     // Try to get apps contained in this sub/bundle
     const subApps = await getSubApps(id);
     if (subApps && subApps.length > 0) {
       subAppMap[id] = subApps;
       // Add contained apps to the fetch list (we'll use their prices for the sub)
       for (const region of regions) {
-        if (!toFetch[region]) toFetch[region] = [];
+        if (!toFetch[region]) toFetch[region] = { app: [], bundle: [] };
         for (const subAppId of subApps) {
-          if (!toFetch[region].includes(subAppId)) {
-            toFetch[region].push(subAppId);
+          if (!toFetch[region].app.includes(subAppId)) {
+            toFetch[region].app.push(subAppId);
           }
         }
       }
@@ -138,38 +187,42 @@ export async function getPrices(apiKey, appIds, regions) {
 
   for (const region of regions) {
     const missing = [];
-    for (const id of appIds) {
+    for (const item of items) {
+      const id = item.id;
       // Skip Sub IDs - they'll get prices from contained apps
       if (subAppMap[id]) continue;
 
-      const cached = await cacheGet(priceKey(id, region));
+      const cached = await cacheGet(typedPriceKey(id, item.type, region));
       if (cached) {
         if (!results[id]) results[id] = {};
         // cached is { value, cachedAt }
         results[id][region] = { ...cached.value, cachedAt: cached.cachedAt };
       } else {
-        missing.push(id);
+        missing.push(item);
       }
     }
     if (missing.length > 0) {
-      if (!toFetch[region]) toFetch[region] = [];
-      for (const id of missing) {
-        if (!toFetch[region].includes(id)) {
-          toFetch[region].push(id);
+      if (!toFetch[region]) toFetch[region] = { app: [], bundle: [] };
+      for (const item of missing) {
+        const type = item.type === 'bundle' ? 'bundle' : 'app';
+        if (!toFetch[region][type].includes(item.id)) {
+          toFetch[region][type].push(item.id);
         }
       }
     }
   }
 
   const fetchPromises = [];
-  for (const [region, ids] of Object.entries(toFetch)) {
-    for (let i = 0; i < ids.length; i += 100) {
-      const batch = ids.slice(i, i + 100);
-      fetchPromises.push(
-        new Promise((resolve, reject) => {
-          queue.push({ apiKey, appIds: batch, region, resolve, reject });
-        })
-      );
+  for (const [region, groups] of Object.entries(toFetch)) {
+    for (const [type, ids] of Object.entries(groups)) {
+      for (let i = 0; i < ids.length; i += 100) {
+        const batch = ids.slice(i, i + 100);
+        fetchPromises.push(
+          new Promise((resolve, reject) => {
+            queue.push({ apiKey, ids: batch, type, region, resolve, reject });
+          })
+        );
+      }
     }
   }
 
@@ -239,14 +292,15 @@ export async function getPrices(apiKey, appIds, regions) {
  * Missing entries are simply omitted from the result.
  * Note: Does NOT handle Sub IDs (bundles) - use getPrices for that.
  */
-export async function getCachedPrices(appIds, regions) {
+export async function getCachedPrices(itemsOrIds, regions) {
+  const items = normalizePriceItems(itemsOrIds);
   const results = {};
   for (const region of regions) {
-    for (const id of appIds) {
-      const cached = await cacheGet(priceKey(id, region));
+    for (const item of items) {
+      const cached = await cacheGet(typedPriceKey(item.id, item.type, region));
       if (cached) {
-        if (!results[id]) results[id] = {};
-        results[id][region] = { ...cached.value, cachedAt: cached.cachedAt };
+        if (!results[item.id]) results[item.id] = {};
+        results[item.id][region] = { ...cached.value, cachedAt: cached.cachedAt };
       }
     }
   }
@@ -287,4 +341,9 @@ export async function getBundles(apiKey, appIds) {
 
 export function getRateLimitState() {
   return { ...rateLimitState };
+}
+
+export function getPriceCacheKeys(itemsOrIds, regions) {
+  const items = normalizePriceItems(itemsOrIds);
+  return items.flatMap(item => regions.map(region => typedPriceKey(item.id, item.type, region)));
 }

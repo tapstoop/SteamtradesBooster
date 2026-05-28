@@ -128,7 +128,49 @@ export async function initSettings(container) {
       </div>
       <button class="btn-danger" id="s-clear">Clear all cached data</button>
     </div>
+
+    <div class="settings-section" id="error-log">
+      <div class="settings-label">Error Log</div>
+      <textarea class="settings-log" id="s-error-log" readonly>Loading diagnostics...</textarea>
+      <button class="btn-primary settings-copy" id="s-copy-log">Copy to clipboard</button>
+    </div>
+
+    <hr class="settings-divider">
+    <div class="settings-about">
+      <div id="s-about-version">SteamTrades Booster</div>
+      <div>
+        <a href="https://github.com/tapstoop/SteamtradesBooster" target="_blank" rel="noreferrer">GitHub</a>
+        ·
+        <a href="https://github.com/tapstoop/SteamtradesBooster/releases" target="_blank" rel="noreferrer">Changelog</a>
+      </div>
+    </div>
   `;
+
+  const manifest = chrome.runtime.getManifest?.();
+  const aboutVersion = container.querySelector('#s-about-version');
+  if (aboutVersion) aboutVersion.textContent = `SteamTrades Booster v${manifest?.version ?? 'unknown'}`;
+
+  async function refreshDiagnosticLog() {
+    const response = await msg('GET_DIAGNOSTIC_LOG');
+    const log = container.querySelector('#s-error-log');
+    if (log) log.value = response?.log ?? 'No diagnostics available.';
+  }
+
+  await refreshDiagnosticLog();
+
+  container.querySelector('#s-copy-log').addEventListener('click', async e => {
+    e.stopPropagation();
+    await navigator.clipboard.writeText(container.querySelector('#s-error-log').value);
+    e.target.textContent = 'Copied';
+    setTimeout(() => { e.target.textContent = 'Copy to clipboard'; }, 1500);
+  });
+
+  if (new URLSearchParams(location.search).get('focus') === 'error-log') {
+    const panel = container.querySelector('#error-log');
+    panel?.scrollIntoView({ block: 'start' });
+    panel?.classList.add('settings-highlight');
+    setTimeout(() => panel?.classList.remove('settings-highlight'), 1800);
+  }
 
   // ── Currency change ────────────────────────────────────────────────────────
   container.querySelector('#s-currency').addEventListener('change', async () => {

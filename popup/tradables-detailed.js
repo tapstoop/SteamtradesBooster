@@ -9,6 +9,10 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function errorLogLink() {
+  return ' <a class="error-log-inline" href="popup.html?tab=settings&focus=error-log">See error logs</a>';
+}
+
 function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
 }
@@ -41,13 +45,13 @@ export async function initTradablesDetailed(container) {
 
   const settings = await msg('GET_SETTINGS');
   if (!settings.apiKey || !settings.steamId) {
-    body.innerHTML = '<div class="error-state">Set API key and Steam ID in Settings first.</div>';
+    body.innerHTML = `<div class="error-state">Set API key and Steam ID in Settings first.${errorLogLink()}</div>`;
     return;
   }
 
   const profile = await msg('GET_PROFILE');
   if (profile.error) {
-    body.innerHTML = `<div class="error-state">${escapeHtml(profile.error)}</div>`;
+    body.innerHTML = `<div class="error-state">${escapeHtml(profile.error)}${errorLogLink()}</div>`;
     return;
   }
   const tradables = profile.tradables ?? [];
@@ -59,9 +63,9 @@ export async function initTradablesDetailed(container) {
   const resolutions = await msg('RESOLVE_TITLES', { titles: tradables });
   const appIds = resolutions
     .filter(r => r?.status === 'hit' || r?.status === 'resolved')
-    .map(r => r.appId);
+    .map(r => ({ id: r.appId, type: r.type ?? 'app' }));
 
-  const prices = await msg('GET_PRICES', { appIds, regions: settings.regions });
+  const prices = await msg('GET_PRICES', { items: appIds, regions: settings.regions });
   const region = settings.regions[0];
 
   const html = [];

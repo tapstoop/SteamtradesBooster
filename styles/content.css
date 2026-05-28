@@ -236,6 +236,21 @@
 .stpt-candidates .stpt-cand-item:hover { background: #1a2030; }
 .stpt-candidates .stpt-cand-dismiss { color: #555; font-style: italic; }
 
+.stpt-error-log-link {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid #1e1e2e;
+  color: #66c0f4;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  margin-top: 3px;
+  padding: 5px 6px 2px;
+  text-align: left;
+}
+.stpt-error-log-link:hover { color: #c6d4df; }
+
 /* ── Sidebar ──────────────────────────────────── */
 #stpt-sidebar {
   position: fixed;

@@ -103,6 +103,39 @@ export function stripParentheses(text) {
   return text.replace(/\s*\([^)]*\)\s*/g, '').trim();
 }
 
+export function cleanGameTitle(text) {
+  return stripParentheses(stripSuffixes(stripListPrefixes(text ?? ''))).replace(/\s+/g, ' ').trim();
+}
+
+function getAnchorTitle(root) {
+  const anchors = Array.from(root.querySelectorAll?.('a') ?? []);
+  const preferred = anchors.find(a => /store\.steampowered\.com\/(app|bundle|sub)\//i.test(a.href || '')) ?? anchors[0];
+  return preferred?.textContent?.trim() ?? '';
+}
+
+function addParsedRow(rows, seenTitles, el, section, title) {
+  const cleaned = cleanGameTitle(title);
+  if (cleaned.length < 2 || isNotGame(cleaned)) return false;
+
+  const normalized = cleaned.toLowerCase();
+  if (seenTitles.has(normalized)) return false;
+  seenTitles.add(normalized);
+
+  el.classList.add('stpt-game-item');
+  el.dataset.stptSection = section;
+  el.dataset.stptIndex = rows.length;
+  el.dataset.stptTitle = cleaned;
+  rows.push({ title: cleaned, el });
+  return true;
+}
+
+function canParseTitle(seenTitles, title) {
+  const cleaned = cleanGameTitle(title);
+  if (cleaned.length < 2 || isNotGame(cleaned)) return null;
+  if (seenTitles.has(cleaned.toLowerCase())) return null;
+  return cleaned;
+}
+
 /**
  * Check if text contains unicode character successions (like 𝕦𝕟𝕚𝕔𝕠𝕕𝕖)
  */
@@ -202,11 +235,13 @@ export function parseGameRows() {
     ...document.querySelectorAll('.have .markdown p'),
     ...document.querySelectorAll('.have .markdown ul li'),
     ...document.querySelectorAll('.have .markdown ol li'),
+    ...document.querySelectorAll('.have .markdown table tr'),
   ];
   const wantContainers = [
     ...document.querySelectorAll('.want .markdown p'),
     ...document.querySelectorAll('.want .markdown ul li'),
     ...document.querySelectorAll('.want .markdown ol li'),
+    ...document.querySelectorAll('.want .markdown table tr'),
   ];
 
   /**
@@ -214,6 +249,26 @@ export function parseGameRows() {
    */
   const parseElement = (el, section) => {
     if (!el) return;
+
+    if (el.tagName === 'TR') {
+      const cells = Array.from(el.querySelectorAll('td, th'));
+      if (cells.length === 0) return;
+      const anchorTitle = getAnchorTitle(el);
+      const firstTextCell = cells.find(cell => {
+        const text = cleanGameTitle(cell.textContent);
+        return text.length >= 2 && !matchesSkipPhrase(text) && !isNotGame(text);
+      });
+      const rawText = anchorTitle || firstTextCell?.textContent?.trim() || '';
+      if (!rawText || matchesSkipPhrase(rawText)) return;
+      if (!canParseTitle(seenTitles, rawText)) return;
+
+      const target = firstTextCell ?? cells[0];
+      const span = document.createElement('span');
+      while (target.firstChild) span.appendChild(target.firstChild);
+      target.appendChild(span);
+      addParsedRow(rows, seenTitles, span, section, rawText);
+      return;
+    }
 
     // Handle <li> elements directly (no <br> splitting needed)
     if (el.tagName === 'LI') {
@@ -229,31 +284,11 @@ export function parseGameRows() {
 
       // PHASE 5B: Hyperlink-first detection for LI elements
       const anchor = el.querySelector('a');
-      let text;
-      if (anchor) {
-        // Extract ONLY the anchor text as the game name
-        text = anchor.textContent.trim();
-      } else {
-        // Strip list prefixes then suffixes
-        text = stripListPrefixes(rawText);
-        text = stripSuffixes(text);
-      }
-      if (text.length < 2) return;
-
-      // Filter out non-games (safety net after extraction)
-      if (isNotGame(text)) return;
-
-      // Skip duplicates
-      const normalized = text.toLowerCase();
-      if (seenTitles.has(normalized)) return;
-      seenTitles.add(normalized);
+      const text = anchor ? anchor.textContent.trim() : rawText;
+      if (!canParseTitle(seenTitles, text)) return;
 
       // Create wrapper span
       const span = document.createElement('span');
-      span.className = 'stpt-game-item';
-      span.dataset.stptSection = section;
-      span.dataset.stptIndex = rows.length;
-      span.dataset.stptTitle = stripParentheses(text);
 
       // Move all children of <li> into the span
       while (el.firstChild) {
@@ -261,7 +296,7 @@ export function parseGameRows() {
       }
       el.appendChild(span);
 
-      rows.push({ title: stripParentheses(text), el: span });
+      addParsedRow(rows, seenTitles, span, section, text);
       return;
     }
 
@@ -304,25 +339,25 @@ export function parseGameRows() {
       let text;
       if (hasLink) {
         // PHASE 5B: Extract ONLY the anchor text as the game name
-        const anchor = lineNodes.find(n => {
+        let anchor = lineNodes.find(n => {
           if (n.nodeType === Node.ELEMENT_NODE) {
             return n.tagName === 'A';
           }
           return false;
         });
+        if (!anchor) {
+          const linkParent = lineNodes.find(n => n.nodeType === Node.ELEMENT_NODE && n.querySelector('a'));
+          anchor = linkParent?.querySelector('a') ?? null;
+        }
         if (anchor) {
           text = anchor.textContent.trim();
         } else {
           // Fallback: strip prefixes and suffixes
-          text = stripListPrefixes(rawText);
-          text = stripSuffixes(text);
+          text = rawText;
         }
       } else {
-        // Strip list prefixes then suffixes
-        text = stripListPrefixes(rawText);
-        text = stripSuffixes(text);
+        text = rawText;
       }
-      if (text.length < 2) return;
 
       // Determine if this line is a category header:
       // - <strong>/<em> without any <a> child → category header → skip
@@ -334,27 +369,16 @@ export function parseGameRows() {
       });
 
       if (isHeaderish) return; // Skip category headers, preserve original HTML
-
-      // Filter out non-games (safety net after extraction)
-      if (isNotGame(text)) return;
-
-      // Skip duplicates
-      const normalized = text.toLowerCase();
-      if (seenTitles.has(normalized)) return;
-      seenTitles.add(normalized);
+      if (!canParseTitle(seenTitles, text)) return;
 
       // Wrap the original DOM nodes in a game span (preserves links, formatting)
       const span = document.createElement('span');
-      span.className = 'stpt-game-item';
-      span.dataset.stptSection = section;
-      span.dataset.stptIndex = startIndex + index++;
-      span.dataset.stptTitle = stripParentheses(text);
 
       const firstNode = lineNodes[0];
       el.insertBefore(span, firstNode);
       lineNodes.forEach(n => span.appendChild(n));
 
-      rows.push({ title: stripParentheses(text), el: span });
+      if (addParsedRow(rows, seenTitles, span, section, text)) index++;
     });
   };
 

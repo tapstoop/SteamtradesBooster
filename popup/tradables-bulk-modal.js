@@ -1,4 +1,5 @@
 import { parseInput, classifyEntry, computeConfidence } from './tradables-parser.js';
+import { normalizeTitle } from '../utils/similarity.js';
 
 const CATEGORY_CONFIG = {
   exact: { label: 'Exact Matches', color: '#a1cd44', defaultChecked: true },
@@ -7,6 +8,14 @@ const CATEGORY_CONFIG = {
   'fuzzy-manual': { label: 'Fuzzy Manual', color: '#e67e22', defaultChecked: true },
   notfound: { label: 'Not Found', color: '#e74c3c', defaultChecked: true }
 };
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 export function categorizeResults(resolvedEntries) {
   return resolvedEntries.map(entry => {
@@ -55,6 +64,41 @@ export function toggleAllVisible(entries, checked) {
 
 export function getEntriesToAdd(entries, activeFilters) {
   return filterVisible(entries, activeFilters).filter(e => e.checked && e.visible);
+}
+
+function tradableKey(item) {
+  return item.appId ? `app:${item.appId}` : `title:${normalizeTitle(item.name ?? item.matchedName ?? item.raw ?? '')}`;
+}
+
+export function findDuplicateTradables(entries, existingTradables) {
+  const existingMap = new Map();
+  (existingTradables ?? []).forEach((item, index) => {
+    existingMap.set(tradableKey(item), { item, index });
+  });
+  return entries
+    .map(entry => {
+      const key = tradableKey({ appId: entry.appId, name: entry.matchedName || entry.raw });
+      const duplicate = existingMap.get(key);
+      return duplicate ? { entry, existing: duplicate.item, index: duplicate.index } : null;
+    })
+    .filter(Boolean);
+}
+
+export function prepareTradablesToAdd(entries, existingTradables, duplicateAction = 'skip') {
+  const duplicates = findDuplicateTradables(entries, existingTradables);
+  const duplicateKeys = new Set(duplicates.map(d => tradableKey(d.existing)));
+  const additions = entries
+    .filter(entry => !duplicateKeys.has(tradableKey({ appId: entry.appId, name: entry.matchedName || entry.raw })))
+    .map(e => ({
+      name: e.matchedName || e.raw,
+      appId: e.appId,
+      type: e.type ?? 'app',
+      qty: 1,
+    }));
+  const increments = duplicateAction === 'increment'
+    ? duplicates.map(d => ({ index: d.index, amount: 1, name: d.existing.name }))
+    : [];
+  return { additions, increments, duplicates };
 }
 
 /**
@@ -117,6 +161,7 @@ async function resolveNames(entries) {
         raw,
         status: 'ambiguous', // Treat as ambiguous for confidence-based categorization
         appId: result.appId,
+        type: result.type ?? 'app',
         matchedName: result.title || raw,
         confidence: result.similarity
       };
@@ -128,6 +173,7 @@ async function resolveNames(entries) {
         raw,
         status: result.status,
         appId: result.appId,
+        type: result.type ?? 'app',
         matchedName: result.title || raw
       };
     }
@@ -149,6 +195,7 @@ async function resolveNames(entries) {
       raw,
       status: result.status || 'not-found',
       appId: result.appId || null,
+      type: result.type ?? 'app',
       matchedName: result.title || raw
     };
   });
@@ -157,7 +204,7 @@ async function resolveNames(entries) {
 /**
  * Build the modal DOM and return control interface.
  */
-export function createBulkImportModal(onAdd) {
+export function createBulkImportModal(onAdd, options = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
@@ -182,6 +229,7 @@ export function createBulkImportModal(onAdd) {
           </div>
           <div class="preview-filters" id="preview-filters"></div>
           <div class="preview-list" id="preview-list"></div>
+          <div class="duplicate-warning" id="duplicate-warning" style="display:none;"></div>
           <div class="preview-actions">
             <button id="bulk-add-btn" class="btn-success">Add <span id="add-count">0</span> Tradables</button>
             <button id="bulk-cancel-btn" class="btn-secondary">Cancel</button>
@@ -212,6 +260,7 @@ export function createBulkImportModal(onAdd) {
   const filtersContainer = overlay.querySelector('#preview-filters');
   const selectAllBtn = overlay.querySelector('#preview-select-all');
   const deselectAllBtn = overlay.querySelector('#preview-deselect-all');
+  const duplicateWarning = overlay.querySelector('#duplicate-warning');
 
   let resolvedEntries = [];
   // PHASE 4F: All 5 categories active by default
@@ -309,20 +358,33 @@ export function createBulkImportModal(onAdd) {
     refreshPreview();
   });
 
-  addBtn.addEventListener('click', async () => {
+  async function submitAdd(duplicateAction = null) {
     const toAdd = getEntriesToAdd(resolvedEntries, activeFilters);
-    const tradables = toAdd.map(e => ({
-      name: e.matchedName || e.raw,
-      appId: e.appId
-    }));
+    const prepared = prepareTradablesToAdd(toAdd, options.existingTradables ?? [], duplicateAction ?? 'skip');
+    if (prepared.duplicates.length > 0 && duplicateAction == null) {
+      duplicateWarning.style.display = 'block';
+      duplicateWarning.innerHTML = `
+        <div class="duplicate-title">Duplicate tradables found</div>
+        <div class="duplicate-body">${prepared.duplicates.map(d => escapeHtml(d.existing.name || d.entry.raw)).join(', ')}</div>
+        <div class="duplicate-actions">
+          <button class="btn-small" id="dup-increment">Yes, increment quantity</button>
+          <button class="btn-small" id="dup-skip">No, skip duplicates</button>
+        </div>
+      `;
+      duplicateWarning.querySelector('#dup-increment').addEventListener('click', () => submitAdd('increment'));
+      duplicateWarning.querySelector('#dup-skip').addEventListener('click', () => submitAdd('skip'));
+      return;
+    }
     addBtn.disabled = true;
     try {
-      await onAdd(tradables);
+      await onAdd(prepared);
       destroy();
     } finally {
       addBtn.disabled = false;
     }
-  });
+  }
+
+  addBtn.addEventListener('click', async () => submitAdd());
 
   // Focus trap and escape key
   overlay.addEventListener('keydown', (e) => {

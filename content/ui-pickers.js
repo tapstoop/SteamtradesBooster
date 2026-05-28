@@ -13,6 +13,19 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function appendErrorLogLink(container) {
+  const link = document.createElement('button');
+  link.type = 'button';
+  link.className = 'stpt-error-log-link';
+  link.textContent = 'See error logs';
+  link.addEventListener('click', async e => {
+    e.stopPropagation();
+    await sendMessage('OPEN_POPUP_TAB', { tab: 'settings', focus: 'error-log' });
+  });
+  container.appendChild(link);
+  return link;
+}
+
 // ── Candidate / Fuzzy / Not-found pickers ─────────────────────────────
 
 export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
@@ -28,11 +41,11 @@ export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
   candidates.forEach(c => {
     const item = document.createElement('div');
     item.className = 'stpt-cand-item';
-    item.innerHTML = `<span>${escapeHtml(c.name)}</span><span style="color:#555;font-size:9px;">App ${escapeHtml(c.id)}</span>`;
+    item.innerHTML = `<span>${escapeHtml(c.name)}</span><span style="color:#555;font-size:9px;">${escapeHtml(c.type === 'bundle' ? 'Bundle' : c.type === 'sub' ? 'Sub' : 'App')} ${escapeHtml(c.id)}</span>`;
     item.addEventListener('click', async () => {
       picker.remove();
-      await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: c.id, title: c.name });
-      rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: c.id, title: c.name, cacheKey } }));
+      await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: c.id, title: c.name, type: c.type ?? 'app' });
+      rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: c.id, title: c.name, cacheKey, type: c.type ?? 'app' } }));
     });
     picker.appendChild(item);
   });
@@ -52,6 +65,7 @@ export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
     injectDismissedBadge(rowEl, cacheKey, rowEl.dataset.stptTitle);
   });
   picker.appendChild(dismiss);
+  appendErrorLogLink(picker);
 
   positionNear(picker, anchorEl);
   setTimeout(() => document.addEventListener('click', () => picker.remove(), { once: true }), 0);
@@ -66,6 +80,7 @@ export function openFuzzyPicker(anchorEl, resolution) {
   header.style.cssText = 'color:#888;font-size:9px;padding:3px 5px 5px;border-bottom:1px solid #1e1e2e;margin-bottom:3px;';
   header.textContent = `Auto-matched (${resolution.similarity}% similar)`;
   picker.appendChild(header);
+  appendErrorLogLink(picker);
 
   const matchedItem = document.createElement('div');
   matchedItem.className = 'stpt-cand-item';
@@ -145,11 +160,12 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
       results.items.forEach(item => {
         const resultItem = document.createElement('div');
         resultItem.className = 'stpt-cand-item';
-        resultItem.innerHTML = `<span>${escapeHtml(item.name)}</span><span style="color:#555;font-size:9px;">App ${escapeHtml(String(item.id))}</span>`;
+        const type = item.type ?? 'app';
+        resultItem.innerHTML = `<span>${escapeHtml(item.name)}</span><span style="color:#555;font-size:9px;">${escapeHtml(type === 'bundle' ? 'Bundle' : type === 'sub' ? 'Sub' : 'App')} ${escapeHtml(String(item.id))}</span>`;
         resultItem.addEventListener('click', async () => {
           picker.remove();
-          await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: String(item.id), title: item.name });
-          rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: String(item.id), title: item.name, cacheKey } }));
+          await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: String(item.id), title: item.name, type });
+          rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: String(item.id), title: item.name, cacheKey, type } }));
         });
         resultsContainer.appendChild(resultItem);
       });
@@ -205,6 +221,7 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
     injectDelistedBadge(rowEl, cacheKey, title);
   });
   picker.appendChild(delisted);
+  appendErrorLogLink(picker);
 
   positionNear(picker, anchorEl);
 
@@ -317,7 +334,7 @@ export function openPopover(anchorEl, priceData, gameInfo) {
       refreshBtn.disabled = true;
       try {
         const s = await sendMessage('GET_SETTINGS');
-        const prices = await sendMessage('GET_PRICES', { appIds: [gameInfo.appId], regions: s.regions });
+        const prices = await sendMessage('GET_PRICES', { items: [{ id: gameInfo.appId, type: gameInfo.type ?? gameInfo.resolution?.type ?? 'app' }], regions: s.regions });
         const freshPrice = prices[gameInfo.appId]?.[getDisplayRegion(s)] ?? null;
         const gameItem = anchorEl.closest('.stpt-game-item') ?? anchorEl.parentElement?.closest('.stpt-game-item');
         if (gameItem) {
@@ -384,7 +401,7 @@ export function openPopover(anchorEl, priceData, gameInfo) {
         gameItem.dispatchEvent(new CustomEvent('stpt-recheck', { bubbles: true, detail: { title: gameInfo.title, cacheKey: gameInfo.cacheKey } }));
       } else {
         if (gameInfo.cacheKey && gameInfo.appId) {
-          await sendMessage('CONFIRM_RESOLUTION', { cacheKey: gameInfo.cacheKey, appId: gameInfo.appId });
+          await sendMessage('CONFIRM_RESOLUTION', { cacheKey: gameInfo.cacheKey, appId: gameInfo.appId, type: gameInfo.type ?? gameInfo.resolution?.type ?? 'app' });
         }
         if (gameInfo.cacheKey) {
           await sendMessage('SET_DELISTED', { cacheKey: gameInfo.cacheKey });

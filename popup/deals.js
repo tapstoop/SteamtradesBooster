@@ -30,6 +30,10 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function errorLogLink() {
+  return ' <a class="error-log-inline" href="popup.html?tab=settings&focus=error-log">See error logs</a>';
+}
+
 function formatTimestamp(ts) {
   if (!ts) return '';
   const diff = Date.now() - ts;
@@ -269,7 +273,7 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
 
   const settings = await msg('GET_SETTINGS');
   if (!settings.steamId) {
-    body.innerHTML = '<div class="error-state">No Steam ID set. Add your profile URL in Settings.</div>';
+    body.innerHTML = `<div class="error-state">No Steam ID set. Add your profile URL in Settings.${errorLogLink()}</div>`;
     return;
   }
 
@@ -279,12 +283,12 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
     profile = await msg('GET_CACHED_PROFILE');
     if (!profile.wishlist?.length) profile = await msg('GET_PROFILE');
   } catch (err) {
-    body.innerHTML = `<div class="error-state">Failed to load wishlist: ${escapeHtml(err.message)}</div>`;
+    body.innerHTML = `<div class="error-state">Failed to load wishlist: ${escapeHtml(err.message)}${errorLogLink()}</div>`;
     return;
   }
 
   if (!profile.wishlist?.length) {
-    body.innerHTML = '<div class="error-state">No wishlist games found. Make sure your Steam wishlist is set to <strong>Public</strong>.</div>';
+    body.innerHTML = `<div class="error-state">No wishlist games found. Make sure your Steam wishlist is set to <strong>Public</strong>.${errorLogLink()}</div>`;
     return;
   }
 
@@ -313,7 +317,8 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
     pctAboveAtl: null,
   }));
 
-  const appIds = resolutions.filter(r => r?.appId).map(r => r.appId);
+  const priceItems = resolutions.filter(r => r?.appId).map(r => ({ id: r.appId, type: r.type ?? 'app' }));
+  const appIds = priceItems.map(item => item.id);
   if (!appIds.length) {
     summary.textContent = `${profile.wishlist.length} games on wishlist`;
     body.innerHTML = '<div class="empty-state">Could not resolve any wishlist games to App IDs.</div>';
@@ -327,7 +332,7 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
   if (settings.apiKey) {
     const regions = settings.regions ?? [getDisplayRegion(settings)];
     let prices = null;
-    try { prices = await msg('GET_CACHED_PRICES', { appIds, regions }); } catch {}
+    try { prices = await msg('GET_CACHED_PRICES', { items: priceItems, regions }); } catch {}
 
     let appIdsToFetch = [];
     if (manualRefresh && !refreshOptions.ignoreCached) {
@@ -340,7 +345,8 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
 
     if (appIdsToFetch.length > 0) {
       try {
-        const livePrices = await msg(manualRefresh ? 'REFRESH_PRICES' : 'GET_PRICES', { appIds: appIdsToFetch, regions });
+        const itemsToFetch = priceItems.filter(item => appIdsToFetch.includes(item.id));
+        const livePrices = await msg(manualRefresh ? 'REFRESH_PRICES' : 'GET_PRICES', { items: itemsToFetch, regions });
         if (livePrices?.error) { priceError = livePrices.error; }
         else if (livePrices) {
           // Merge live prices into cache results
@@ -432,7 +438,7 @@ function renderDeals(container) {
     const errorParts = priceError.split('\n');
     const mainError = escapeHtml(errorParts[0]);
     const hint = errorParts.slice(1).map(h => `<br><span style="font-size:10px;color:#e8a735">${escapeHtml(h)}</span>`).join('');
-    summary.innerHTML = `${cards.length} games on wishlist — <span style="color:#e74c3c">Price error: ${mainError}</span>${hint}`;
+    summary.innerHTML = `${cards.length} games on wishlist — <span style="color:#e74c3c">Price error: ${mainError}</span>${hint}${errorLogLink()}`;
   } else {
     summary.textContent = `${cards.length} games on wishlist — ${withPrices} with prices`;
   }

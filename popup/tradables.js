@@ -21,9 +21,13 @@ function formatPrice(amount, currency = 'EUR') {
 
 /** Migrate old newline-string format to [{name, appId}] array */
 function normalizeTradables(raw) {
-  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw)) {
+    return raw.map(item => typeof item === 'string'
+      ? { name: item, appId: null, type: 'app', qty: 1 }
+      : { ...item, type: item.type ?? 'app', qty: Math.max(1, parseInt(item.qty) || 1) });
+  }
   if (typeof raw === 'string' && raw.trim()) {
-    return raw.split('\n').map(n => n.trim()).filter(Boolean).map(name => ({ name, appId: null }));
+    return raw.split('\n').map(n => n.trim()).filter(Boolean).map(name => ({ name, appId: null, type: 'app', qty: 1 }));
   }
   return [];
 }
@@ -105,6 +109,7 @@ export async function initTradables(container) {
     resolutions.forEach((res, i) => {
       if (res && (res.status === 'hit' || res.status === 'resolved') && res.appId) {
         unresolved[i].appId = String(res.appId);
+        unresolved[i].type = res.type ?? 'app';
         if (res.title) unresolved[i].name = res.title;
         changed = true;
       }
@@ -133,15 +138,16 @@ export async function initTradables(container) {
 
     const appIds = tradablesList
       .filter(item => item.appId)
-      .map(item => item.appId);
+      .map(item => ({ id: item.appId, type: item.type ?? 'app' }));
 
     if (appIds.length === 0) return;
 
     try {
-      const cached = await msg('GET_CACHED_PRICES', { appIds, regions: settings.regions });
+      const cached = await msg('GET_CACHED_PRICES', { items: appIds, regions: settings.regions });
       if (cached) {
         const region = getDisplayRegion(settings);
-        for (const appId of appIds) {
+        for (const item of appIds) {
+          const appId = item.id;
           if (cached[appId]?.[region]) {
             priceData[appId] = cached[appId][region];
           }
@@ -161,15 +167,16 @@ export async function initTradables(container) {
 
     const appIds = tradablesList
       .filter(item => item.appId)
-      .map(item => item.appId);
+      .map(item => ({ id: item.appId, type: item.type ?? 'app' }));
 
     if (appIds.length === 0) return;
 
     try {
-      const prices = await msg(refresh ? 'REFRESH_PRICES' : 'GET_PRICES', { appIds, regions: settings.regions });
+      const prices = await msg(refresh ? 'REFRESH_PRICES' : 'GET_PRICES', { items: appIds, regions: settings.regions });
       if (prices && !prices.error) {
         const region = getDisplayRegion(settings);
-        for (const appId of appIds) {
+        for (const item of appIds) {
+          const appId = item.id;
           if (prices[appId]?.[region]) {
             priceData[appId] = prices[appId][region];
           }
@@ -201,8 +208,8 @@ export async function initTradables(container) {
       
       // PHASE 4A: Check if acquisition price is set — use it for EST. VALUE
       if (item.acqPrice != null) {
-        total += Math.round(item.acqPrice * 100); // Convert to cents
-        count++;
+        total += Math.round(item.acqPrice * 100) * (item.qty ?? 1); // Convert to cents
+        count += item.qty ?? 1;
         continue;
       }
       
@@ -220,8 +227,8 @@ export async function initTradables(container) {
       }
 
       if (bestCurrent != null) {
-        total += bestCurrent;
-        count++;
+        total += bestCurrent * (item.qty ?? 1);
+        count += item.qty ?? 1;
       }
     }
 
@@ -350,9 +357,10 @@ export async function initTradables(container) {
           <div class="tradables-item" data-orig-index="${item._origIndex}" data-appid="${item.appId || ''}">
             <div class="tradables-item-main">
               <span class="tradables-name">${escapeHtml(item.name)}</span>
+              ${item.qty > 1 ? `<span class="tradables-qty">x${item.qty}</span>` : ''}
               <div class="tradables-item-meta">
                 ${item.appId
-                  ? `<span class="tradables-appid">#${item.appId}</span>`
+                  ? `<span class="tradables-appid">${item.type === 'bundle' ? 'Bundle' : item.type === 'sub' ? 'Sub' : 'App'} #${item.appId}</span>`
                   : `<span class="tradables-unresolved tradables-resolve-link" data-orig-index="${item._origIndex}" title="Click to search for this game">unresolved ↗</span>`
                 }
                 ${priceBadge}
@@ -407,13 +415,18 @@ export async function initTradables(container) {
     container.querySelector('#t-add-btn').addEventListener('click', (e) => {
       e.stopPropagation();
       if (modal) modal.destroy();
-      modal = createBulkImportModal(async (newTradables) => {
-        tradablesList = [...tradablesList, ...newTradables];
+      modal = createBulkImportModal(async ({ additions, increments }) => {
+        for (const inc of increments ?? []) {
+          if (tradablesList[inc.index]) {
+            tradablesList[inc.index].qty = Math.max(1, parseInt(tradablesList[inc.index].qty) || 1) + inc.amount;
+          }
+        }
+        tradablesList = [...tradablesList, ...(additions ?? [])];
         await save();
         await fetchPrices();
         render();
         updateStats();
-      });
+      }, { existingTradables: tradablesList });
     });
 
     // Undo button (Phase 4D: ensure undo bar renders outside the loop)
@@ -527,6 +540,7 @@ export async function initTradables(container) {
                 // Update the tradable with the new name and appId
                 item.name = r.name;
                 item.appId = String(r.id);
+                item.type = r.type ?? 'app';
                 await save();
                 popover.remove();
                 await fetchPrices();

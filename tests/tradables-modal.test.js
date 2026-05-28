@@ -4,7 +4,9 @@ import {
   filterVisible,
   getEntriesToAdd,
   getAddCount,
-  toggleAllVisible
+  toggleAllVisible,
+  findDuplicateTradables,
+  prepareTradablesToAdd
 } from '../popup/tradables-bulk-modal.js';
 
 describe('categorizeResults', () => {
@@ -118,5 +120,37 @@ describe('toggleAllVisible', () => {
     const result = toggleAllVisible(entries, false);
     expect(result[0].checked).toBe(false);
     expect(result[1].checked).toBe(false);
+  });
+});
+
+describe('duplicate tradables', () => {
+  it('detects duplicates by app id', () => {
+    const duplicates = findDuplicateTradables(
+      [{ matchedName: 'Hollow Knight', appId: '367520' }],
+      [{ name: 'Hollow Knight', appId: '367520', qty: 1 }]
+    );
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].index).toBe(0);
+  });
+
+  it('falls back to normalized title for unresolved duplicates', () => {
+    const duplicates = findDuplicateTradables(
+      [{ raw: 'Warhammer 40,000' }],
+      [{ name: 'Warhammer 40000', appId: null, qty: 1 }]
+    );
+    expect(duplicates).toHaveLength(1);
+  });
+
+  it('prepares increments instead of duplicate additions', () => {
+    const prepared = prepareTradablesToAdd(
+      [
+        { matchedName: 'Hollow Knight', appId: '367520' },
+        { matchedName: 'Celeste', appId: '504230' },
+      ],
+      [{ name: 'Hollow Knight', appId: '367520', qty: 1 }],
+      'increment'
+    );
+    expect(prepared.increments).toEqual([{ index: 0, amount: 1, name: 'Hollow Knight' }]);
+    expect(prepared.additions).toEqual([{ name: 'Celeste', appId: '504230', type: 'app', qty: 1 }]);
   });
 });
