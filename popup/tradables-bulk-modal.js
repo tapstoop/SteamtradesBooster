@@ -82,19 +82,35 @@ export function getEntriesToAdd(entries, activeFilters) {
   return filterVisible(entries, activeFilters).filter(e => e.checked && e.visible);
 }
 
+function normalizeTradableType(type) {
+  return String(type ?? 'app').trim().toLowerCase() || 'app';
+}
+
+function tradableKeys(item) {
+  const keys = [];
+  if (item.appId) {
+    keys.push(`${normalizeTradableType(item.type)}:${item.appId}`);
+  }
+  const title = normalizeTitle(item.name ?? item.matchedName ?? item.raw ?? '');
+  if (title) keys.push(`title:${title}`);
+  return keys;
+}
+
 function tradableKey(item) {
-  return item.appId ? `app:${item.appId}` : `title:${normalizeTitle(item.name ?? item.matchedName ?? item.raw ?? '')}`;
+  return tradableKeys(item)[0] ?? 'title:';
 }
 
 export function findDuplicateTradables(entries, existingTradables) {
   const existingMap = new Map();
   (existingTradables ?? []).forEach((item, index) => {
-    existingMap.set(tradableKey(item), { item, index });
+    for (const key of tradableKeys(item)) {
+      if (!existingMap.has(key)) existingMap.set(key, { item, index });
+    }
   });
   return entries
     .map(entry => {
-      const key = tradableKey({ appId: entry.appId, name: entry.matchedName || entry.raw });
-      const duplicate = existingMap.get(key);
+      const keys = tradableKeys({ appId: entry.appId, type: entry.type, name: entry.matchedName || entry.raw });
+      const duplicate = keys.map(key => existingMap.get(key)).find(Boolean);
       return duplicate ? { entry, existing: duplicate.item, index: duplicate.index } : null;
     })
     .filter(Boolean);
@@ -102,9 +118,9 @@ export function findDuplicateTradables(entries, existingTradables) {
 
 export function prepareTradablesToAdd(entries, existingTradables, duplicateAction = 'skip') {
   const duplicates = findDuplicateTradables(entries, existingTradables);
-  const duplicateKeys = new Set(duplicates.map(d => tradableKey(d.existing)));
+  const duplicateKeys = new Set(duplicates.flatMap(d => tradableKeys(d.entry)));
   const additions = entries
-    .filter(entry => !duplicateKeys.has(tradableKey({ appId: entry.appId, name: entry.matchedName || entry.raw })))
+    .filter(entry => !tradableKeys({ appId: entry.appId, type: entry.type, name: entry.matchedName || entry.raw }).some(key => duplicateKeys.has(key)))
     .map(e => ({
       name: e.matchedName || e.raw,
       appId: e.appId,

@@ -28,9 +28,10 @@ function normalizePriceType(type) {
 
 function readPriceRegion(prices, id, type = 'app', region) {
   if (!prices || !id) return null;
-  const typed = prices[`${normalizePriceType(type)}:${id}`]?.[region];
+  const normalizedType = normalizePriceType(type);
+  const typed = prices[`${normalizedType}:${id}`]?.[region];
   if (typed) return typed;
-  return prices[id]?.[region] ?? null;
+  return normalizedType === 'app' ? prices[id]?.[region] ?? null : null;
 }
 
 function rangeLabel(ratio, settings) {
@@ -119,7 +120,7 @@ export async function initTradablesDetailed(container) {
     }
 
     // Acquisition price P/L
-    const { price: acqPrice } = await msg('GET_ACQ_PRICE', { appId });
+    const { price: acqPrice } = await msg('GET_ACQ_PRICE', { appId, itemType: type });
     let acqHtml = '';
     if (acqPrice != null) {
       const diff = currentRetail - acqPrice;

@@ -1,5 +1,5 @@
 // background/service-worker.js
-import { getPrices, getCachedPrices, getBundles, getRateLimitState, getPriceCacheKeys, getPriceResult } from './ggdeals.js';
+import { getPrices, getCachedPrices, getBundles, getRateLimitState, getPriceResult } from './ggdeals.js';
 import { resolveTitle, confirmResolution } from './resolver.js';
 import { fetchProfile, getCachedProfile } from './profile.js';
 import { cacheGet, cacheSet, cacheClear, setDismissed, setUndismissed, isDismissed, setDelisted, setUndelisted } from './cache.js';
@@ -177,17 +177,57 @@ async function buildDiagnosticLog() {
 }
 
 function normalizePriceMessageItems(msg) {
-  if (Array.isArray(msg.items)) {
-    return msg.items.map(item => ({
+  const items = Array.isArray(msg.items)
+    ? msg.items.map(item => ({
       id: String(item.id ?? item.appId),
       type: ['app', 'bundle', 'sub'].includes(item.type) ? item.type : 'app',
-    })).filter(item => item.id && item.id !== 'undefined');
-  }
-  return (msg.appIds ?? []).map(id => ({ id: String(id), type: 'app' })).filter(item => item.id && item.id !== 'undefined');
+    }))
+    : (msg.appIds ?? []).map(id => ({ id: String(id), type: 'app' }));
+
+  const seen = new Set();
+  return items.filter(item => {
+    if (!item.id || item.id === 'undefined') return false;
+    const key = `${item.type}:${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function priceMessageTargets(msg) {
   return normalizePriceMessageItems(msg).map(item => ({ id: String(item.id ?? item.appId), type: item.type ?? 'app' }));
+}
+
+function normalizeSteamEntityType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+function acquisitionItem(msg) {
+  return {
+    id: String(msg.itemId ?? msg.id ?? msg.appId),
+    type: normalizeSteamEntityType(msg.itemType ?? msg.entityType ?? msg.steamType ?? 'app'),
+  };
+}
+
+function acquisitionKey(id, type = 'app') {
+  return `acq:${normalizeSteamEntityType(type)}:${String(id)}`;
+}
+
+function legacyAcquisitionKey(id) {
+  return `acq:${String(id)}`;
+}
+
+function priceUpdatedMessage(target, region, priceData) {
+  const itemType = normalizeSteamEntityType(target.type);
+  const message = {
+    type: 'PRICE_UPDATED',
+    itemId: target.id,
+    itemType,
+    region,
+    priceData,
+  };
+  if (itemType === 'app') message.appId = target.id;
+  return message;
 }
 
 // --- Alarm: Daily Snapshot ---
@@ -213,6 +253,7 @@ chrome.alarms.onAlarm.addListener(async alarm => {
   const prices = await getPrices(settings.apiKey, appIds, settings.regions);
   for (const region of settings.regions) {
     for (const item of appIds) {
+      if ((item.type ?? 'app') !== 'app') continue;
       const appId = item.id;
       const data = getPriceResult(prices, appId, item.type)?.[region];
       if (!data) continue;
@@ -345,11 +386,7 @@ async function handleMessage(msg) {
               chrome.tabs.query({}, tabs => {
                 tabs.forEach(tab => {
                   chrome.tabs.sendMessage(tab.id, {
-                    type: 'PRICE_UPDATED',
-                    appId: target.id,
-                    itemType: target.type,
-                    region,
-                    priceData: typedRegionData[region],
+                    ...priceUpdatedMessage(target, region, typedRegionData[region]),
                   }).catch(() => {});
                 });
               });
@@ -384,14 +421,21 @@ async function handleMessage(msg) {
     }
 
     case 'SAVE_ACQ_PRICE': {
-      // msg.appId, msg.price (number)
-      await cacheSet(`acq:${msg.appId}`, msg.price, 0);
+      const item = acquisitionItem(msg);
+      await cacheSet(acquisitionKey(item.id, item.type), msg.price, 0);
+      if (item.type === 'app') {
+        await cacheSet(legacyAcquisitionKey(item.id), msg.price, 0);
+      }
       return { ok: true };
     }
 
     case 'GET_ACQ_PRICE': {
-      const cached = await cacheGet(`acq:${msg.appId}`);
-      return { price: cached?.value ?? null };
+      const item = acquisitionItem(msg);
+      const cached = await cacheGet(acquisitionKey(item.id, item.type));
+      if (cached) return { price: cached.value ?? null };
+      if (item.type !== 'app') return { price: null };
+      const legacy = await cacheGet(legacyAcquisitionKey(item.id));
+      return { price: legacy?.value ?? null };
     }
 
     case 'SCRAPE_GGDEALS': {
@@ -470,10 +514,7 @@ async function handleMessage(msg) {
       const items = normalizePriceMessageItems(msg);
       const targets = priceMessageTargets(msg);
       if (items.length === 0) return {};
-      // Remove only price keys for these appIds (targeted, not cacheClear)
-      const keysToDelete = getPriceCacheKeys(items, regions);
-      await chrome.storage.local.remove(keysToDelete);
-      const prices = await getPrices(settings.apiKey, items, regions);
+      const prices = await getPrices(settings.apiKey, items, regions, { forceRefresh: true });
       // Broadcast PRICE_UPDATED for each app (same as GET_PRICES)
       if (prices) {
         const region = getDisplayRegion({ ...settings, regions });
@@ -484,11 +525,7 @@ async function handleMessage(msg) {
               chrome.tabs.query({}, tabs => {
                 tabs.forEach(tab => {
                   chrome.tabs.sendMessage(tab.id, {
-                    type: 'PRICE_UPDATED',
-                    appId: target.id,
-                    itemType: target.type,
-                    region,
-                    priceData: typedRegionData[region],
+                    ...priceUpdatedMessage(target, region, typedRegionData[region]),
                   }).catch(() => {});
                 });
               });

@@ -127,10 +127,27 @@ describe('toggleAllVisible', () => {
 describe('duplicate tradables', () => {
   it('detects duplicates by app id', () => {
     const duplicates = findDuplicateTradables(
-      [{ matchedName: 'Hollow Knight', appId: '367520' }],
-      [{ name: 'Hollow Knight', appId: '367520', qty: 1 }]
+      [{ matchedName: 'Hollow Knight', appId: '367520', type: 'app' }],
+      [{ name: 'Hollow Knight', appId: '367520', type: 'app', qty: 1 }]
     );
     expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].index).toBe(0);
+  });
+
+  it('keeps app, bundle, and sub duplicate keys distinct for the same numeric id', () => {
+    const duplicates = findDuplicateTradables(
+      [
+        { matchedName: 'App Item', appId: '123', type: 'app' },
+        { matchedName: 'Bundle Item', appId: '123', type: 'bundle' },
+        { matchedName: 'Sub Item', appId: '123', type: 'sub' },
+      ],
+      [
+        { name: 'Existing Bundle', appId: '123', type: 'bundle', qty: 1 },
+      ]
+    );
+
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].entry.type).toBe('bundle');
     expect(duplicates[0].index).toBe(0);
   });
 
@@ -142,17 +159,59 @@ describe('duplicate tradables', () => {
     expect(duplicates).toHaveLength(1);
   });
 
+  it('detects resolved imports that match unresolved existing tradables by title', () => {
+    const duplicates = findDuplicateTradables(
+      [{ raw: 'Hollow Knight', matchedName: 'Hollow Knight', appId: '367520', type: 'app' }],
+      [{ name: 'Hollow Knight', appId: null, qty: 1 }]
+    );
+
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].index).toBe(0);
+  });
+
   it('prepares increments instead of duplicate additions', () => {
     const prepared = prepareTradablesToAdd(
       [
-        { matchedName: 'Hollow Knight', appId: '367520' },
-        { matchedName: 'Celeste', appId: '504230' },
+        { matchedName: 'Hollow Knight', appId: '367520', type: 'app' },
+        { matchedName: 'Celeste', appId: '504230', type: 'app' },
       ],
-      [{ name: 'Hollow Knight', appId: '367520', qty: 1 }],
+      [{ name: 'Hollow Knight', appId: '367520', type: 'app', qty: 1 }],
       'increment'
     );
     expect(prepared.increments).toEqual([{ index: 0, amount: 1, name: 'Hollow Knight' }]);
     expect(prepared.additions).toEqual([{ name: 'Celeste', appId: '504230', type: 'app', qty: 1 }]);
+  });
+
+  it('skips resolved imports that duplicate unresolved existing tradables by title', () => {
+    const prepared = prepareTradablesToAdd(
+      [
+        { raw: 'Hollow Knight', matchedName: 'Hollow Knight', appId: '367520', type: 'app' },
+        { matchedName: 'Celeste', appId: '504230', type: 'app' },
+      ],
+      [{ name: 'Hollow Knight', appId: null, qty: 1 }],
+      'skip'
+    );
+
+    expect(prepared.duplicates).toHaveLength(1);
+    expect(prepared.additions).toEqual([{ name: 'Celeste', appId: '504230', type: 'app', qty: 1 }]);
+  });
+
+  it('prepares app, bundle, and sub additions independently when ids collide', () => {
+    const prepared = prepareTradablesToAdd(
+      [
+        { matchedName: 'App Item', appId: '123', type: 'app' },
+        { matchedName: 'Bundle Item', appId: '123', type: 'bundle' },
+        { matchedName: 'Sub Item', appId: '123', type: 'sub' },
+      ],
+      [{ name: 'Existing Bundle', appId: '123', type: 'bundle', qty: 1 }],
+      'skip'
+    );
+
+    expect(prepared.duplicates).toHaveLength(1);
+    expect(prepared.additions).toEqual([
+      { name: 'App Item', appId: '123', type: 'app', qty: 1 },
+      { name: 'Sub Item', appId: '123', type: 'sub', qty: 1 },
+    ]);
   });
 });
 

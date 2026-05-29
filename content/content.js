@@ -210,7 +210,7 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
   // Fetch acquisition prices for tier 2 tradables
   const tier2withPrice = rowData.filter(r => r.appId && r.tier === 2);
   for (const row of tier2withPrice) {
-    const { price } = await sendMessage('GET_ACQ_PRICE', { appId: row.appId });
+    const { price } = await sendMessage('GET_ACQ_PRICE', { appId: row.appId, itemType: row.type });
     if (price != null) row.acqPrice = price;
   }
 
@@ -452,8 +452,8 @@ async function fetchAndRender(rows, settings) {
   // Fetch acquisition prices for tradables
   const acqPrices = {};
   for (const row of rows.filter(r => r.tier === 2)) {
-    const { price } = await sendMessage('GET_ACQ_PRICE', { appId: row.appId });
-    acqPrices[row.appId] = price;
+    const { price } = await sendMessage('GET_ACQ_PRICE', { appId: row.appId, itemType: row.type });
+    acqPrices[typedPriceKey(row.appId, row.type)] = price;
   }
 
   rows.forEach(row => {
@@ -464,7 +464,7 @@ async function fetchAndRender(rows, settings) {
       ...row,
       settings,
       cacheKey: row.cacheKey,
-      acqPrice: acqPrices[row.appId] ?? null,
+      acqPrice: acqPrices[typedPriceKey(row.appId, row.type)] ?? null,
     };
     replaceBadge(row.el, priceData ?? null, gameInfo);
     updateSidebarRow(row.el.dataset.stptId, gameInfo);
@@ -712,10 +712,11 @@ chrome.runtime.onMessage.addListener((message) => {
 
   // Listen for PRICE_UPDATED — dynamically update badges when prices refresh from any source
   if (message.type === 'PRICE_UPDATED') {
-    const { appId, itemType, region, priceData } = message;
-    const normalizedType = normalizeSteamType(itemType ?? 'app');
-    const row = rowData.find(r => r.appId === appId && normalizeSteamType(r.type) === normalizedType)
-      ?? rowData.find(r => r.appId === appId);
+    const { itemId, appId, itemType, priceData } = message;
+    const id = String(itemId ?? appId ?? '');
+    const row = itemType
+      ? rowData.find(r => String(r.appId) === id && normalizeSteamType(r.type) === normalizeSteamType(itemType))
+      : rowData.find(r => String(r.appId) === id);
     if (!row || !priceData) return;
     const settings = currentSettings ?? row.settings;
     const gameInfo = { ...row, settings };
@@ -745,9 +746,10 @@ function typedPriceKey(appId, type = 'app') {
 
 function readPriceRegion(prices, appId, type = 'app', region) {
   if (!prices || !appId) return null;
-  const typed = prices[typedPriceKey(appId, type)]?.[region];
+  const normalizedType = normalizeSteamType(type);
+  const typed = prices[typedPriceKey(appId, normalizedType)]?.[region];
   if (typed) return typed;
-  return prices[String(appId)]?.[region] ?? null;
+  return normalizedType === 'app' ? prices[String(appId)]?.[region] ?? null : null;
 }
 
 function setWorkstationPrice(priceMap, appId, type, priceData, settings) {
@@ -756,7 +758,7 @@ function setWorkstationPrice(priceMap, appId, type, priceData, settings) {
   const key = typedPriceKey(appId, type);
   const payload = { price, currency: priceData.prices?.currency ?? 'EUR' };
   priceMap[key] = payload;
-  if (!priceMap[String(appId)] || normalizeSteamType(type) === 'app') {
+  if (normalizeSteamType(type) === 'app') {
     priceMap[String(appId)] = payload;
   }
 }

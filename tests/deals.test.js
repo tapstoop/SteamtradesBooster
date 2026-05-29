@@ -20,6 +20,8 @@ const {
   getCardRefreshTimestamp,
   getStaleAppIds,
   getDealsCacheIdentity,
+  normalizeGgDealsUrl,
+  renderGgDealsLink,
 } = await import('../popup/deals.js');
 
 describe('formatRefreshDate', () => {
@@ -94,6 +96,17 @@ describe('getStaleAppIds', () => {
     expect(getStaleAppIds(['bundle:232', 'app:10', 'app:999'], prices, ['eu'], 7 * day, now))
       .toEqual(['app:999']);
   });
+
+  it('does not use raw app prices as fallback for bundle/sub typed keys', () => {
+    const now = Date.UTC(2026, 4, 12);
+    const prices = {
+      232: { eu: { cachedAt: now } },
+      500: { eu: { cachedAt: now } },
+    };
+
+    expect(getStaleAppIds(['bundle:232', 'sub:500'], prices, ['eu'], 7 * 24 * 60 * 60 * 1000, now))
+      .toEqual(['bundle:232', 'sub:500']);
+  });
 });
 
 describe('getDealsCacheIdentity', () => {
@@ -103,5 +116,33 @@ describe('getDealsCacheIdentity', () => {
 
   it('returns steam:none when steamId is missing', () => {
     expect(getDealsCacheIdentity({})).toBe('steam:none');
+  });
+});
+
+describe('normalizeGgDealsUrl', () => {
+  it('accepts HTTPS gg.deals URLs and subdomains', () => {
+    expect(normalizeGgDealsUrl('https://gg.deals/game/hollow-knight/')).toBe('https://gg.deals/game/hollow-knight/');
+    expect(normalizeGgDealsUrl('https://store.gg.deals/us/game/hollow-knight/')).toBe('https://store.gg.deals/us/game/hollow-knight/');
+  });
+
+  it('rejects non-HTTPS, non-GG.deals, and credentialed URLs', () => {
+    expect(normalizeGgDealsUrl('http://gg.deals/game/hollow-knight/')).toBeNull();
+    expect(normalizeGgDealsUrl('https://gg.deals.evil.test/game/hollow-knight/')).toBeNull();
+    expect(normalizeGgDealsUrl('javascript:alert(1)')).toBeNull();
+    expect(normalizeGgDealsUrl('https://user@gg.deals/game/hollow-knight/')).toBeNull();
+  });
+});
+
+describe('renderGgDealsLink', () => {
+  it('renders safe GG.deals links with noopener noreferrer', () => {
+    const html = renderGgDealsLink('https://gg.deals/game/hollow-knight/?q=a%22b');
+
+    expect(html).toContain('href="https://gg.deals/game/hollow-knight/?q=a%22b"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain('target="_blank"');
+  });
+
+  it('does not render invalid GG.deals links', () => {
+    expect(renderGgDealsLink('https://evil.test/game/hollow-knight/')).toBe('');
   });
 });

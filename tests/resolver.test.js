@@ -137,6 +137,58 @@ describe('resolveTitle', () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps earlier ambiguous candidates when a later fallback search fails', async () => {
+    fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          items: [{ id: 999001, name: 'Random Edition Game', type: 'app' }]
+        })
+      })
+      .mockRejectedValueOnce(new Error('network down'));
+
+    const result = await resolveTitle('Hollow Knight - Deluxe Edition');
+    expect(result).toMatchObject({
+      status: 'ambiguous',
+      candidates: [{ id: '999001', name: 'Random Edition Game', type: 'app' }],
+    });
+  });
+
+  it('tries fallback search terms when a single primary result is unconfident', async () => {
+    fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          items: [{ id: 999001, name: 'Random Edition Game', type: 'app' }]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          items: [{ id: 367520, name: 'Hollow Knight', type: 'app' }]
+        })
+      });
+
+    const result = await resolveTitle('Hollow Knight - Deluxe Edition');
+    expect(result).toMatchObject({ appId: '367520', status: 'resolved', type: 'app' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns a single unconfident result as ambiguous after fallbacks are exhausted', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [{ id: 999001, name: 'Random Edition Game', type: 'app' }]
+      })
+    });
+
+    const result = await resolveTitle('Hollow Knight');
+    expect(result).toMatchObject({
+      status: 'ambiguous',
+      candidates: [{ id: '999001', name: 'Random Edition Game', type: 'app' }],
+    });
+  });
+
   it('returns not-found when Steam returns empty', async () => {
     fetch.mockResolvedValue({
       ok: true,

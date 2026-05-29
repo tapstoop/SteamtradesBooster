@@ -5,6 +5,24 @@ import { normalizeTitle } from './resolver.js';
 const WISHLIST_TTL = 1800;
 const APP_DETAILS_TTL = 86400 * 7;
 
+function normalizeSteamType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+function resolutionValue(item) {
+  return { appId: String(item.appId), type: normalizeSteamType(item.type) };
+}
+
+function hasTypedResolution(value) {
+  return Boolean(value && typeof value === 'object' && (value.appId || value.id) && value.type);
+}
+
+function wouldDowngradeResolution(existingValue, nextType) {
+  return hasTypedResolution(existingValue)
+    && normalizeSteamType(existingValue.type) !== 'app'
+    && nextType === 'app';
+}
+
 export function extractSteamId(input) {
   if (!input) return null;
   const trimmed = input.trim();
@@ -79,11 +97,27 @@ export async function fetchProfile(steamIdInput, tradables) {
   if (Array.isArray(tradables)) {
     for (const item of tradables) {
       if (item?.appId && item?.name) {
-        await cacheSet(`resolve:${normalizeTitle(item.name)}`, String(item.appId), 0);
+        try {
+          await cacheTradableResolution(item);
+        } catch (err) {
+          console.warn('[profile] Failed to cache tradable resolution:', err?.message ?? err);
+        }
       }
     }
   }
   return { wishlist, tradables: parseTradables(tradables) };
+}
+
+async function cacheTradableResolution(item) {
+  const key = `resolve:${normalizeTitle(item.name)}`;
+  const confirmed = await cacheGet(`${key}:confirmed`);
+  if (confirmed?.value) return;
+
+  const value = resolutionValue(item);
+  const cached = await cacheGet(key);
+  if (wouldDowngradeResolution(cached?.value, value.type)) return;
+
+  await cacheSet(key, value, 0);
 }
 
 async function fetchWishlist(steamId) {

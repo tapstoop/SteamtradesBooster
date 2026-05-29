@@ -17,9 +17,11 @@ function normalizeGgDealsUrl(rawUrl) {
   if (!rawUrl) return null;
   try {
     const parsed = new URL(rawUrl, location.href);
-    const isHttp = parsed.protocol === 'https:' || parsed.protocol === 'http:';
     const isGgDeals = parsed.hostname === 'gg.deals' || parsed.hostname.endsWith('.gg.deals');
-    return (isHttp && isGgDeals) ? parsed.toString() : null;
+    if (parsed.protocol !== 'https:' || !isGgDeals || parsed.username || parsed.password) {
+      return null;
+    }
+    return parsed.toString();
   } catch {
     return null;
   }
@@ -27,9 +29,10 @@ function normalizeGgDealsUrl(rawUrl) {
 
 function readTypedPrice(prices, id, type = 'app', region) {
   if (!prices || !id) return null;
-  const typed = prices[`${type}:${id}`]?.[region];
+  const normalizedType = ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+  const typed = prices[`${normalizedType}:${id}`]?.[region];
   if (typed) return typed;
-  return prices[id]?.[region] ?? null;
+  return normalizedType === 'app' ? prices[id]?.[region] ?? null : null;
 }
 
 export function buildPopoverRefreshRequest(gameInfo, settings) {
@@ -345,7 +348,11 @@ export function openPopover(anchorEl, priceData, gameInfo) {
     saveBtn.addEventListener('click', async () => {
       const val = parseFloat(acqSection.querySelector('.stpt-acq-input').value);
       if (!isNaN(val)) {
-        await sendMessage('SAVE_ACQ_PRICE', { appId: gameInfo.appId, price: Math.round(val * 100) });
+        await sendMessage('SAVE_ACQ_PRICE', {
+          appId: gameInfo.appId,
+          itemType: gameInfo.type ?? gameInfo.resolution?.type ?? 'app',
+          price: Math.round(val * 100),
+        });
         pop.remove();
       }
     });

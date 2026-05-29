@@ -105,23 +105,25 @@ function typedPriceKey(id, type = 'app') {
 
 function getPriceRegionData(prices, item, region) {
   if (!prices || !item?.id) return null;
-  const typedRegion = prices[typedPriceKey(item.id, item.type)]?.[region];
+  const type = normalizePriceType(item.type);
+  const typedRegion = prices[typedPriceKey(item.id, type)]?.[region];
   if (typedRegion) return typedRegion;
-  return prices[item.id]?.[region] ?? null;
+  return type === 'app' ? prices[item.id]?.[region] ?? null : null;
 }
 
 function setPriceEntry(store, item, data) {
   const id = String(item.id);
   const type = normalizePriceType(item.type);
   store[typedPriceKey(id, type)] = data;
-  if (!store[id] || type === 'app') store[id] = data;
+  if (type === 'app') store[id] = data;
 }
 
 function readPriceEntry(store, item) {
   if (!store || !item?.appId) return null;
-  const typed = store[typedPriceKey(item.appId, item.type ?? 'app')];
+  const type = normalizePriceType(item.type ?? 'app');
+  const typed = store[typedPriceKey(item.appId, type)];
   if (typed) return typed;
-  return store[item.appId] ?? null;
+  return type === 'app' ? store[item.appId] ?? null : null;
 }
 
 export async function initTradables(container) {
@@ -719,10 +721,11 @@ export async function initTradables(container) {
 
   // Listen for PRICE_UPDATED broadcasts (Phase 6B)
   const priceUpdatedListener = (message) => {
-    if (message.type === 'PRICE_UPDATED' && message.appId && message.priceData) {
+    const id = message.itemId ?? message.appId;
+    if (message.type === 'PRICE_UPDATED' && id && message.priceData) {
       if ((message.region || settings.regions?.[0]) && message.priceData) {
         const itemType = normalizePriceType(message.itemType ?? 'app');
-        setPriceEntry(priceData, { id: message.appId, type: itemType }, message.priceData);
+        setPriceEntry(priceData, { id, type: itemType }, message.priceData);
         render();
         updateStats();
       }

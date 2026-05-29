@@ -113,18 +113,15 @@ export async function resolveTitle(title) {
   let bestAmbiguousScore = 0;
   let sawItems = false;
 
-  try {
-    for (const term of getSearchTerms(title)) {
-      const items = await fetchSteamItems(term);
-      if (items.length === 0) continue;
+  for (const term of getSearchTerms(title)) {
+    let items;
+    try {
+      items = await fetchSteamItems(term);
+    } catch {
+      continue;
+    }
+    if (items.length === 0) continue;
       sawItems = true;
-
-      // Single result
-      if (items.length === 1) {
-        const value = resolutionValue(items[0].id, items[0].type);
-        await cacheSet(key, value, RESOLVE_TTL);
-        return { ...value, status: 'resolved', cacheKey: key };
-      }
 
       // Exact match for this search term
       const normalizedTerm = normalizeTitle(term);
@@ -165,9 +162,6 @@ export async function resolveTitle(title) {
       } else if (!bestAmbiguous) {
         bestAmbiguous = items;
       }
-    }
-  } catch {
-    return { status: 'not-found', cacheKey: key };
   }
 
   if (!sawItems) return { status: 'not-found', cacheKey: key };

@@ -30,6 +30,30 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+export function normalizeGgDealsUrl(url) {
+  if (!url) return null;
+  let parsed;
+  try {
+    parsed = new URL(String(url));
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const isGgDealsHost = host === 'gg.deals' || host.endsWith('.gg.deals');
+  if (parsed.protocol !== 'https:' || !isGgDealsHost || parsed.username || parsed.password) {
+    return null;
+  }
+
+  return parsed.href;
+}
+
+export function renderGgDealsLink(url) {
+  const safeUrl = normalizeGgDealsUrl(url);
+  if (!safeUrl) return '';
+  return `· <a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" style="color:#66c0f4;">GG.deals ↗</a>`;
+}
+
 function errorLogLink() {
   return ' <a class="error-log-inline" href="popup.html?tab=settings&focus=error-log">See error logs</a>';
 }
@@ -74,8 +98,8 @@ export function getStaleAppIds(appIds, prices, regions, maxAgeMs, now = Date.now
   const priceFor = (id) => {
     if (prices?.[id]) return prices[id];
     if (id.includes(':')) {
-      const rawId = id.split(':')[1];
-      return prices?.[rawId] ?? null;
+      const [type, rawId] = id.split(':');
+      return type === 'app' ? prices?.[rawId] ?? null : null;
     }
     return null;
   };
@@ -131,9 +155,15 @@ export function getDealsCacheIdentity(settings = {}) {
 
 function typedPriceResult(prices, id, type = 'app') {
   if (!prices || !id) return null;
-  const typed = prices[`${type}:${id}`];
+  const normalizedType = ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+  const typed = prices[`${normalizedType}:${id}`];
   if (typed) return typed;
-  return prices[id] ?? null;
+  return normalizedType === 'app' ? prices[id] ?? null : null;
+}
+
+function steamStoreUrl(id, type = 'app') {
+  const normalizedType = ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+  return `https://store.steampowered.com/${normalizedType}/${encodeURIComponent(id)}`;
 }
 
 /**
@@ -523,7 +553,7 @@ function renderGameList(body, cards, settings, sortMode) {
   });
 
   body.innerHTML = `<div class="game-list">${cards.map(c => {
-    const steamUrl = c.appId ? `https://store.steampowered.com/app/${c.appId}` : null;
+    const steamUrl = c.appId ? steamStoreUrl(c.appId, c.type ?? 'app') : null;
     const refreshDate = formatRefreshDate(getCardRefreshTimestamp(c, settings));
     const titleSuffix = refreshDate ? ` <span class="game-card-refresh">- Last refresh ${refreshDate}</span>` : '';
 
@@ -541,7 +571,7 @@ function renderGameList(body, cards, settings, sortMode) {
         <div class="game-card-meta">
           <span class="highlight">${formatPrice(c.bestCurrent, c.currency)}</span>
           · ${atlDisplay}${pctDisplay}
-          ${c.url ? `· <a href="${c.url}" target="_blank" style="color:#66c0f4;">GG.deals ↗</a>` : ''}
+          ${renderGgDealsLink(c.url)}
         </div>
       </div>`;
     }
@@ -558,7 +588,7 @@ function renderGameList(body, cards, settings, sortMode) {
           <span style="color:#666;font-size:10px;text-transform:uppercase;margin-left:2px">(${c.usedRegion?.toUpperCase() ?? ''})</span>
           · ${atlLabel}: <span class="atl">${formatPrice(c.bestAtl, c.currency)}</span>
           ${c.pctAboveAtl != null ? `· <span>${Math.round(c.pctAboveAtl)}% above</span>` : ''}
-          ${c.url ? `· <a href="${c.url}" target="_blank" style="color:#66c0f4;">GG.deals ↗</a>` : ''}
+          ${renderGgDealsLink(c.url)}
         </div>
       </div>`;
     }
