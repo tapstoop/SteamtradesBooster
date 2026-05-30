@@ -147,10 +147,21 @@ async function setRefreshOptions(options) {
 }
 
 let dealsState = null;
+let dealsLoadSequence = 0;
 
 export function getDealsCacheIdentity(settings = {}) {
   const steamId = String(settings?.steamId ?? '').trim().toLowerCase();
   return steamId ? `steam:${steamId}` : 'steam:none';
+}
+
+export function mergePriceResponse(prices, livePrices) {
+  if (!livePrices) return { prices, error: null };
+  const merged = prices ?? {};
+  for (const [key, value] of Object.entries(livePrices)) {
+    if (key === 'error') continue;
+    if (value) merged[key] = value;
+  }
+  return { prices: merged, error: livePrices.error ?? null };
 }
 
 function typedPriceResult(prices, id, type = 'app') {
@@ -214,11 +225,16 @@ function applySettingsToCards(cards, settings) {
 // Listen for SETTINGS_UPDATED — recompute display fields from stored multi-region data, then re-render
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type !== 'SETTINGS_UPDATED') return;
+  dealsLoadSequence++;
+  const container = document.querySelector('#tab-deals');
+  if (!dealsState) {
+    if (container) loadDeals(container).catch(() => {});
+    return;
+  }
   if (dealsState) {
     const nextIdentity = getDealsCacheIdentity(message.settings);
     if (nextIdentity !== dealsState.cacheIdentity) {
       dealsState = null;
-      const container = document.querySelector('#tab-deals');
       if (container) loadDeals(container).catch(() => {});
       return;
     }
@@ -327,6 +343,13 @@ async function loadDeals(container, options = {}) {
 }
 
 async function loadDealsInternal(container, { manualRefresh = false } = {}) {
+  const loadSequence = ++dealsLoadSequence;
+  const isCurrentLoad = (identity = null) => {
+    if (loadSequence !== dealsLoadSequence) return false;
+    if (!identity) return true;
+    const activeIdentity = dealsState?.cacheIdentity;
+    return !activeIdentity || activeIdentity === identity;
+  };
   const summary = container.querySelector('#deals-summary');
   const freeSection = container.querySelector('#deals-free-section');
   const body = container.querySelector('#deals-body');
@@ -339,6 +362,7 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
 
   const settings = await msg('GET_SETTINGS');
   const cacheIdentity = getDealsCacheIdentity(settings);
+  if (!isCurrentLoad()) return;
   if (!settings.steamId) {
     dealsState = null;
     body.innerHTML = `<div class="error-state">No Steam ID set. Add your profile URL in Settings.${errorLogLink()}</div>`;
@@ -351,9 +375,11 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
     profile = await msg('GET_CACHED_PROFILE');
     if (!profile.wishlist?.length) profile = await msg('GET_PROFILE');
   } catch (err) {
+    if (!isCurrentLoad(cacheIdentity)) return;
     body.innerHTML = `<div class="error-state">Failed to load wishlist: ${escapeHtml(err.message)}${errorLogLink()}</div>`;
     return;
   }
+  if (!isCurrentLoad(cacheIdentity)) return;
 
   if (!profile.wishlist?.length) {
     body.innerHTML = `<div class="error-state">No wishlist games found. Make sure your Steam wishlist is set to <strong>Public</strong>.${errorLogLink()}</div>`;
@@ -368,6 +394,7 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
   const resolutions = allCached
     ? profile.wishlist.map(t => cachedRes[t])
     : await msg('RESOLVE_TITLES', { titles: profile.wishlist });
+  if (!isCurrentLoad(cacheIdentity)) return;
 
   // Build cards with multi-region price storage
   const cards = profile.wishlist.map((title, i) => ({
@@ -418,18 +445,12 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
       try {
         const itemsToFetch = priceItems.filter(item => itemKeysToFetch.includes(itemKey(item)));
         const livePrices = await msg(manualRefresh ? 'REFRESH_PRICES' : 'GET_PRICES', { items: itemsToFetch, regions });
-        if (livePrices?.error) { priceError = livePrices.error; }
-        else if (livePrices) {
-          // Merge live prices into cache results
-          prices = prices ?? {};
-          for (const key of Object.keys(livePrices)) {
-            if (livePrices[key]) {
-              prices[key] = livePrices[key];
-            }
-          }
-        }
+        const merged = mergePriceResponse(prices, livePrices);
+        prices = merged.prices;
+        if (merged.error) priceError = merged.error;
       } catch (err) { priceError = err.message; }
     }
+    if (!isCurrentLoad(cacheIdentity)) return;
 
     // Store ALL regions per card (multi-region switching support)
     if (prices) {
@@ -457,6 +478,7 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
       freeGamesCount++;
       if (card.appId && !card.scrapedAtl) {
         const scraped = await msg('GET_SCRAPED_DATA', { gameId: card.appId });
+        if (!isCurrentLoad(cacheIdentity)) return;
         if (scraped?.data?.secondBest) {
           const sb = settings.keyshopsEnabled
             ? scraped.data.secondBest.keyshops
@@ -482,7 +504,9 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
     url: c.url,
     ggdealsUrl: c.ggdealsUrl,
   }));
+  if (!isCurrentLoad(cacheIdentity)) return;
   await new Promise(resolve => chrome.storage.local.set({ [DEALS_CACHE_KEY]: { cards: cardsToStore, savedAt: Date.now(), cacheIdentity } }, resolve));
+  if (!isCurrentLoad(cacheIdentity)) return;
 
   const withPrices = cards.filter(c => c.bestCurrent != null).length;
   dealsState = { cards, settings, sortMode, withPrices, freeGamesCount, priceError, savedAt: Date.now(), cacheIdentity };

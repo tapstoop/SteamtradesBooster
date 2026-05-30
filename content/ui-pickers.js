@@ -35,6 +35,19 @@ function readTypedPrice(prices, id, type = 'app', region) {
   return normalizedType === 'app' ? prices[id]?.[region] ?? null : null;
 }
 
+function normalizeSteamType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+export function anchorStillMatches(anchorEl, gameInfo, itemType) {
+  if (!document.body.contains(anchorEl)) return false;
+  const expectedType = normalizeSteamType(itemType);
+  return (
+    String(anchorEl.dataset.appid ?? '') === String(gameInfo.appId ?? '') &&
+    normalizeSteamType(anchorEl.dataset.itemType ?? gameInfo.type ?? 'app') === expectedType
+  );
+}
+
 export function buildPopoverRefreshRequest(gameInfo, settings) {
   const itemType = gameInfo.type ?? gameInfo.resolution?.type ?? 'app';
   return {
@@ -376,7 +389,7 @@ export function openPopover(anchorEl, priceData, gameInfo) {
         const prices = await sendMessage(refreshRequest.type, refreshRequest.payload);
         const freshPrice = readTypedPrice(prices, gameInfo.appId, refreshRequest.itemType, getDisplayRegion(s));
         const gameItem = anchorEl.closest('.stpt-game-item') ?? anchorEl.parentElement?.closest('.stpt-game-item');
-        if (gameItem) {
+        if (gameItem && anchorStillMatches(anchorEl, gameInfo, refreshRequest.itemType)) {
           gameItem.querySelectorAll('.stpt-skeleton, .stpt-badge').forEach(e => e.remove());
           replaceBadge(gameItem, freshPrice, { ...gameInfo, settings: s });
         }

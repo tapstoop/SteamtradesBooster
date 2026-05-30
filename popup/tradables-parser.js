@@ -63,14 +63,34 @@ function isThousandsComma(line, commaIndex, token) {
 }
 
 /**
- * Classify a parsed entry as either an App ID (pure numeric) or a game name.
+ * Classify a parsed entry as a typed Steam entity, App ID, or game name.
  */
 export function classifyEntry(entry) {
   const trimmed = entry.trim();
+  const steamUrl = parseSteamStoreUrl(trimmed);
+  if (steamUrl) {
+    return { type: 'typedId', value: steamUrl.id, itemType: steamUrl.type, raw: trimmed };
+  }
   if (/^\d+$/.test(trimmed)) {
     return { type: 'appId', value: trimmed };
   }
   return { type: 'name', value: trimmed };
+}
+
+function parseSteamStoreUrl(entry) {
+  let url;
+  try {
+    url = new URL(entry);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host !== 'store.steampowered.com' && host !== 'steampowered.com' && !host.endsWith('.steampowered.com')) {
+    return null;
+  }
+  const match = url.pathname.match(/^\/(app|bundle|sub)\/(\d+)(?:\/|$)/);
+  if (!match) return null;
+  return { type: match[1], id: match[2] };
 }
 
 /**

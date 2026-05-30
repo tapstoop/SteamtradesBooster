@@ -714,14 +714,16 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'PRICE_UPDATED') {
     const { itemId, appId, itemType, priceData } = message;
     const id = String(itemId ?? appId ?? '');
-    const row = itemType
-      ? rowData.find(r => String(r.appId) === id && normalizeSteamType(r.type) === normalizeSteamType(itemType))
-      : rowData.find(r => String(r.appId) === id);
-    if (!row || !priceData) return;
-    const settings = currentSettings ?? row.settings;
-    const gameInfo = { ...row, settings };
-    replaceBadge(row.el, priceData, gameInfo);
-    updateSidebarRow(row.el.dataset.stptId, gameInfo);
+    const rows = itemType
+      ? rowData.filter(r => String(r.appId) === id && normalizeSteamType(r.type) === normalizeSteamType(itemType))
+      : rowData.filter(r => String(r.appId) === id);
+    if (rows.length === 0 || !priceData) return;
+    for (const row of rows) {
+      const settings = currentSettings ?? row.settings;
+      const gameInfo = { ...row, settings };
+      replaceBadge(row.el, priceData, gameInfo);
+      updateSidebarRow(row.el.dataset.stptId, gameInfo);
+    }
   }
 });
 

@@ -7,6 +7,7 @@ import {
   toggleAllVisible,
   findDuplicateTradables,
   prepareTradablesToAdd,
+  dedupeTradableEntries,
   buildPreviewItemHtml
 } from '../popup/tradables-bulk-modal.js';
 
@@ -125,6 +126,24 @@ describe('toggleAllVisible', () => {
 });
 
 describe('duplicate tradables', () => {
+  it('dedupes same-batch typed entries before preparing additions', () => {
+    const entries = [
+      { matchedName: 'Hollow Knight', appId: '367520', type: 'app' },
+      { matchedName: 'Hollow Knight duplicate', appId: '367520', type: 'app' },
+      { matchedName: 'Hollow Knight Bundle', appId: '367520', type: 'bundle' },
+    ];
+
+    expect(dedupeTradableEntries(entries)).toEqual([
+      entries[0],
+      entries[2],
+    ]);
+
+    expect(prepareTradablesToAdd(entries, [], 'skip').additions).toEqual([
+      { name: 'Hollow Knight', appId: '367520', type: 'app', qty: 1 },
+      { name: 'Hollow Knight Bundle', appId: '367520', type: 'bundle', qty: 1 },
+    ]);
+  });
+
   it('detects duplicates by app id', () => {
     const duplicates = findDuplicateTradables(
       [{ matchedName: 'Hollow Knight', appId: '367520', type: 'app' }],

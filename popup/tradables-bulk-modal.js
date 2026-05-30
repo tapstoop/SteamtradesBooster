@@ -100,6 +100,18 @@ function tradableKey(item) {
   return tradableKeys(item)[0] ?? 'title:';
 }
 
+export function dedupeTradableEntries(entries) {
+  const seen = new Set();
+  const deduped = [];
+  for (const entry of entries) {
+    const key = tradableKey({ appId: entry.appId, type: entry.type, name: entry.matchedName || entry.raw });
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(entry);
+  }
+  return deduped;
+}
+
 export function findDuplicateTradables(entries, existingTradables) {
   const existingMap = new Map();
   (existingTradables ?? []).forEach((item, index) => {
@@ -117,9 +129,10 @@ export function findDuplicateTradables(entries, existingTradables) {
 }
 
 export function prepareTradablesToAdd(entries, existingTradables, duplicateAction = 'skip') {
-  const duplicates = findDuplicateTradables(entries, existingTradables);
+  const uniqueEntries = dedupeTradableEntries(entries);
+  const duplicates = findDuplicateTradables(uniqueEntries, existingTradables);
   const duplicateKeys = new Set(duplicates.flatMap(d => tradableKeys(d.entry)));
-  const additions = entries
+  const additions = uniqueEntries
     .filter(entry => !tradableKeys({ appId: entry.appId, type: entry.type, name: entry.matchedName || entry.raw }).some(key => duplicateKeys.has(key)))
     .map(e => ({
       name: e.matchedName || e.raw,
@@ -139,27 +152,55 @@ export function prepareTradablesToAdd(entries, existingTradables, duplicateActio
  */
 export async function resolveEntries(entries) {
   const appIdEntries = entries.filter(e => e.type === 'appId');
+  const typedIdEntries = entries.filter(e => e.type === 'typedId');
   const nameEntries = entries.filter(e => e.type === 'name');
 
-  const [appIdResults, nameResults] = await Promise.all([
+  const [appIdResults, typedIdResults, nameResults] = await Promise.all([
     resolveAppIds(appIdEntries),
+    resolveTypedIds(typedIdEntries),
     resolveNames(nameEntries)
   ]);
 
   // Merge back in original order
   const results = [];
   let appIdx = 0;
+  let typedIdx = 0;
   let nameIdx = 0;
 
   for (const entry of entries) {
     if (entry.type === 'appId') {
       results.push(appIdResults[appIdx++]);
+    } else if (entry.type === 'typedId') {
+      results.push(typedIdResults[typedIdx++]);
     } else {
       results.push(nameResults[nameIdx++]);
     }
   }
 
   return results;
+}
+
+async function resolveTypedIds(entries) {
+  if (entries.length === 0) return [];
+
+  const appEntries = entries.filter(e => e.itemType === 'app');
+  const appResults = await resolveAppIds(appEntries);
+  let appIdx = 0;
+
+  return entries.map(entry => {
+    if (entry.itemType === 'app') {
+      const resolved = appResults[appIdx++] ?? {};
+      return { ...resolved, raw: entry.raw ?? entry.value, type: 'app' };
+    }
+    const label = entry.itemType === 'bundle' ? 'Bundle' : 'Sub';
+    return {
+      raw: entry.raw ?? entry.value,
+      status: 'appid-resolved',
+      appId: entry.value,
+      type: entry.itemType,
+      matchedName: `Steam ${label} ${entry.value}`,
+    };
+  });
 }
 
 async function resolveAppIds(entries) {
@@ -295,6 +336,7 @@ export function createBulkImportModal(onAdd, options = {}) {
   const duplicateWarning = overlay.querySelector('#duplicate-warning');
 
   let resolvedEntries = [];
+  let submitting = false;
   // PHASE 4F: All 5 categories active by default
   let activeFilters = new Set(['exact', 'appid', 'fuzzy-auto', 'fuzzy-manual', 'notfound']);
 
@@ -341,7 +383,12 @@ export function createBulkImportModal(onAdd, options = {}) {
 
     previewSummary.textContent = `${addCount} of ${resolvedEntries.length} games ready to add`;
     addCountSpan.textContent = addCount;
-    addBtn.disabled = addCount === 0;
+    addBtn.disabled = submitting || addCount === 0;
+  }
+
+  function setSubmitControlsDisabled(disabled) {
+    addBtn.disabled = disabled;
+    duplicateWarning.querySelectorAll('button').forEach(btn => { btn.disabled = disabled; });
   }
 
   // Event handlers
@@ -381,6 +428,7 @@ export function createBulkImportModal(onAdd, options = {}) {
   });
 
   async function submitAdd(duplicateAction = null) {
+    if (submitting) return;
     const toAdd = getEntriesToAdd(resolvedEntries, activeFilters);
     const prepared = prepareTradablesToAdd(toAdd, options.existingTradables ?? [], duplicateAction ?? 'skip');
     if (prepared.duplicates.length > 0 && duplicateAction == null) {
@@ -397,12 +445,14 @@ export function createBulkImportModal(onAdd, options = {}) {
       duplicateWarning.querySelector('#dup-skip').addEventListener('click', () => submitAdd('skip'));
       return;
     }
-    addBtn.disabled = true;
+    submitting = true;
+    setSubmitControlsDisabled(true);
     try {
       await onAdd(prepared);
       destroy();
     } finally {
-      addBtn.disabled = false;
+      submitting = false;
+      setSubmitControlsDisabled(false);
     }
   }
 

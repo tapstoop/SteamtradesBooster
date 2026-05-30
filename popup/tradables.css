@@ -63,6 +63,16 @@
   border: 1px solid #2a3f5f;
 }
 
+.tradables-warning {
+  background: #2a2214;
+  border: 1px solid #5a4a1a;
+  border-radius: 4px;
+  color: #f1c40f;
+  font-size: 10px;
+  margin-bottom: 10px;
+  padding: 6px 8px;
+}
+
 .stat-block {
   display: flex;
   flex-direction: column;

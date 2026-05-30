@@ -66,6 +66,27 @@ describe('classifyEntry', () => {
     expect(classifyEntry('236850')).toEqual({ type: 'appId', value: '236850' });
   });
 
+  it('classifies Steam store app, bundle, and sub URLs as typed ids', () => {
+    expect(classifyEntry('https://store.steampowered.com/app/367520/Hollow_Knight/')).toEqual({
+      type: 'typedId',
+      value: '367520',
+      itemType: 'app',
+      raw: 'https://store.steampowered.com/app/367520/Hollow_Knight/',
+    });
+    expect(classifyEntry('https://store.steampowered.com/bundle/232/Valve_Complete_Pack/')).toEqual({
+      type: 'typedId',
+      value: '232',
+      itemType: 'bundle',
+      raw: 'https://store.steampowered.com/bundle/232/Valve_Complete_Pack/',
+    });
+    expect(classifyEntry('https://store.steampowered.com/sub/500/')).toEqual({
+      type: 'typedId',
+      value: '500',
+      itemType: 'sub',
+      raw: 'https://store.steampowered.com/sub/500/',
+    });
+  });
+
   it('classifies text as name', () => {
     expect(classifyEntry('Hollow Knight')).toEqual({ type: 'name', value: 'Hollow Knight' });
   });

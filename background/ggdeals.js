@@ -197,11 +197,39 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
   const toFetch = {};
   const subAppMap = {}; // Map Sub ID -> contained App IDs
   const subFailedIds = new Set();
+  const subIncompleteIds = new Set();
+  const subFallbackIds = new Set();
+  const subFallbackCache = new Map();
+  const subFallbackWarning = 'Steam package could not be fully refreshed; showing cached price data';
+
+  async function captureSubFallback(subId) {
+    if (!forceRefresh || subFallbackCache.has(subId)) return;
+    const cachedRegions = new Map();
+    for (const region of regions) {
+      const cachedSub = await cacheGet(typedPriceKey(subId, 'sub', region));
+      if (cachedSub) cachedRegions.set(region, cachedSub);
+    }
+    subFallbackCache.set(subId, cachedRegions);
+  }
+
+  function writeSubFallback(subId, region) {
+    const cachedSub = subFallbackCache.get(subId)?.get(region);
+    if (!cachedSub) return false;
+    writePriceResult(results, subId, 'sub', region, {
+      ...cachedSub.value,
+      cachedAt: cachedSub.cachedAt,
+      refreshFallback: true,
+      refreshWarning: subFallbackWarning,
+    });
+    subFallbackIds.add(subId);
+    return true;
+  }
 
   // First, check for Sub IDs and resolve them to their contained apps
   for (const item of items) {
     if (item.type !== 'sub') continue;
     const id = item.id;
+    await captureSubFallback(id);
     let allRegionsCached = !forceRefresh && regions.length > 0;
     if (allRegionsCached) {
       for (const region of regions) {
@@ -232,6 +260,11 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
       }
     } else {
       subFailedIds.add(id);
+      if (forceRefresh) {
+        for (const region of regions) {
+          writeSubFallback(id, region);
+        }
+      }
     }
   }
 
@@ -291,9 +324,6 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
       writePriceResult(results, id, type, region, { ...priceData, cachedAt: Date.now() });
     }
   }
-  if (failedBatches.length > 0 && settledBatchResults.every(result => result.status === 'rejected')) {
-    throw failedBatches[0].reason;
-  }
   if (failedBatches.length > 0) {
     results.error = `${failedBatches.length} GG.deals price batch${failedBatches.length === 1 ? '' : 'es'} failed`;
   }
@@ -305,7 +335,7 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
         .map(appId => readPriceResult(results, appId, 'app')?.[region])
         .filter(Boolean);
 
-      if (containedPrices.length > 0) {
+      if (containedPrices.length === containedApps.length) {
         // Sum prices for the bundle (simple aggregation)
         const currency = containedPrices[0].prices?.currency ?? 'EUR';
         const sumPrice = (field) => {
@@ -336,12 +366,22 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
         } catch (err) {
           console.warn('[ggdeals] Failed to cache sub aggregate:', err?.message ?? err);
         }
+      } else if (forceRefresh) {
+        if (!writeSubFallback(subId, region)) subIncompleteIds.add(subId);
       }
     }
   }
 
+  if (subFallbackIds.size > 0) {
+    const warning = `${subFallbackIds.size} Steam package${subFallbackIds.size === 1 ? '' : 's'} could not be fully refreshed; showing cached price data`;
+    results.error = results.error ? `${results.error}\n${warning}` : warning;
+  }
+  if (failedBatches.length > 0 && settledBatchResults.every(result => result.status === 'rejected') && subFallbackIds.size === 0) {
+    throw failedBatches[0].reason;
+  }
+
   // Mark sub IDs that could not be expanded as missing (fail closed).
-  for (const subId of subFailedIds) {
+  for (const subId of new Set([...subFailedIds, ...subIncompleteIds])) {
     for (const region of regions) {
       if (!readPriceResult(results, subId, 'sub')?.[region]) {
         // Keep explicit empty object for typed key consumers.
@@ -414,4 +454,8 @@ export function getPriceCacheKeys(itemsOrIds, regions) {
 
 export function getPriceResult(prices, id, type = 'app') {
   return readPriceResult(prices, id, type);
+}
+
+export function isRefreshFallbackPrice(priceData) {
+  return Boolean(priceData?.refreshFallback);
 }

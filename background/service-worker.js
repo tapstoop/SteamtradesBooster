@@ -1,5 +1,5 @@
 // background/service-worker.js
-import { getPrices, getCachedPrices, getBundles, getRateLimitState, getPriceResult } from './ggdeals.js';
+import { getPrices, getCachedPrices, getBundles, getRateLimitState, getPriceResult, isRefreshFallbackPrice } from './ggdeals.js';
 import { resolveTitle, confirmResolution } from './resolver.js';
 import { fetchProfile, getCachedProfile } from './profile.js';
 import { cacheGet, cacheSet, cacheClear, setDismissed, setUndismissed, isDismissed, setDelisted, setUndelisted } from './cache.js';
@@ -521,6 +521,7 @@ async function handleMessage(msg) {
         for (const target of targets) {
           const typedRegionData = getPriceResult(prices, target.id, target.type);
           if (typedRegionData?.[region]) {
+            if (isRefreshFallbackPrice(typedRegionData[region])) continue;
             try {
               chrome.tabs.query({}, tabs => {
                 tabs.forEach(tab => {

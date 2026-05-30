@@ -126,16 +126,70 @@ function readPriceEntry(store, item) {
   return type === 'app' ? store[item.appId] ?? null : null;
 }
 
+const tradablesRuntimeState = {
+  settings: null,
+  priceData: null,
+  render: null,
+  updateStats: null,
+  onSettingsUpdated: null,
+};
+let tradablesRuntimeListenersRegistered = false;
+let tradablesInitSequence = 0;
+
+export function createTradablesInitGuard() {
+  const initId = ++tradablesInitSequence;
+  return () => initId === tradablesInitSequence;
+}
+
+function bindTradablesRuntimeState(nextState) {
+  Object.assign(tradablesRuntimeState, nextState);
+}
+
+export function bindTradablesRuntimeStateForInit(isCurrentInit, nextState) {
+  if (!isCurrentInit()) return false;
+  bindTradablesRuntimeState(nextState);
+  return true;
+}
+
+function ensureTradablesRuntimeListeners() {
+  if (tradablesRuntimeListenersRegistered) return;
+  tradablesRuntimeListenersRegistered = true;
+
+  chrome.runtime.onMessage.addListener((message) => {
+    const id = message.itemId ?? message.appId;
+    if (message.type !== 'PRICE_UPDATED' || !id || !message.priceData || !tradablesRuntimeState.priceData) return;
+    if (!(message.region || tradablesRuntimeState.settings?.regions?.[0])) return;
+    const itemType = normalizePriceType(message.itemType ?? 'app');
+    setPriceEntry(tradablesRuntimeState.priceData, { id, type: itemType }, message.priceData);
+    tradablesRuntimeState.render?.();
+    tradablesRuntimeState.updateStats?.();
+  });
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type !== 'SETTINGS_UPDATED' || !tradablesRuntimeState.settings) return;
+    Object.assign(tradablesRuntimeState.settings, message.settings);
+    tradablesRuntimeState.onSettingsUpdated?.();
+    tradablesRuntimeState.render?.();
+    tradablesRuntimeState.updateStats?.();
+  });
+}
+
 export async function initTradables(container) {
+  const isCurrentInit = createTradablesInitGuard();
+
   const settings = await msg('GET_SETTINGS');
+  if (!isCurrentInit()) return;
   // Get tradables from separate storage (not from settings)
-  let tradablesList = normalizeTradables(await msg('GET_TRADABLES'));
+  const rawTradables = await msg('GET_TRADABLES');
+  if (!isCurrentInit()) return;
+  let tradablesList = normalizeTradables(rawTradables);
 
   // Resolve any tradables that have appId: null so prices can be fetched
   const unresolved = tradablesList.filter(t => !t.appId && t.name);
   if (unresolved.length > 0 && settings.apiKey) {
     const titles = unresolved.map(t => t.name);
     const resolutions = await msg('RESOLVE_TITLES', { titles });
+    if (!isCurrentInit()) return;
     let changed = false;
     resolutions.forEach((res, i) => {
       if (res && (res.status === 'hit' || res.status === 'resolved') && res.appId) {
@@ -147,6 +201,7 @@ export async function initTradables(container) {
     });
     if (changed) {
       await msg('SAVE_TRADABLES', { tradables: tradablesList });
+      if (!isCurrentInit()) return;
     }
   }
   let searchQuery = '';
@@ -155,6 +210,7 @@ export async function initTradables(container) {
   let undoTimeout = null;
   let modal = null;
   let priceData = {}; // appId -> price info
+  let priceError = null;
   let undoRenderTimeout = null; // For debounced undo bar rendering
 
   // Currency from settings (default EUR)
@@ -175,6 +231,7 @@ export async function initTradables(container) {
 
     try {
       const cached = await msg('GET_CACHED_PRICES', { items: appIds, regions: settings.regions });
+      if (!isCurrentInit()) return;
       if (cached) {
         const region = getDisplayRegion(settings);
         for (const item of appIds) {
@@ -202,7 +259,10 @@ export async function initTradables(container) {
 
     try {
       const prices = await msg(refresh ? 'REFRESH_PRICES' : 'GET_PRICES', { items: appIds, regions: settings.regions });
-      if (prices && !prices.error) {
+      if (!isCurrentInit()) return;
+      priceError = prices?.error ?? null;
+      if (priceError) console.warn('Some tradables prices failed:', priceError);
+      if (prices) {
         const region = getDisplayRegion(settings);
         for (const item of appIds) {
           const data = getPriceRegionData(prices, item, region);
@@ -210,6 +270,8 @@ export async function initTradables(container) {
         }
       }
     } catch (err) {
+      if (!isCurrentInit()) return;
+      priceError = err.message;
       console.error('Failed to fetch prices:', err);
     }
   }
@@ -350,6 +412,7 @@ export async function initTradables(container) {
             <span class="stat-label">Priced</span>
           </div>
         </div>
+        ${priceError ? `<div class="tradables-warning">Price warning: ${escapeHtml(priceError.split('\n')[0])}</div>` : ''}
         <div class="tradables-list" id="t-list"></div>
         <div class="tradables-footer">
           <div id="t-snapshots-section" style="display:none; margin-top:8px;">
@@ -430,8 +493,10 @@ export async function initTradables(container) {
       btn.disabled = true;
       try {
         await fetchPrices({ refresh: true });
-        render();
-        updateStats();
+        if (isCurrentInit()) {
+          render();
+          updateStats();
+        }
       } catch (err) {
         console.error('Refresh failed:', err);
       }
@@ -719,39 +784,33 @@ export async function initTradables(container) {
     await msg('SAVE_TRADABLES', { tradables: tradablesList });
   }
 
-  // Listen for PRICE_UPDATED broadcasts (Phase 6B)
-  const priceUpdatedListener = (message) => {
-    const id = message.itemId ?? message.appId;
-    if (message.type === 'PRICE_UPDATED' && id && message.priceData) {
-      if ((message.region || settings.regions?.[0]) && message.priceData) {
-        const itemType = normalizePriceType(message.itemType ?? 'app');
-        setPriceEntry(priceData, { id, type: itemType }, message.priceData);
-        render();
-        updateStats();
-      }
-    }
-  };
-  chrome.runtime.onMessage.addListener(priceUpdatedListener);
-
-  // Listen for SETTINGS_UPDATED — update currency and re-render
-  const settingsUpdatedListener = (message) => {
-    if (message.type !== 'SETTINGS_UPDATED') return;
-    Object.assign(settings, message.settings);
-    currency = settings.currency || 'EUR';
-    currencySymbol = currency === 'USD' ? '$' : '€';
-    render();
-    updateStats();
-  };
-  chrome.runtime.onMessage.addListener(settingsUpdatedListener);
+  if (!bindTradablesRuntimeStateForInit(isCurrentInit, {
+    settings,
+    priceData,
+    render,
+    updateStats,
+    onSettingsUpdated: () => {
+      currency = settings.currency || 'EUR';
+      currencySymbol = currency === 'USD' ? '$' : '€';
+    },
+  })) return;
+  ensureTradablesRuntimeListeners();
 
   // Initial: load cached prices first (fast, no API call), render immediately
   await loadCachedPrices();
+  if (!isCurrentInit()) return;
   render();
   updateStats();
 
   // Then optionally refresh from API to get latest prices
-  fetchPrices().then(() => {
-    render();
-    updateStats();
-  }).catch(console.error);
+  (async () => {
+    try {
+      await fetchPrices();
+      if (!isCurrentInit()) return;
+      render();
+      updateStats();
+    } catch (err) {
+      console.error(err);
+    }
+  })();
 }

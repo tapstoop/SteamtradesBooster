@@ -14,7 +14,7 @@ global.chrome = {
 
 global.fetch = vi.fn();
 
-const { getPrices, getCachedPrices, getPriceCacheKeys, getPriceResult } = await import('../background/ggdeals.js');
+const { getPrices, getCachedPrices, getPriceCacheKeys, getPriceResult, isRefreshFallbackPrice } = await import('../background/ggdeals.js');
 
 function apiResponse(data, headers = {}) {
   return {
@@ -198,6 +198,128 @@ describe('gg.deals typed prices', () => {
     expect(getPriceResult(prices, '500', 'sub').eu.title).toBe('Cached Sub');
   });
 
+  it('falls back to cached sub aggregates when force refresh cannot expand packagedetails', async () => {
+    store['sub-price:500:eu'] = {
+      value: {
+        title: 'Cached Sub',
+        url: 'https://gg.deals/game/cached-sub/',
+        prices: { currentRetail: 300, currentKeyshops: null, historicalRetail: 150, historicalKeyshops: null, currency: 'EUR' },
+        isSub: true,
+        containedApps: ['10', '20'],
+      },
+      cachedAt: 222,
+    };
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ 500: { success: false } }),
+    });
+
+    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu'], { forceRefresh: true });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toContain('/api/packagedetails?packageids=500');
+    expect(getPriceResult(prices, '500', 'sub').eu.title).toBe('Cached Sub');
+    expect(getPriceResult(prices, '500', 'sub').eu.cachedAt).toBe(222);
+    expect(prices.error).toContain('could not be fully refreshed');
+    expect(store['sub-price:500:eu'].value.title).toBe('Cached Sub');
+  });
+
+  it('falls back to cached sub aggregates when contained app refresh fails', async () => {
+    store['sub-price:500:eu'] = {
+      value: {
+        title: 'Cached Complete Sub',
+        url: 'https://gg.deals/game/cached-sub/',
+        prices: { currentRetail: 300, currentKeyshops: null, historicalRetail: 150, historicalKeyshops: null, currency: 'EUR' },
+        isSub: true,
+        containedApps: ['10', '20'],
+      },
+      cachedAt: 222,
+    };
+    fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          500: { success: true, data: { apps: [{ id: 10 }, { id: 20 }] } },
+        }),
+      })
+      .mockRejectedValueOnce(new Error('contained app batch failed'));
+
+    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu'], { forceRefresh: true });
+    const subPrice = getPriceResult(prices, '500', 'sub').eu;
+
+    expect(subPrice.title).toBe('Cached Complete Sub');
+    expect(subPrice.refreshFallback).toBe(true);
+    expect(subPrice.refreshWarning).toContain('could not be fully refreshed');
+    expect(prices.error).toContain('could not be fully refreshed');
+    expect(store['sub-price:500:eu'].value.title).toBe('Cached Complete Sub');
+  });
+
+  it('does not overwrite cached sub aggregates with partial contained app prices', async () => {
+    store['sub-price:500:eu'] = {
+      value: {
+        title: 'Cached Complete Sub',
+        url: 'https://gg.deals/game/cached-sub/',
+        prices: { currentRetail: 300, currentKeyshops: null, historicalRetail: 150, historicalKeyshops: null, currency: 'EUR' },
+        isSub: true,
+        containedApps: ['10', '20'],
+      },
+      cachedAt: 222,
+    };
+    fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          500: { success: true, data: { apps: [{ id: 10 }, { id: 20 }] } },
+        }),
+      })
+      .mockResolvedValueOnce(apiResponse({
+        10: {
+          title: 'Game 10',
+          url: 'https://gg.deals/game/game-10/',
+          prices: { currentRetail: '1.00', currentKeyshops: null, historicalRetail: '0.50', historicalKeyshops: null, currency: 'EUR' },
+        },
+      }));
+
+    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu'], { forceRefresh: true });
+    const subPrice = getPriceResult(prices, '500', 'sub').eu;
+
+    expect(subPrice.title).toBe('Cached Complete Sub');
+    expect(subPrice.prices.currentRetail).toBe(300);
+    expect(subPrice.refreshFallback).toBe(true);
+    expect(store['sub-price:500:eu'].value.title).toBe('Cached Complete Sub');
+    expect(store['sub-price:500:eu'].value.prices.currentRetail).toBe(300);
+  });
+
+  it('fails closed for uncached subs when contained app refresh is partial', async () => {
+    fetch
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          500: { success: true, data: { apps: [{ id: 10 }, { id: 20 }] } },
+        }),
+      })
+      .mockResolvedValueOnce(apiResponse({
+        10: {
+          title: 'Game 10',
+          url: 'https://gg.deals/game/game-10/',
+          prices: { currentRetail: '1.00', currentKeyshops: null, historicalRetail: '0.50', historicalKeyshops: null, currency: 'EUR' },
+        },
+      }));
+
+    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu'], { forceRefresh: true });
+
+    expect(prices['sub:500']).toEqual({});
+    expect(store['sub-price:500:eu']).toBeFalsy();
+  });
+
   it('uses cached contained app prices when aggregating subs', async () => {
     store['price:10:eu'] = {
       value: {
@@ -284,5 +406,11 @@ describe('gg.deals typed prices', () => {
   it('returns typed refresh cache keys', () => {
     expect(getPriceCacheKeys([{ id: '10', type: 'app' }, { id: '232', type: 'bundle' }, { id: '500', type: 'sub' }], ['eu']))
       .toEqual(['price:10:eu', 'bundle-price:232:eu', 'sub-price:500:eu']);
+  });
+
+  it('identifies refresh fallback prices for broadcast suppression', () => {
+    expect(isRefreshFallbackPrice({ refreshFallback: true })).toBe(true);
+    expect(isRefreshFallbackPrice({ title: 'Fresh price' })).toBe(false);
+    expect(isRefreshFallbackPrice(null)).toBe(false);
   });
 });

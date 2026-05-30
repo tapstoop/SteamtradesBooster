@@ -20,6 +20,7 @@ const {
   getCardRefreshTimestamp,
   getStaleAppIds,
   getDealsCacheIdentity,
+  mergePriceResponse,
   normalizeGgDealsUrl,
   renderGgDealsLink,
 } = await import('../popup/deals.js');
@@ -116,6 +117,36 @@ describe('getDealsCacheIdentity', () => {
 
   it('returns steam:none when steamId is missing', () => {
     expect(getDealsCacheIdentity({})).toBe('steam:none');
+  });
+});
+
+describe('mergePriceResponse', () => {
+  it('merges successful price keys when a partial response includes an error', () => {
+    const cached = {
+      'app:9': { eu: { title: 'Cached Game' } },
+    };
+    const live = {
+      'app:10': { eu: { title: 'Live Game' } },
+      error: 'Some prices failed',
+    };
+
+    const result = mergePriceResponse(cached, live);
+
+    expect(result.prices['app:9'].eu.title).toBe('Cached Game');
+    expect(result.prices['app:10'].eu.title).toBe('Live Game');
+    expect(result.error).toBe('Some prices failed');
+  });
+
+  it('preserves existing prices when the response only contains an error', () => {
+    const cached = {
+      'app:9': { eu: { title: 'Cached Game' } },
+    };
+
+    const result = mergePriceResponse(cached, { error: 'All failed' });
+
+    expect(result.prices).toBe(cached);
+    expect(result.prices['app:9'].eu.title).toBe('Cached Game');
+    expect(result.error).toBe('All failed');
   });
 });
 

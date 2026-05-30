@@ -11,6 +11,15 @@ import {
   formatPrice
 } from './ui-components.js';
 
+function normalizeEntityType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+export function tradeEntityKey(game) {
+  if (!game?.appId) return `title:${String(game?.title ?? game?.name ?? '').toLowerCase()}`;
+  return `${normalizeEntityType(game.type)}:${String(game.appId)}`;
+}
+
 export class SidebarWorkstation {
   constructor(tradeSimulator) {
     this.sim = tradeSimulator;
@@ -281,8 +290,9 @@ export class SidebarWorkstation {
   }
 
   _isInTrade(game) {
-    return this.inTrade.mine.some(g => g.appId === game.appId) ||
-           this.inTrade.trader.some(g => g.appId === game.appId);
+    const key = tradeEntityKey(game);
+    return this.inTrade.mine.some(g => tradeEntityKey(g) === key) ||
+           this.inTrade.trader.some(g => tradeEntityKey(g) === key);
   }
 
   _addToMyGames(game) {
@@ -333,7 +343,8 @@ export class SidebarWorkstation {
         }
       }
     }
-    if (!this.inTrade.trader.some(g => g.appId === game.appId)) {
+    const key = tradeEntityKey(game);
+    if (!this.inTrade.trader.some(g => tradeEntityKey(g) === key)) {
       this.inTrade.trader.push(game);
       this._renderInTrade();
       this._updateSimStats();
@@ -341,8 +352,9 @@ export class SidebarWorkstation {
   }
 
   _removeFromTrade(game) {
-    this.inTrade.mine = this.inTrade.mine.filter(g => g.appId !== game.appId);
-    this.inTrade.trader = this.inTrade.trader.filter(g => g.appId !== game.appId);
+    const key = tradeEntityKey(game);
+    this.inTrade.mine = this.inTrade.mine.filter(g => tradeEntityKey(g) !== key);
+    this.inTrade.trader = this.inTrade.trader.filter(g => tradeEntityKey(g) !== key);
     this._renderInTrade();
     this._renderDataList();
     this._updateSimStats();
@@ -622,8 +634,9 @@ export class SidebarWorkstation {
     if (!priceMap) return;
     this.pageGames.forEach(game => {
       if (game.appId) {
-        const typedKey = `${game.type ?? 'app'}:${game.appId}`;
-        const data = priceMap[typedKey] ?? priceMap[game.appId];
+        const type = normalizeEntityType(game.type);
+        const typedKey = `${type}:${game.appId}`;
+        const data = priceMap[typedKey] ?? (type === 'app' ? priceMap[game.appId] : null);
         if (!data) return;
         game.price = data.price ?? null;
         game.currency = data.currency ?? 'EUR';
@@ -646,7 +659,7 @@ export class SidebarWorkstation {
   setTradableGames(games) {
     this.tradableGames = (games || []).map(g => {
       if (typeof g === 'string') return { name: g };
-      return { appId: g.appId, name: g.name ?? g.title };
+      return { appId: g.appId, type: g.type ?? 'app', name: g.name ?? g.title };
     });
     this._renderDataList();
     this._renderTradablesSection();
@@ -674,7 +687,8 @@ export class SidebarWorkstation {
   }
 
   removeTraderGame(game) {
-    this.inTrade.trader = this.inTrade.trader.filter(g => g.appId !== game.appId);
+    const key = tradeEntityKey(game);
+    this.inTrade.trader = this.inTrade.trader.filter(g => tradeEntityKey(g) !== key);
     this._renderInTrade();
     this._updateSimStats();
   }
