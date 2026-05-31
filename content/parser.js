@@ -113,7 +113,13 @@ function getAnchorTitle(root) {
   return preferred?.textContent?.trim() ?? '';
 }
 
-function addParsedRow(rows, seenTitles, el, section, title) {
+function extractSteamType(href) {
+  if (!href) return 'app';
+  const match = href.match(/store\.steampowered\.com\/(app|bundle|sub)\//i);
+  return match ? match[1].toLowerCase() : 'app';
+}
+
+function addParsedRow(rows, seenTitles, el, section, title, type = 'app') {
   const cleaned = cleanGameTitle(title);
   if (cleaned.length < 2 || isNotGame(cleaned)) return false;
 
@@ -125,7 +131,7 @@ function addParsedRow(rows, seenTitles, el, section, title) {
   el.dataset.stptSection = section;
   el.dataset.stptIndex = rows.length;
   el.dataset.stptTitle = cleaned;
-  rows.push({ title: cleaned, el });
+  rows.push({ title: cleaned, el, type });
   return true;
 }
 
@@ -253,6 +259,8 @@ export function parseGameRows() {
     if (el.tagName === 'TR') {
       const cells = Array.from(el.querySelectorAll('td, th'));
       if (cells.length === 0) return;
+      const anchorEl = el.querySelector('a[href*="store.steampowered.com"]');
+      const type = anchorEl ? extractSteamType(anchorEl.getAttribute('href')) : 'app';
       const anchorTitle = getAnchorTitle(el);
       const firstTextCell = cells.find(cell => {
         const text = cleanGameTitle(cell.textContent);
@@ -266,7 +274,7 @@ export function parseGameRows() {
       const span = document.createElement('span');
       while (target.firstChild) span.appendChild(target.firstChild);
       target.appendChild(span);
-      addParsedRow(rows, seenTitles, span, section, rawText);
+      addParsedRow(rows, seenTitles, span, section, rawText, type);
       return;
     }
 
