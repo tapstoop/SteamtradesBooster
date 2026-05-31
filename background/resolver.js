@@ -1,6 +1,6 @@
 // background/resolver.js
 import { cacheGet, cacheSet, isDismissed, isDelisted } from './cache.js';
-import { normalizeTitle, wordSimilarity } from '../utils/similarity.js';
+import { normalizeTitle, wordSimilarity, normalizeSteamType } from '../utils/similarity.js';
 
 // Re-export for backwards compatibility and tests
 export { normalizeTitle, wordSimilarity };
@@ -8,10 +8,6 @@ export { normalizeTitle, wordSimilarity };
 const STEAM_SEARCH = 'https://store.steampowered.com/api/storesearch/';
 const RESOLVE_TTL = 0; // permanent
 const SIMILARITY_THRESHOLD = 0.85; // 85% word overlap for fuzzy matching
-
-function normalizeSteamType(type) {
-  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
-}
 
 function resolutionValue(id, type = 'app') {
   return { appId: String(id), type: normalizeSteamType(type) };

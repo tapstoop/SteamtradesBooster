@@ -1,6 +1,6 @@
 // content/content.js
 import { parseGameRows, prioritize, injectCheckboxes, getSelectedTitles, stripParentheses } from './parser.js';
-import { fuzzySetMatch, getDisplayRegion } from '../utils/similarity.js';
+import { fuzzySetMatch, getDisplayRegion, normalizeSteamType, typedPriceKey } from '../utils/similarity.js';
 import { TradeSimulator } from './trade-logic.js';
 import {
   injectSkeleton, replaceBadge, injectQuestionBadge, injectFuzzyBadge, injectNotFoundBadge, injectDismissedBadge, injectDelistedBadge,
@@ -736,14 +736,6 @@ function _getBadgePrice(priceData, settings) {
   const match = priceText.match(/([\d,.]+)/);
   if (!match) return null;
   return parseFloat(match[1].replace(',', '.')) * 100;
-}
-
-function normalizeSteamType(type) {
-  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
-}
-
-function typedPriceKey(appId, type = 'app') {
-  return `${normalizeSteamType(type)}:${String(appId)}`;
 }
 
 function readPriceRegion(prices, appId, type = 'app', region) {

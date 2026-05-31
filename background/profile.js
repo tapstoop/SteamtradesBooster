@@ -1,13 +1,12 @@
 // background/profile.js
 import { cacheGet, cacheSet } from './cache.js';
 import { normalizeTitle } from './resolver.js';
+import { normalizeSteamType } from '../utils/similarity.js';
 
 const WISHLIST_TTL = 1800;
 const APP_DETAILS_TTL = 86400 * 7;
 
-function normalizeSteamType(type) {
-  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
-}
+
 
 function resolutionValue(item) {
   return { appId: String(item.appId), type: normalizeSteamType(item.type) };

@@ -3,7 +3,7 @@ import { getPrices, getCachedPrices, getBundles, getPriceResult, isRefreshFallba
 import { resolveTitle, confirmResolution } from './resolver.js';
 import { fetchProfile, getCachedProfile } from './profile.js';
 import { cacheGet, cacheSet, cacheClear, setDismissed, setUndismissed, isDismissed, setDelisted, setUndelisted } from './cache.js';
-import { getDisplayRegion } from '../utils/similarity.js';
+import { getDisplayRegion, normalizeSteamType } from '../utils/similarity.js';
 import { writeSnapshot, pruneOldSnapshots } from './snapshots.js';
 import { scrapeGame, scrapeBatch, handleScrapedResult, getScrapedData } from './ggdeals-scraper.js';
 import {
@@ -163,19 +163,16 @@ function priceMessageTargets(msg) {
   return normalizePriceMessageItems(msg).map(item => ({ id: String(item.id ?? item.appId), type: item.type ?? 'app' }));
 }
 
-function normalizeSteamEntityType(type) {
-  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
-}
 
 function acquisitionItem(msg) {
   return {
     id: String(msg.itemId ?? msg.id ?? msg.appId),
-    type: normalizeSteamEntityType(msg.itemType ?? msg.entityType ?? msg.steamType ?? 'app'),
+    type: normalizeSteamType(msg.itemType ?? msg.entityType ?? msg.steamType ?? 'app'),
   };
 }
 
 function acquisitionKey(id, type = 'app') {
-  return `acq:${normalizeSteamEntityType(type)}:${String(id)}`;
+  return `acq:${normalizeSteamType(type)}:${String(id)}`;
 }
 
 function legacyAcquisitionKey(id) {
@@ -183,7 +180,7 @@ function legacyAcquisitionKey(id) {
 }
 
 function priceUpdatedMessage(target, region, priceData) {
-  const itemType = normalizeSteamEntityType(target.type);
+  const itemType = normalizeSteamType(target.type);
   const message = {
     type: 'PRICE_UPDATED',
     itemId: target.id,

@@ -3,7 +3,7 @@
 
 import { sendMessage, formatPrice, formatTimestamp, formatFullTimestamp, closeAll, positionNear } from './ui-helpers.js';
 import { injectSkeleton, injectNotFoundBadge, injectDismissedBadge, injectDelistedBadge, replaceBadge } from './ui-badges.js';
-import { getDisplayRegion } from '../utils/similarity.js';
+import { getDisplayRegion, normalizeSteamType } from '../utils/similarity.js';
 
 function escapeHtml(str) {
   return String(str)
@@ -29,15 +29,13 @@ function normalizeGgDealsUrl(rawUrl) {
 
 function readTypedPrice(prices, id, type = 'app', region) {
   if (!prices || !id) return null;
-  const normalizedType = ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+  const normalizedType = normalizeSteamType(type);
   const typed = prices[`${normalizedType}:${id}`]?.[region];
   if (typed) return typed;
   return normalizedType === 'app' ? prices[id]?.[region] ?? null : null;
 }
 
-function normalizeSteamType(type) {
-  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
-}
+
 
 export function anchorStillMatches(anchorEl, gameInfo, itemType) {
   if (!document.body.contains(anchorEl)) return false;

@@ -65,3 +65,11 @@ export function getDisplayRegion(settings) {
   // EUR and others: prefer any non-us region
   return regions.find(r => r !== 'us') ?? regions[0];
 }
+
+export function normalizeSteamType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+export function typedPriceKey(id, type = 'app') {
+  return `${normalizeSteamType(type)}:${String(id)}`;
+}

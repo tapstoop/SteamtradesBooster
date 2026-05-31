@@ -10,14 +10,12 @@ import {
   createEmptyState,
   formatPrice
 } from './ui-components.js';
+import { normalizeSteamType } from '../utils/similarity.js';
 
-function normalizeEntityType(type) {
-  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
-}
 
 export function tradeEntityKey(game) {
   if (!game?.appId) return `title:${String(game?.title ?? game?.name ?? '').toLowerCase()}`;
-  return `${normalizeEntityType(game.type)}:${String(game.appId)}`;
+  return `${normalizeSteamType(game.type)}:${String(game.appId)}`;
 }
 
 export class SidebarWorkstation {
@@ -634,7 +632,7 @@ export class SidebarWorkstation {
     if (!priceMap) return;
     this.pageGames.forEach(game => {
       if (game.appId) {
-        const type = normalizeEntityType(game.type);
+        const type = normalizeSteamType(game.type);
         const typedKey = `${type}:${game.appId}`;
         const data = priceMap[typedKey] ?? (type === 'app' ? priceMap[game.appId] : null);
         if (!data) return;
