@@ -1,4 +1,4 @@
-import { parseInput, classifyEntry, computeConfidence } from './tradables-parser.js';
+import { parseInput, classifyEntry, computeConfidence, parseSteamStoreUrl } from './tradables-parser.js';
 import { normalizeTitle } from '../utils/similarity.js';
 
 const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
@@ -31,6 +31,11 @@ export function buildPreviewItemHtml(entry, idx, borderColor) {
   const safeName = escapeHtml(entry.matchedName || entry.raw);
   const safeAppId = escapeHtml(entry.appId ?? '');
 
+  const showResolve = entry.category !== 'exact' && entry.category !== 'appid';
+  const resolveBtn = showResolve
+    ? `<button class="preview-resolve-btn" data-ri="${idx}" title="Resolve this game">↗ resolve</button>`
+    : '';
+
   let bundleHint = '';
   const rawName = entry.raw || entry.matchedName || '';
   if (hasBundleKeywords(rawName)) {
@@ -46,37 +51,40 @@ export function buildPreviewItemHtml(entry, idx, borderColor) {
       <input type="checkbox" class="preview-checkbox" data-index="${idx}" ${entry.checked ? 'checked' : ''}>
       <span class="preview-name">${safeName}</span>
       ${entry.appId ? `<span class="preview-appid">#${safeAppId}</span>` : ''}
+      ${resolveBtn}
       ${bundleHint}
     </div>
   `;
 }
 
-export function categorizeResults(resolvedEntries) {
-  return resolvedEntries.map(entry => {
-    let category;
+export function categorizeSingle(entry) {
+  let category;
 
-    if (entry.status === 'hit' || entry.status === 'resolved') {
-      category = 'exact';
-    } else if (entry.status === 'appid-resolved') {
-      category = 'appid';
-    } else if (entry.status === 'ambiguous') {
-      if (entry.confidence >= 90) {
-        category = 'fuzzy-auto';
-      } else {
-        category = 'fuzzy-manual';
-      }
+  if (entry.status === 'hit' || entry.status === 'resolved') {
+    category = 'exact';
+  } else if (entry.status === 'appid-resolved') {
+    category = 'appid';
+  } else if (entry.status === 'ambiguous') {
+    if (entry.confidence >= 90) {
+      category = 'fuzzy-auto';
     } else {
-      category = 'notfound';
+      category = 'fuzzy-manual';
     }
+  } else {
+    category = 'notfound';
+  }
 
-    // PHASE 4F: All categories checked by default
-    return {
-      ...entry,
-      category,
-      checked: true,
-      visible: true
-    };
-  });
+  // PHASE 4F: All categories checked by default
+  return {
+    ...entry,
+    category,
+    checked: true,
+    visible: true
+  };
+}
+
+export function categorizeResults(resolvedEntries) {
+  return resolvedEntries.map(entry => categorizeSingle(entry));
 }
 
 export function filterVisible(entries, activeFilters) {
@@ -361,6 +369,11 @@ export function createBulkImportModal(onAdd, options = {}) {
   let submitting = false;
   // PHASE 4F: All 5 categories active by default
   let activeFilters = new Set(['exact', 'appid', 'fuzzy-auto', 'fuzzy-manual', 'notfound']);
+  let currentPopover = null;
+
+  function msg(type, data = {}) {
+    return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
+  }
 
   // Render filter checkboxes
   function renderFilters() {
@@ -403,9 +416,139 @@ export function createBulkImportModal(onAdd, options = {}) {
       });
     });
 
+    // Re-attach resolve button listeners
+    previewList.querySelectorAll('.preview-resolve-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.ri);
+        const entry = resolvedEntries[idx];
+        if (!entry) return;
+        showResolvePopover(btn, entry, idx);
+      });
+    });
+
     previewSummary.textContent = `${addCount} of ${resolvedEntries.length} games ready to add`;
     addCountSpan.textContent = addCount;
     addBtn.disabled = submitting || addCount === 0;
+  }
+
+  function showResolvePopover(anchor, entry, idx) {
+    // Close existing popover
+    if (currentPopover) {
+      currentPopover.remove();
+      currentPopover = null;
+    }
+
+    const popover = document.createElement('div');
+    popover.className = 'preview-resolve-popover';
+
+    const isBundle = entry.type === 'bundle';
+    const bundleGuidance = isBundle ? `
+      <div class="trp-bundle-guidance">
+        <div class="trp-bundle-warning">⚠️ Bundles cannot be searched by name.</div>
+        <div class="trp-bundle-help">Paste a Steam bundle URL to resolve:</div>
+        <code class="trp-bundle-url">https://store.steampowered.com/bundle/&lt;id&gt;/&lt;name&gt;/</code>
+        <a href="https://store.steampowered.com/search/?term=${encodeURIComponent(entry.raw || entry.matchedName || '')}" target="_blank" class="trp-bundle-search-link">Search on Steam ↗</a>
+      </div>
+    ` : '';
+
+    popover.innerHTML = `
+      <div class="trp-header">
+        Search for "${escapeHtml(entry.matchedName || entry.raw)}"
+      </div>
+      ${bundleGuidance}
+      <div class="trp-search-wrap">
+        <input type="text" class="tradables-resolve-search" placeholder="Search Steam or paste URL..." value="${escapeHtml(entry.raw || entry.matchedName || '')}">
+      </div>
+      <div class="tradables-resolve-results"></div>
+      <div class="trp-cancel">Cancel</div>
+    `;
+
+    anchor.parentNode.insertBefore(popover, anchor.nextSibling);
+    currentPopover = popover;
+
+    const searchInput = popover.querySelector('.tradables-resolve-search');
+    const resultsContainer = popover.querySelector('.tradables-resolve-results');
+
+    let searchTimeout = null;
+    const performSearch = async (query) => {
+      const steamUrl = parseSteamStoreUrl(query);
+      if (steamUrl) {
+        resultsContainer.innerHTML = '';
+        const resultItem = document.createElement('div');
+        resultItem.className = 'trp-result-item trp-url-result';
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = `Use ${steamUrl.type} ${steamUrl.id}`;
+        const metaSpan = document.createElement('span');
+        metaSpan.style.color = '#66c0f4';
+        metaSpan.style.fontSize = '9px';
+        metaSpan.textContent = steamUrl.type.charAt(0).toUpperCase() + steamUrl.type.slice(1);
+        resultItem.append(nameSpan, metaSpan);
+        resultItem.addEventListener('click', () => {
+          applyResolve(idx, steamUrl.id, steamUrl.type);
+        });
+        resultsContainer.appendChild(resultItem);
+        return;
+      }
+
+      resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">Searching...</div>';
+      try {
+        const results = await msg('SEARCH_STEAM', { query });
+        resultsContainer.innerHTML = '';
+        if (!results.items?.length) {
+          resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">No results</div>';
+          return;
+        }
+        results.items.forEach(r => {
+          const resultItem = document.createElement('div');
+          resultItem.className = 'trp-result-item';
+          const nameSpan = document.createElement('span');
+          nameSpan.textContent = r.name ?? `App ${r.id}`;
+          const metaSpan = document.createElement('span');
+          metaSpan.style.cssText = 'color:#555;font-size:9px';
+          const itemType = r.type === 'bundle' ? 'Bundle' : r.type === 'sub' ? 'Sub' : 'App';
+          metaSpan.textContent = `${itemType} ${r.id}`;
+          resultItem.append(nameSpan, metaSpan);
+          resultItem.addEventListener('click', () => {
+            applyResolve(idx, String(r.id), r.type ?? 'app', r.name);
+          });
+          resultsContainer.appendChild(resultItem);
+        });
+      } catch {
+        resultsContainer.innerHTML = '<div style="padding:5px;color:#f38ba8;font-size:10px;">Search failed</div>';
+      }
+    };
+
+    searchInput.addEventListener('input', (e2) => {
+      clearTimeout(searchTimeout);
+      const q = e2.target.value.trim();
+      if (q.length < 2) { resultsContainer.innerHTML = ''; return; }
+      searchTimeout = setTimeout(() => performSearch(q), 300);
+    });
+
+    if ((entry.raw || entry.matchedName || '').length >= 2) {
+      performSearch(entry.raw || entry.matchedName);
+    }
+
+    popover.querySelector('.trp-cancel').addEventListener('click', () => {
+      popover.remove();
+      currentPopover = null;
+    });
+  }
+
+  function applyResolve(idx, appId, type, name) {
+    const entry = resolvedEntries[idx];
+    if (!entry) return;
+    entry.appId = appId;
+    entry.type = type ?? 'app';
+    if (name) entry.matchedName = name;
+    entry.status = 'resolved';
+    resolvedEntries[idx] = categorizeSingle(entry);
+    if (currentPopover) {
+      currentPopover.remove();
+      currentPopover = null;
+    }
+    refreshPreview();
   }
 
   function setSubmitControlsDisabled(disabled) {

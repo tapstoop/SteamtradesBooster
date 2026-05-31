@@ -1,6 +1,6 @@
 // tests/tradables-parser.test.js
 import { describe, it, expect } from 'vitest';
-import { parseInput, classifyEntry, computeConfidence } from '../popup/tradables-parser.js';
+import { parseInput, classifyEntry, computeConfidence, parseSteamStoreUrl } from '../popup/tradables-parser.js';
 
 describe('parseInput', () => {
   it('splits by comma', () => {
@@ -97,6 +97,40 @@ describe('classifyEntry', () => {
 
   it('classifies empty string as name', () => {
     expect(classifyEntry('')).toEqual({ type: 'name', value: '' });
+  });
+});
+
+describe('parseSteamStoreUrl', () => {
+  it('extracts app id from Steam app URL', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/app/367520/Hollow_Knight/'))
+      .toEqual({ type: 'app', id: '367520' });
+  });
+
+  it('extracts bundle id from Steam bundle URL', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/bundle/16628/Asterix__Obelix_XXL_Collection/'))
+      .toEqual({ type: 'bundle', id: '16628' });
+  });
+
+  it('extracts sub id from Steam sub URL', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/sub/500/'))
+      .toEqual({ type: 'sub', id: '500' });
+  });
+
+  it('returns null for non-Steam URLs', () => {
+    expect(parseSteamStoreUrl('https://google.com')).toBeNull();
+  });
+
+  it('returns null for invalid URLs', () => {
+    expect(parseSteamStoreUrl('not a url')).toBeNull();
+  });
+
+  it('returns null for malformed Steam URLs', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/')).toBeNull();
+  });
+
+  it('handles URLs without trailing slash', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/app/367520'))
+      .toEqual({ type: 'app', id: '367520' });
   });
 });
 

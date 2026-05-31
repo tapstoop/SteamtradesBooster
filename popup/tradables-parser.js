@@ -77,7 +77,7 @@ export function classifyEntry(entry) {
   return { type: 'name', value: trimmed };
 }
 
-function parseSteamStoreUrl(entry) {
+export function parseSteamStoreUrl(entry) {
   let url;
   try {
     url = new URL(entry);

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   categorizeResults,
+  categorizeSingle,
   filterVisible,
   getEntriesToAdd,
   getAddCount,
@@ -234,6 +235,34 @@ describe('duplicate tradables', () => {
   });
 });
 
+describe('categorizeSingle', () => {
+  it('categorizes hit as exact', () => {
+    expect(categorizeSingle({ status: 'hit', appId: '367520' }).category).toBe('exact');
+  });
+
+  it('categorizes resolved as exact', () => {
+    expect(categorizeSingle({ status: 'resolved', appId: '367520' }).category).toBe('exact');
+  });
+
+  it('categorizes appid-resolved as appid', () => {
+    expect(categorizeSingle({ status: 'appid-resolved', appId: '236850' }).category).toBe('appid');
+  });
+
+  it('categorizes ambiguous >= 90 as fuzzy-auto', () => {
+    expect(categorizeSingle({ status: 'ambiguous', confidence: 95 }).category).toBe('fuzzy-auto');
+  });
+
+  it('categorizes ambiguous < 90 as fuzzy-manual', () => {
+    expect(categorizeSingle({ status: 'ambiguous', confidence: 75 }).category).toBe('fuzzy-manual');
+  });
+
+  it('all entries default to checked and visible', () => {
+    const result = categorizeSingle({ status: 'hit', appId: '367520' });
+    expect(result.checked).toBe(true);
+    expect(result.visible).toBe(true);
+  });
+});
+
 describe('buildPreviewItemHtml', () => {
   it('escapes dynamic content in preview entries', () => {
     const html = buildPreviewItemHtml({
@@ -311,5 +340,53 @@ describe('buildPreviewItemHtml', () => {
     }, 0, '#e74c3c');
 
     expect(html).toContain('preview-bundle-hint');
+  });
+
+  it('shows resolve button for fuzzy-manual entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Hollow Knight',
+      category: 'fuzzy-manual',
+      status: 'ambiguous',
+      checked: true,
+    }, 0, '#e67e22');
+
+    expect(html).toContain('preview-resolve-btn');
+    expect(html).toContain('resolve');
+  });
+
+  it('shows resolve button for notfound entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'asdfghjkl',
+      category: 'notfound',
+      status: 'not-found',
+      checked: true,
+    }, 0, '#e74c3c');
+
+    expect(html).toContain('preview-resolve-btn');
+  });
+
+  it('does not show resolve button for exact entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Hollow Knight',
+      matchedName: 'Hollow Knight',
+      category: 'exact',
+      status: 'hit',
+      appId: '367520',
+      checked: true,
+    }, 0, '#a1cd44');
+
+    expect(html).not.toContain('preview-resolve-btn');
+  });
+
+  it('does not show resolve button for appid entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: '236850',
+      category: 'appid',
+      status: 'appid-resolved',
+      appId: '236850',
+      checked: true,
+    }, 0, '#66c0f4');
+
+    expect(html).not.toContain('preview-resolve-btn');
   });
 });

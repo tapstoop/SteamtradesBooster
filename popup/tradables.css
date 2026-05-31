@@ -757,3 +757,30 @@
   background: #1a3a5e;
   border-color: #66c0f4;
 }
+
+/* ── Preview Resolve Popover (Bulk Import) ────────────────────────── */
+.preview-resolve-popover {
+  background: #0d1117;
+  border: 1px solid #3a3a5a;
+  border-radius: 4px;
+  margin: 4px 0 4px 20px;
+  font-size: 11px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+}
+
+.preview-resolve-btn {
+  background: none;
+  border: 1px solid #2a3f5f;
+  color: #66c0f4;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.preview-resolve-btn:hover {
+  background: #1a3a5e;
+  border-color: #66c0f4;
+}

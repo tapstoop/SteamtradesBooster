@@ -1,6 +1,7 @@
 // popup/tradables.js
 import { createBulkImportModal } from './tradables-bulk-modal.js';
 import { getDisplayRegion } from '../utils/similarity.js';
+import { parseSteamStoreUrl } from './tradables-parser.js';
 
 function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
@@ -669,26 +670,10 @@ export async function initTradables(container) {
         searchInput.addEventListener('click', e2 => e2.stopPropagation());
         popover.addEventListener('click', e2 => e2.stopPropagation());
 
-        // Parse Steam URL helper
-        const parseSteamUrl = (input) => {
-          try {
-            const url = new URL(input);
-            const host = url.hostname.toLowerCase();
-            if (host !== 'store.steampowered.com' && host !== 'steampowered.com' && !host.endsWith('.steampowered.com')) {
-              return null;
-            }
-            const match = url.pathname.match(/^\/(app|bundle|sub)\/(\d+)(?:\/|$)/);
-            if (!match) return null;
-            return { type: match[1], id: match[2] };
-          } catch {
-            return null;
-          }
-        };
-
         let searchTimeout = null;
         const performSearch = async (query) => {
           // Check if query is a Steam URL
-          const steamUrl = parseSteamUrl(query);
+          const steamUrl = parseSteamStoreUrl(query);
           if (steamUrl) {
             resultsContainer.innerHTML = '';
             const resultItem = document.createElement('div');
