@@ -141,7 +141,7 @@ async function buildDiagnosticLog() {
   });
 }
 
-function normalizePriceMessageItems(msg) {
+export function normalizePriceMessageItems(msg) {
   const items = Array.isArray(msg.items)
     ? msg.items.map(item => ({
       id: String(item.id ?? item.appId),
