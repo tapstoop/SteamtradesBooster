@@ -36,6 +36,8 @@ const DEFAULT_DIAGNOSTICS = {
 
 let diagnosticsMemory = { ...DEFAULT_DIAGNOSTICS };
 
+let diagnosticsLock = Promise.resolve();
+
 function storageGet(key) {
   return new Promise(resolve => {
     chrome.storage.local.get(key, result => resolve(result?.[key] ?? null));
@@ -119,8 +121,21 @@ export async function setDiagnostics(next) {
 }
 
 export async function updateDiagnostics(patch) {
-  const current = await getDiagnostics();
-  await setDiagnostics({ ...current, ...patch, updatedAt: Date.now() });
+  // Serialize updates to prevent read-modify-write races.
+  diagnosticsLock = diagnosticsLock.then(async () => {
+    const current = await getDiagnostics();
+    const merged = { ...current, ...patch };
+    // Concatenate array fields so concurrent patches append rather than overwrite.
+    for (const key of ['recentFailures', 'lastApiCalls', 'recent429Errors', 'quotaBlocks']) {
+      if (patch[key]) {
+        merged[key] = [...(current[key] ?? []), ...patch[key]];
+      }
+    }
+    await setDiagnostics({ ...merged, updatedAt: Date.now() });
+  }).catch(() => {
+    // Best-effort; must not break callers.
+  });
+  return diagnosticsLock;
 }
 
 export function sanitizeSteamTradesUrl(rawUrl) {

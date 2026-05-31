@@ -22,6 +22,8 @@ const {
   getDiagnostics,
   recordGgDealsDiagnostics,
   sanitizeSteamTradesUrl,
+  setDiagnostics,
+  updateDiagnostics,
 } = await import('../background/diagnostics.js');
 
 beforeEach(() => {
@@ -160,5 +162,24 @@ describe('diagnostic log rendering', () => {
     expect(log).toContain('Recent 429 errors:');
     expect(log).toContain('Recent quota blocks:');
     expect(log).toContain('bucket=minute');
+  });
+});
+
+describe('updateDiagnostics', () => {
+  it('serializes concurrent updates without data loss', async () => {
+    // Fire 5 concurrent updates, each adding a unique failure
+    const promises = [];
+    for (let i = 0; i < 5; i++) {
+      promises.push(updateDiagnostics({
+        recentFailures: [{ title: `Game ${i}`, status: 'not-found', at: Date.now() + i }],
+      }));
+    }
+    await Promise.all(promises);
+
+    const final = await getDiagnostics();
+    const failureTitles = (final.recentFailures ?? []).map(f => f.title);
+    for (let i = 0; i < 5; i++) {
+      expect(failureTitles).toContain(`Game ${i}`);
+    }
   });
 });
