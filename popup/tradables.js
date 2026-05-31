@@ -450,7 +450,11 @@ export async function initTradables(container) {
         
         return `
           <div class="tradables-item" data-orig-index="${item._origIndex}" data-appid="${item.appId || ''}">
-            <input type="number" min="1" max="999" class="tradables-qty-input" value="${item.qty ?? 1}" data-orig-index="${item._origIndex}" title="Quantity">
+            <div class="tradables-qty" data-orig-index="${item._origIndex}">
+              <button class="tradables-qty-arrow tradables-qty-up" data-orig-index="${item._origIndex}" aria-label="Increase quantity">▲</button>
+              <input type="number" min="1" max="999" class="tradables-qty-input" value="${item.qty ?? 1}" data-orig-index="${item._origIndex}" title="Quantity">
+              <button class="tradables-qty-arrow tradables-qty-down" data-orig-index="${item._origIndex}" aria-label="Decrease quantity">▼</button>
+            </div>
             <div class="tradables-item-main">
               <span class="tradables-name">${escapeHtml(item.name)}</span>
               <div class="tradables-item-meta">
@@ -576,6 +580,23 @@ export async function initTradables(container) {
           render();
           updateStats();
         }
+      });
+    });
+
+    listEl.querySelectorAll('.tradables-qty-arrow').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const origIdx = parseInt(btn.dataset.origIndex);
+        const item = tradablesList[origIdx];
+        if (!item) return;
+        const delta = btn.classList.contains('tradables-qty-up') ? 1 : -1;
+        let qty = (item.qty ?? 1) + delta;
+        if (qty < 1) qty = 1;
+        if (qty > 999) qty = 999;
+        item.qty = qty;
+        await save();
+        render();
+        updateStats();
       });
     });
 
