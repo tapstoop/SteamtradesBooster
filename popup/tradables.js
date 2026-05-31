@@ -18,6 +18,8 @@ function formatPrice(amount, currency = 'EUR') {
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);
 }
 
+let searchSequence = 0;
+
 /** Migrate old newline-string format to [{name, appId}] array */
 function normalizeTradables(raw) {
   if (Array.isArray(raw)) {
@@ -693,8 +695,10 @@ export async function initTradables(container) {
           }
 
           resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">Searching...</div>';
+          const searchSeq = ++searchSequence;
           try {
             const results = await msg('SEARCH_STEAM', { query });
+            if (searchSequence !== searchSeq) return;
             resultsContainer.innerHTML = '';
             if (!results.items?.length) {
               resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">No results</div>';
