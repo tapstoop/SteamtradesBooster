@@ -418,7 +418,7 @@ export function createBulkImportModal(onAdd, options = {}) {
 
     // Re-attach resolve button listeners
     previewList.querySelectorAll('.preview-resolve-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+      btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const idx = parseInt(btn.dataset.ri);
         const entry = resolvedEntries[idx];
