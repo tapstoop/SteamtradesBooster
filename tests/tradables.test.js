@@ -12,8 +12,9 @@ globalThis.chrome = {
 const {
   bindTradablesRuntimeStateForInit,
   createTradablesInitGuard,
-  hasBundleKeywords,
 } = await import('../popup/tradables.js');
+
+const { hasBundleKeywords } = await import('../popup/tradables-parser.js');
 
 describe('tradables init guards', () => {
   it('marks older init guards stale when a newer init starts', () => {

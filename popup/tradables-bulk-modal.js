@@ -1,11 +1,5 @@
-import { parseInput, classifyEntry, computeConfidence, parseSteamStoreUrl } from './tradables-parser.js';
+import { parseInput, classifyEntry, computeConfidence, parseSteamStoreUrl, hasBundleKeywords } from './tradables-parser.js';
 import { normalizeTitle } from '../utils/similarity.js';
-
-const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
-
-function hasBundleKeywords(name) {
-  return BUNDLE_KEYWORDS.test(name);
-}
 
 const CATEGORY_CONFIG = {
   exact: { label: 'Exact Matches', color: '#a1cd44', defaultChecked: true },
@@ -398,6 +392,11 @@ export function createBulkImportModal(onAdd, options = {}) {
 
   // Refresh preview list based on filters and state
   function refreshPreview() {
+    if (currentPopover) {
+      currentPopover.remove();
+      currentPopover = null;
+    }
+
     const filtered = filterVisible(resolvedEntries, activeFilters);
     const addCount = getAddCount(filtered);
 

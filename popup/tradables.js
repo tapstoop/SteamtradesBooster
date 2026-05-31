@@ -13,12 +13,6 @@ function escapeHtml(str) {
   }[c]));
 }
 
-const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
-
-export function hasBundleKeywords(name) {
-  return BUNDLE_KEYWORDS.test(name);
-}
-
 function formatPrice(amount, currency = 'EUR') {
   if (amount == null) return '—';
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);

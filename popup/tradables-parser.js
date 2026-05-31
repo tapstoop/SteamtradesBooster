@@ -62,6 +62,16 @@ function isThousandsComma(line, commaIndex, token) {
   );
 }
 
+const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
+
+/**
+ * Check if a game name contains bundle-indicating keywords
+ * such as "collection", "bundle", "pack", etc.
+ */
+export function hasBundleKeywords(name) {
+  return BUNDLE_KEYWORDS.test(name);
+}
+
 /**
  * Classify a parsed entry as a typed Steam entity, App ID, or game name.
  */
