@@ -425,6 +425,23 @@
 .import-input-section textarea::placeholder { color: #555; }
 .import-input-section textarea:focus { outline: none; border-color: #66c0f4; }
 
+.import-help-text {
+  font-size: 9px;
+  color: #8a9bb0;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.import-help-text code {
+  display: inline-block;
+  background: #0d1117;
+  color: #66c0f4;
+  font-size: 8px;
+  padding: 2px 4px;
+  border-radius: 2px;
+  margin-top: 2px;
+  font-family: monospace;
+}
+
 .import-preview-section {
   margin-top: 12px;
 }
@@ -642,10 +659,28 @@
 .trp-result-item {
   display: flex;
   justify-content: space-between;
-  padding: 4px 8px;
-  color: #c6d4df;
+  align-items: center;
+  padding: 6px 8px;
   cursor: pointer;
-  border-radius: 2px;
+  border-bottom: 1px solid #1e2d3d;
+  transition: background-color 0.15s;
+}
+
+.trp-result-item:hover {
+  background-color: #1e2d3d;
+}
+
+.trp-result-item:last-child {
+  border-bottom: none;
+}
+
+.trp-url-result {
+  background-color: #0d2818;
+  border-left: 3px solid #66c0f4;
+}
+
+.trp-url-result:hover {
+  background-color: #163d28;
 }
 .trp-result-item:hover {
   background: #1a2030;
@@ -660,4 +695,51 @@
 }
 .trp-cancel:hover {
   color: #888;
+}
+
+/* ── Bundle Guidance (Resolve Popover) ───────────────────────────── */
+.trp-bundle-guidance {
+  padding: 8px;
+  background: #1a1400;
+  border-bottom: 1px solid #3a3a5a;
+}
+
+.trp-bundle-warning {
+  color: #f39c12;
+  font-size: 10px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.trp-bundle-help {
+  color: #c6d4df;
+  font-size: 9px;
+  margin-bottom: 4px;
+}
+
+.trp-bundle-url {
+  display: block;
+  background: #0d1117;
+  color: #66c0f4;
+  font-size: 8px;
+  padding: 3px 5px;
+  border-radius: 2px;
+  margin-bottom: 6px;
+  word-break: break-all;
+  font-family: monospace;
+}
+
+.trp-bundle-search-link {
+  display: inline-block;
+  color: #66c0f4;
+  font-size: 10px;
+  text-decoration: none;
+  padding: 2px 6px;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.trp-bundle-search-link:hover {
+  background: #1a3a5e;
+  border-color: #66c0f4;
 }

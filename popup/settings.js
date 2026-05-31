@@ -179,6 +179,24 @@ export async function initSettings(container) {
       <button class="btn-danger" id="s-clear">Clear all cached data</button>
     </div>
 
+    <div class="settings-section bundle-support">
+      <div class="settings-label">Bundle Support</div>
+      <div class="bundle-support-info">
+        <div class="bundle-support-warning">⚠️ Steam bundles cannot be searched by name</div>
+        <div class="bundle-support-text">
+          Steam bundles (collections, packs, anthologies, trilogies) are not indexed by Steam's search API.
+        </div>
+        <div class="bundle-support-steps">
+          <div class="bundle-support-step-title">To add a bundle:</div>
+          <ol class="bundle-support-list">
+            <li>Find the bundle on the Steam store</li>
+            <li>Copy the URL (e.g., <code>https://store.steampowered.com/bundle/16628/...</code>)</li>
+            <li>Paste it in Bulk Import or Add Game</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
     ${buildDiagnosticsPanelHtml({ expanded: diagnosticsExpanded })}
 
     <hr class="settings-divider">

@@ -177,6 +177,61 @@ body {
 
 .cache-info { color: #555; font-size: 10px; line-height: 1.8; }
 
+/* ── Bundle Support ──────────────────────────────────────────────── */
+.bundle-support {
+  border: 1px solid #3a3a5a;
+  border-radius: 4px;
+  padding: 10px;
+  background: #111827;
+}
+
+.bundle-support-info {
+  font-size: 10px;
+  color: #c6d4df;
+  line-height: 1.5;
+}
+
+.bundle-support-warning {
+  color: #f39c12;
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.bundle-support-text {
+  color: #8a9bb0;
+  margin-bottom: 8px;
+}
+
+.bundle-support-steps {
+  margin-top: 6px;
+}
+
+.bundle-support-step-title {
+  color: #c6d4df;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.bundle-support-list {
+  margin: 0;
+  padding-left: 20px;
+  color: #8a9bb0;
+}
+
+.bundle-support-list li {
+  margin-bottom: 3px;
+}
+
+.bundle-support-list code {
+  background: #0d1117;
+  color: #66c0f4;
+  font-size: 9px;
+  padding: 1px 3px;
+  border-radius: 2px;
+  font-family: monospace;
+}
+
 .settings-log {
   width: 100%;
   min-height: 150px;

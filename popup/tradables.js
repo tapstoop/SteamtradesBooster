@@ -7,11 +7,15 @@ function msg(type, data = {}) {
 }
 
 function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  return str.replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
+
+function hasBundleKeywords(name) {
+  return BUNDLE_KEYWORDS.test(name);
 }
 
 function formatPrice(amount, currency = 'EUR') {
@@ -628,12 +632,24 @@ export async function initTradables(container) {
         // Build a tiny search popover
         const popover = document.createElement('div');
         popover.className = 'tradables-resolve-popover';
+        
+        const isBundle = hasBundleKeywords(item.name);
+        const bundleGuidance = isBundle ? `
+          <div class="trp-bundle-guidance">
+            <div class="trp-bundle-warning">⚠️ Bundles cannot be searched by name.</div>
+            <div class="trp-bundle-help">Paste a Steam bundle URL to resolve:</div>
+            <code class="trp-bundle-url">https://store.steampowered.com/bundle/&lt;id&gt;/&lt;name&gt;/</code>
+            <a href="https://store.steampowered.com/search/?term=${encodeURIComponent(item.name)}" target="_blank" class="trp-bundle-search-link">Search on Steam ↗</a>
+          </div>
+        ` : '';
+        
         popover.innerHTML = `
           <div class="trp-header">
             Search for "${escapeHtml(item.name)}"
           </div>
+          ${bundleGuidance}
           <div class="trp-search-wrap">
-            <input type="text" class="tradables-resolve-search" placeholder="Search Steam..." value="${escapeHtml(item.name)}">
+            <input type="text" class="tradables-resolve-search" placeholder="Search Steam or paste URL..." value="${escapeHtml(item.name)}">
           </div>
           <div class="tradables-resolve-results"></div>
           <div class="trp-cancel">Cancel</div>
@@ -653,8 +669,50 @@ export async function initTradables(container) {
         searchInput.addEventListener('click', e2 => e2.stopPropagation());
         popover.addEventListener('click', e2 => e2.stopPropagation());
 
+        // Parse Steam URL helper
+        const parseSteamUrl = (input) => {
+          try {
+            const url = new URL(input);
+            const host = url.hostname.toLowerCase();
+            if (host !== 'store.steampowered.com' && host !== 'steampowered.com' && !host.endsWith('.steampowered.com')) {
+              return null;
+            }
+            const match = url.pathname.match(/^\/(app|bundle|sub)\/(\d+)(?:\/|$)/);
+            if (!match) return null;
+            return { type: match[1], id: match[2] };
+          } catch {
+            return null;
+          }
+        };
+
         let searchTimeout = null;
         const performSearch = async (query) => {
+          // Check if query is a Steam URL
+          const steamUrl = parseSteamUrl(query);
+          if (steamUrl) {
+            resultsContainer.innerHTML = '';
+            const resultItem = document.createElement('div');
+            resultItem.className = 'trp-result-item trp-url-result';
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = `Use ${steamUrl.type} ${steamUrl.id}`;
+            const metaSpan = document.createElement('span');
+            metaSpan.style.color = '#66c0f4';
+            metaSpan.style.fontSize = '9px';
+            metaSpan.textContent = steamUrl.type.charAt(0).toUpperCase() + steamUrl.type.slice(1);
+            resultItem.append(nameSpan, metaSpan);
+            resultItem.addEventListener('click', async () => {
+              item.appId = steamUrl.id;
+              item.type = steamUrl.type;
+              await save();
+              popover.remove();
+              await fetchPrices();
+              render();
+              updateStats();
+            });
+            resultsContainer.appendChild(resultItem);
+            return;
+          }
+
           resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">Searching...</div>';
           try {
             const results = await msg('SEARCH_STEAM', { query });

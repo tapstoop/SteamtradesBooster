@@ -290,6 +290,10 @@ export function createBulkImportModal(onAdd, options = {}) {
         <div class="import-input-section">
           <label>Paste game names or Steam App IDs. Separate by commas or one per line.</label>
           <textarea id="bulk-input" rows="8" placeholder="Hollow Knight, 236850&#10;Celeste&#10;Stardew Valley, 1145360"></textarea>
+          <div class="import-help-text">
+            💡 For bundles (collections, packs, anthologies), paste the Steam bundle URL:<br>
+            <code>https://store.steampowered.com/bundle/&lt;id&gt;/&lt;name&gt;/</code>
+          </div>
           <button id="bulk-preview-btn" class="btn-primary">Preview Matches</button>
         </div>
         <div class="import-preview-section" id="preview-section" style="display:none;">
