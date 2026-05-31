@@ -8,6 +8,7 @@ import {
 
 const PRICE_TTL = 0; // Permanent until manual refresh
 const BASE_URL = 'https://api.gg.deals/v1';
+const RATE_LIMIT_STORAGE_KEY = 'ggdeals_rate_limit_state';
 
 const rateLimitState = {
   remaining: 100,
@@ -60,7 +61,10 @@ function writePriceResult(results, id, type, region, value) {
   if (!results[typedKey]) results[typedKey] = {};
   results[typedKey][region] = value;
 
-  // Backward compatibility for app-only callers.
+  // NOTE: For app type, both results[stringId] and results[typedKey] alias the same object.
+  // Mutating one reference mutates the other. This is intentional for backward compatibility
+  // with callers that access prices by plain appId. To avoid alias confusion, always
+  // assign new values rather than mutating in place.
   if (normalizedType === 'app') {
     results[stringId] = results[typedKey];
   }
@@ -84,12 +88,23 @@ function updateRateLimit(resp) {
   rateLimitState.remaining = remaining;
   rateLimitState.resetAt = resetAt;
   rateLimitState.lastUpdatedAt = Date.now();
+  persistRateLimitState(); // fire-and-forget; must not block
   return {
     limit: rateLimitState.limit,
     remaining: rateLimitState.remaining,
     resetAt: rateLimitState.resetAt,
     lastUpdatedAt: rateLimitState.lastUpdatedAt,
   };
+}
+
+async function persistRateLimitState() {
+  try {
+    await new Promise(resolve => {
+      chrome.storage.local.set({ [RATE_LIMIT_STORAGE_KEY]: { ...rateLimitState } }, resolve);
+    });
+  } catch {
+    // Best-effort persistence; must not break price fetching.
+  }
 }
 
 async function safeRecordDiagnostics(fn) {
@@ -186,6 +201,22 @@ function parsePriceToCents(priceStr) {
 async function processQueue() {
   if (processingQueue || queue.length === 0) return;
   processingQueue = true;
+
+  // Restore persisted rate-limit state (handles service worker hibernation)
+  try {
+    const stored = await new Promise(resolve => {
+      chrome.storage.local.get(RATE_LIMIT_STORAGE_KEY, resolve);
+    });
+    if (stored?.[RATE_LIMIT_STORAGE_KEY]?.lastUpdatedAt) {
+      const saved = stored[RATE_LIMIT_STORAGE_KEY];
+      // Only restore if less than 1 hour old (stale data worse than defaults)
+      if (Date.now() - saved.lastUpdatedAt < 3600000) {
+        Object.assign(rateLimitState, saved);
+      }
+    }
+  } catch {
+    // Ignore; use module-level defaults
+  }
 
   try {
     while (queue.length > 0) {
