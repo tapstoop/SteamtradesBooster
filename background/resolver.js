@@ -116,6 +116,9 @@ export async function resolveTitle(title) {
   const cached = await cacheGet(key);
   if (cached?.value) return resultFromCache(cached.value, 'hit', key);
 
+  let bestExactMatch = null;
+  let bestFuzzyResult = null;
+  let bestFuzzyScore = 0;
   let bestAmbiguous = null;
   let bestAmbiguousScore = 0;
   let sawItems = false;
@@ -130,45 +133,63 @@ export async function resolveTitle(title) {
     if (items.length === 0) continue;
     sawItems = true;
 
-    // Exact match for this search term
     const normalizedTerm = normalizeTitle(term);
+    const isOriginalTerm = normalizedTerm === normalizeTitle(title);
+
+    // Exact match for this search term
     const exactMatch = items.find(item => normalizeTitle(item.name) === normalizedTerm);
     if (exactMatch) {
-      const value = resolutionValue(exactMatch.id, exactMatch.type);
-      await cacheSet(key, value, RESOLVE_TTL);
-      return { ...value, status: 'resolved', cacheKey: key };
-    }
-
-    // No exact match — try fuzzy matching for this term
-    let bestMatch = null;
-    let bestScore = 0;
-    for (const item of items) {
-      const score = wordSimilarity(term, item.name);
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = item;
+      // Prefer exact match on the original title; otherwise keep first found
+      if (!bestExactMatch || isOriginalTerm) {
+        bestExactMatch = { item: exactMatch, isOriginalTerm };
       }
     }
 
-    if (bestMatch && bestScore >= SIMILARITY_THRESHOLD) {
-      const value = resolutionValue(bestMatch.id, bestMatch.type);
-      await cacheSet(key, value, RESOLVE_TTL);
-      return {
-        ...value,
-        status: 'resolved',
-        fuzzy: true,
-        similarity: Math.round(bestScore * 100),
-        title: bestMatch.name,
-        cacheKey: key
-      };
+    // Fuzzy match for this term
+    let termBestMatch = null;
+    let termBestScore = 0;
+    for (const item of items) {
+      const score = wordSimilarity(term, item.name);
+      if (score > termBestScore) {
+        termBestScore = score;
+        termBestMatch = item;
+      }
     }
 
-    if (bestScore > bestAmbiguousScore) {
-      bestAmbiguousScore = bestScore;
+    if (termBestMatch && termBestScore >= SIMILARITY_THRESHOLD) {
+      if (termBestScore > bestFuzzyScore || (!bestFuzzyResult && !bestExactMatch)) {
+        bestFuzzyScore = termBestScore;
+        bestFuzzyResult = { item: termBestMatch, score: termBestScore, isOriginalTerm };
+      }
+    }
+
+    if (termBestScore > bestAmbiguousScore) {
+      bestAmbiguousScore = termBestScore;
       bestAmbiguous = items;
     } else if (!bestAmbiguous) {
       bestAmbiguous = items;
     }
+  }
+
+  // Return best exact match if found (on any term, preferring original)
+  if (bestExactMatch) {
+    const value = resolutionValue(bestExactMatch.item.id, bestExactMatch.item.type);
+    await cacheSet(key, value, RESOLVE_TTL);
+    return { ...value, status: 'resolved', cacheKey: key };
+  }
+
+  // Return best fuzzy match if found (with sufficient similarity)
+  if (bestFuzzyResult) {
+    const value = resolutionValue(bestFuzzyResult.item.id, bestFuzzyResult.item.type);
+    await cacheSet(key, value, RESOLVE_TTL);
+    return {
+      ...value,
+      status: 'resolved',
+      fuzzy: true,
+      similarity: Math.round(bestFuzzyResult.score * 100),
+      title: bestFuzzyResult.item.name,
+      cacheKey: key,
+    };
   }
 
   if (!sawItems) return { status: 'not-found', cacheKey: key };

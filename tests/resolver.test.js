@@ -189,6 +189,46 @@ describe('resolveTitle', () => {
     });
   });
 
+  it('prefers exact match on original title over stripped title', async () => {
+    global.fetch = vi.fn(async (url) => {
+      const term = new URL(url).searchParams.get('term');
+      if (term === 'Hollow Knight Deluxe Edition') {
+        return { ok: true, json: async () => ({ items: [
+          { id: '1', name: 'Hollow Knight Deluxe Edition', type: 'app' },
+          { id: '2', name: 'Hollow Knight', type: 'app' },
+        ]}) };
+      }
+      if (term === 'Hollow Knight') {
+        return { ok: true, json: async () => ({ items: [
+          { id: '2', name: 'Hollow Knight', type: 'app' },
+        ]}) };
+      }
+      return { ok: true, json: async () => ({ items: [] }) };
+    });
+
+    const result = await resolveTitle('Hollow Knight Deluxe Edition');
+    expect(result.status).toBe('resolved');
+    expect(result.appId).toBe('1');
+    expect(result.fuzzy).toBeUndefined();
+  });
+
+  it('returns ambiguous when no term produces a confident match', async () => {
+    global.fetch = vi.fn(async (url) => {
+      const term = new URL(url).searchParams.get('term');
+      if (term === 'Obscure Game Title') {
+        return { ok: true, json: async () => ({ items: [
+          { id: '99', name: 'Some Other Game', type: 'app' },
+        ]}) };
+      }
+      return { ok: true, json: async () => ({ items: [] }) };
+    });
+
+    const result = await resolveTitle('Obscure Game Title');
+    expect(result.status).toBe('ambiguous');
+    expect(result.candidates).toBeDefined();
+    expect(result.candidates.length).toBeGreaterThan(0);
+  });
+
   it('returns not-found when Steam returns empty', async () => {
     fetch.mockResolvedValue({
       ok: true,
