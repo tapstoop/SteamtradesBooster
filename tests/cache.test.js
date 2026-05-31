@@ -31,7 +31,7 @@ global.chrome = {
 };
 
 import { DIAGNOSTICS_KEY } from '../background/diagnostics.js';
-import { cacheGet, cacheSet, cacheHas, cacheClear } from '../background/cache.js';
+import { cacheGet, cacheSet, cacheHas, cacheClear, cacheDelete } from '../background/cache.js';
 
 beforeEach(() => {
   Object.keys(store).forEach(k => delete store[k]);
@@ -75,6 +75,19 @@ describe('cacheHas', () => {
   it('returns false for expired entry', async () => {
     store['test:exp'] = { value: 1, expiresAt: Date.now() - 1 };
     expect(await cacheHas('test:exp')).toBe(false);
+  });
+});
+
+describe('cacheDelete', () => {
+  it('removes a key from storage', async () => {
+    await cacheSet('price:10:eu', { currentRetail: 500 }, 0);
+    const before = await cacheGet('price:10:eu');
+    expect(before).not.toBeNull();
+
+    await cacheDelete('price:10:eu');
+
+    const after = await cacheGet('price:10:eu');
+    expect(after).toBeNull();
   });
 });
 
