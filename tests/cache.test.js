@@ -22,11 +22,16 @@ global.chrome = {
         keyList.forEach(k => delete store[k]);
         if (cb) cb();
       }),
+      clear: vi.fn((cb) => {
+        Object.keys(store).forEach(k => delete store[k]);
+        if (cb) cb();
+      }),
     }
   }
 };
 
-import { cacheGet, cacheSet, cacheHas } from '../background/cache.js';
+import { DIAGNOSTICS_KEY } from '../background/diagnostics.js';
+import { cacheGet, cacheSet, cacheHas, cacheClear, cacheDelete } from '../background/cache.js';
 
 beforeEach(() => {
   Object.keys(store).forEach(k => delete store[k]);
@@ -70,5 +75,30 @@ describe('cacheHas', () => {
   it('returns false for expired entry', async () => {
     store['test:exp'] = { value: 1, expiresAt: Date.now() - 1 };
     expect(await cacheHas('test:exp')).toBe(false);
+  });
+});
+
+describe('cacheDelete', () => {
+  it('removes a key from storage', async () => {
+    await cacheSet('price:10:eu', { currentRetail: 500 }, 0);
+    const before = await cacheGet('price:10:eu');
+    expect(before).not.toBeNull();
+
+    await cacheDelete('price:10:eu');
+
+    const after = await cacheGet('price:10:eu');
+    expect(after).toBeNull();
+  });
+});
+
+describe('cacheClear', () => {
+  it('preserves diagnostics while clearing cache data', async () => {
+    store[DIAGNOSTICS_KEY] = { activeUrl: 'https://www.steamtrades.com/trade/abc/test' };
+    store['price:10:eu'] = { value: { title: 'Game' }, expiresAt: 0 };
+
+    await cacheClear();
+
+    expect(store[DIAGNOSTICS_KEY]).toEqual({ activeUrl: 'https://www.steamtrades.com/trade/abc/test' });
+    expect(store['price:10:eu']).toBeUndefined();
   });
 });

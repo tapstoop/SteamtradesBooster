@@ -34,6 +34,7 @@ export function replaceBadge(el, priceData, gameInfo) {
     badge.className = 'stpt-badge';
     badge.dataset.type = type;
     badge.dataset.appid = gameInfo.appId ?? '';
+    badge.dataset.itemType = gameInfo.type ?? gameInfo.resolution?.type ?? 'app';
     if (!isPrimary) badge.dataset.secondary = '1';
 
     if (label) {
@@ -269,6 +270,7 @@ export function injectDelistedBadge(el, cacheKey, title, priceData = null, gameI
   badge.className = 'stpt-badge';
   badge.dataset.type = 'delisted';
   badge.dataset.appid = gameInfo?.appId ?? '';
+  badge.dataset.itemType = gameInfo?.type ?? gameInfo?.resolution?.type ?? 'app';
   badge.style.cursor = 'pointer';
 
   const labelEl = document.createElement('span');

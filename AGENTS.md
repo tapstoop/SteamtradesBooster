@@ -14,6 +14,7 @@ SteamTrades Booster is a Chrome Manifest V3 extension for steamtrades.com. It ad
 - `utils/`: shared title/region/fuzzy-match helpers.
 - `tests/`: Vitest unit tests with mocked Chrome APIs and network calls.
 - `build.js`: packages the extension into `steamtrades_booster_v<version>/` and `steamtrades_booster_v<version>.zip`.
+- `docs/solutions/`: documented solutions to past problems (bugs, best practices, architecture patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
 
 ## Setup
 

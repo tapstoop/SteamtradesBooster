@@ -1,10 +1,26 @@
 // tests/tradables-parser.test.js
 import { describe, it, expect } from 'vitest';
-import { parseInput, classifyEntry, computeConfidence } from '../popup/tradables-parser.js';
+import { parseInput, classifyEntry, computeConfidence, parseSteamStoreUrl } from '../popup/tradables-parser.js';
 
 describe('parseInput', () => {
   it('splits by comma', () => {
     expect(parseInput('Game A, Game B, Game C')).toEqual(['Game A', 'Game B', 'Game C']);
+  });
+
+  it('preserves commas inside titles', () => {
+    expect(parseInput('Warhammer 40,000\nGame B')).toEqual(['Warhammer 40,000', 'Game B']);
+  });
+
+  it('preserves comma-containing titles in comma-separated input', () => {
+    expect(parseInput('Warhammer 40,000, Game B')).toEqual(['Warhammer 40,000', 'Game B']);
+  });
+
+  it('splits compact numeric App ID CSV input', () => {
+    expect(parseInput('236850,1145360')).toEqual(['236850', '1145360']);
+  });
+
+  it('splits compact numeric App ID CSV input with more than two IDs', () => {
+    expect(parseInput('236850,1145360,367520')).toEqual(['236850', '1145360', '367520']);
   });
 
   it('splits by newline', () => {
@@ -50,6 +66,27 @@ describe('classifyEntry', () => {
     expect(classifyEntry('236850')).toEqual({ type: 'appId', value: '236850' });
   });
 
+  it('classifies Steam store app, bundle, and sub URLs as typed ids', () => {
+    expect(classifyEntry('https://store.steampowered.com/app/367520/Hollow_Knight/')).toEqual({
+      type: 'typedId',
+      value: '367520',
+      itemType: 'app',
+      raw: 'https://store.steampowered.com/app/367520/Hollow_Knight/',
+    });
+    expect(classifyEntry('https://store.steampowered.com/bundle/232/Valve_Complete_Pack/')).toEqual({
+      type: 'typedId',
+      value: '232',
+      itemType: 'bundle',
+      raw: 'https://store.steampowered.com/bundle/232/Valve_Complete_Pack/',
+    });
+    expect(classifyEntry('https://store.steampowered.com/sub/500/')).toEqual({
+      type: 'typedId',
+      value: '500',
+      itemType: 'sub',
+      raw: 'https://store.steampowered.com/sub/500/',
+    });
+  });
+
   it('classifies text as name', () => {
     expect(classifyEntry('Hollow Knight')).toEqual({ type: 'name', value: 'Hollow Knight' });
   });
@@ -60,6 +97,40 @@ describe('classifyEntry', () => {
 
   it('classifies empty string as name', () => {
     expect(classifyEntry('')).toEqual({ type: 'name', value: '' });
+  });
+});
+
+describe('parseSteamStoreUrl', () => {
+  it('extracts app id from Steam app URL', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/app/367520/Hollow_Knight/'))
+      .toEqual({ type: 'app', id: '367520' });
+  });
+
+  it('extracts bundle id from Steam bundle URL', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/bundle/16628/Asterix__Obelix_XXL_Collection/'))
+      .toEqual({ type: 'bundle', id: '16628' });
+  });
+
+  it('extracts sub id from Steam sub URL', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/sub/500/'))
+      .toEqual({ type: 'sub', id: '500' });
+  });
+
+  it('returns null for non-Steam URLs', () => {
+    expect(parseSteamStoreUrl('https://google.com')).toBeNull();
+  });
+
+  it('returns null for invalid URLs', () => {
+    expect(parseSteamStoreUrl('not a url')).toBeNull();
+  });
+
+  it('returns null for malformed Steam URLs', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/')).toBeNull();
+  });
+
+  it('handles URLs without trailing slash', () => {
+    expect(parseSteamStoreUrl('https://store.steampowered.com/app/367520'))
+      .toEqual({ type: 'app', id: '367520' });
   });
 });
 

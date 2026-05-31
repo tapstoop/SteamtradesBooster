@@ -9,6 +9,10 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function errorLogLink() {
+  return ' <a class="error-log-inline" href="popup.html?tab=settings&focus=error-log">See error logs</a>';
+}
+
 function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
 }
@@ -16,6 +20,18 @@ function msg(type, data = {}) {
 function formatPrice(amount, currency = 'EUR') {
   if (amount == null) return '—';
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);
+}
+
+function normalizePriceType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+function readPriceRegion(prices, id, type = 'app', region) {
+  if (!prices || !id) return null;
+  const normalizedType = normalizePriceType(type);
+  const typed = prices[`${normalizedType}:${id}`]?.[region];
+  if (typed) return typed;
+  return normalizedType === 'app' ? prices[id]?.[region] ?? null : null;
 }
 
 function rangeLabel(ratio, settings) {
@@ -41,13 +57,13 @@ export async function initTradablesDetailed(container) {
 
   const settings = await msg('GET_SETTINGS');
   if (!settings.apiKey || !settings.steamId) {
-    body.innerHTML = '<div class="error-state">Set API key and Steam ID in Settings first.</div>';
+    body.innerHTML = `<div class="error-state">Set API key and Steam ID in Settings first.${errorLogLink()}</div>`;
     return;
   }
 
   const profile = await msg('GET_PROFILE');
   if (profile.error) {
-    body.innerHTML = `<div class="error-state">${escapeHtml(profile.error)}</div>`;
+    body.innerHTML = `<div class="error-state">${escapeHtml(profile.error)}${errorLogLink()}</div>`;
     return;
   }
   const tradables = profile.tradables ?? [];
@@ -59,9 +75,9 @@ export async function initTradablesDetailed(container) {
   const resolutions = await msg('RESOLVE_TITLES', { titles: tradables });
   const appIds = resolutions
     .filter(r => r?.status === 'hit' || r?.status === 'resolved')
-    .map(r => r.appId);
+    .map(r => ({ id: r.appId, type: r.type ?? 'app' }));
 
-  const prices = await msg('GET_PRICES', { appIds, regions: settings.regions });
+  const prices = await msg('GET_PRICES', { items: appIds, regions: settings.regions });
   const region = settings.regions[0];
 
   const html = [];
@@ -69,9 +85,10 @@ export async function initTradablesDetailed(container) {
   for (let i = 0; i < tradables.length; i++) {
     const title = tradables[i];
     const appId = resolutions[i]?.appId;
+    const type = resolutions[i]?.type ?? 'app';
     if (!appId) continue;
 
-    const data = prices[appId]?.[region];
+    const data = readPriceRegion(prices, appId, type, region);
     if (!data) continue;
 
     const currentRetail = data.prices?.currentRetail;
@@ -103,7 +120,7 @@ export async function initTradablesDetailed(container) {
     }
 
     // Acquisition price P/L
-    const { price: acqPrice } = await msg('GET_ACQ_PRICE', { appId });
+    const { price: acqPrice } = await msg('GET_ACQ_PRICE', { appId, itemType: type });
     let acqHtml = '';
     if (acqPrice != null) {
       const diff = currentRetail - acqPrice;

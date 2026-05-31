@@ -1,11 +1,19 @@
 // background/service-worker.js
-import { getPrices, getCachedPrices, getBundles } from './ggdeals.js';
+import { getPrices, getCachedPrices, getBundles, getPriceResult, isRefreshFallbackPrice } from './ggdeals.js';
 import { resolveTitle, confirmResolution } from './resolver.js';
 import { fetchProfile, getCachedProfile } from './profile.js';
 import { cacheGet, cacheSet, cacheClear, setDismissed, setUndismissed, isDismissed, setDelisted, setUndelisted } from './cache.js';
-import { getDisplayRegion } from '../utils/similarity.js';
+import { getDisplayRegion, normalizeSteamType } from '../utils/similarity.js';
 import { writeSnapshot, pruneOldSnapshots } from './snapshots.js';
 import { scrapeGame, scrapeBatch, handleScrapedResult, getScrapedData } from './ggdeals-scraper.js';
+import {
+  buildDiagnosticLog as renderDiagnosticLog,
+  DEFAULT_RESOLUTION_STATS,
+  DIAGNOSTICS_RETENTION,
+  getDiagnostics,
+  sanitizeSteamTradesUrl,
+  updateDiagnostics,
+} from './diagnostics.js';
 
 const SETTINGS_KEY = 'settings';
 const TRADABLES_KEY = 'tradables_list';
@@ -55,9 +63,14 @@ async function getCacheBatch(titles, prefix) {
   titles.forEach((title, i) => {
     const confirmedVal = all[confirmedKeys[i]]?.value;
     const resolvedVal = all[keys[i]]?.value;
-    const appId = confirmedVal ?? resolvedVal;
+    const raw = confirmedVal ?? resolvedVal;
+    const appId = typeof raw === 'object' ? raw.appId ?? raw.id : raw;
     if (appId) {
-      result[title] = { appId: String(appId), status: 'hit' };
+      result[title] = {
+        appId: String(appId),
+        type: typeof raw === 'object' ? raw.type ?? 'app' : 'app',
+        status: 'hit',
+      };
     }
   });
   return result;
@@ -87,6 +100,98 @@ async function getSettings() {
   return settings;
 }
 
+function countResolutions(titles, resolutions) {
+  const stats = { ...DEFAULT_RESOLUTION_STATS, total: resolutions.length };
+  const failures = [];
+  resolutions.forEach((res, i) => {
+    const status = res?.status ?? 'not-found';
+    if (status in stats) stats[status]++;
+    if (res?.fuzzy) stats.fuzzy++;
+    if (status === 'ambiguous' || status === 'not-found') {
+      failures.push({ title: titles[i], status, at: Date.now() });
+    }
+  });
+  return { stats, failures };
+}
+
+function queryActiveTabUrl() {
+  return new Promise(resolve => {
+    try {
+      chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+        const url = tabs?.[0]?.url ?? '';
+        resolve(sanitizeSteamTradesUrl(url));
+      });
+    } catch {
+      resolve('');
+    }
+  });
+}
+
+async function buildDiagnosticLog() {
+  const diagnostics = await getDiagnostics();
+  const manifest = chrome.runtime.getManifest();
+  const activeUrl = await queryActiveTabUrl();
+
+  return renderDiagnosticLog({
+    diagnostics,
+    manifestVersion: manifest.version,
+    userAgent: navigator.userAgent,
+    userAgentData: navigator.userAgentData,
+    activeUrl,
+  });
+}
+
+export function normalizePriceMessageItems(msg) {
+  const items = Array.isArray(msg.items)
+    ? msg.items.map(item => ({
+      id: String(item.id ?? item.appId),
+      type: ['app', 'bundle', 'sub'].includes(item.type) ? item.type : 'app',
+    }))
+    : (msg.appIds ?? []).map(id => ({ id: String(id), type: 'app' }));
+
+  const seen = new Set();
+  return items.filter(item => {
+    if (!item.id || item.id === 'undefined') return false;
+    const key = `${item.type}:${item.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function priceMessageTargets(msg) {
+  return normalizePriceMessageItems(msg).map(item => ({ id: String(item.id ?? item.appId), type: item.type ?? 'app' }));
+}
+
+
+function acquisitionItem(msg) {
+  return {
+    id: String(msg.itemId ?? msg.id ?? msg.appId),
+    type: normalizeSteamType(msg.itemType ?? msg.entityType ?? msg.steamType ?? 'app'),
+  };
+}
+
+function acquisitionKey(id, type = 'app') {
+  return `acq:${normalizeSteamType(type)}:${String(id)}`;
+}
+
+function legacyAcquisitionKey(id) {
+  return `acq:${String(id)}`;
+}
+
+function priceUpdatedMessage(target, region, priceData) {
+  const itemType = normalizeSteamType(target.type);
+  const message = {
+    type: 'PRICE_UPDATED',
+    itemId: target.id,
+    itemType,
+    region,
+    priceData,
+  };
+  if (itemType === 'app') message.appId = target.id;
+  return message;
+}
+
 // --- Alarm: Daily Snapshot ---
 chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1440 });
 
@@ -103,14 +208,16 @@ chrome.alarms.onAlarm.addListener(async alarm => {
   const resolutions = await Promise.all(allTitles.map(t => resolveTitle(t)));
   const appIds = resolutions
     .filter(r => r.status === 'hit' || r.status === 'resolved')
-    .map(r => r.appId);
+    .map(r => ({ id: r.appId, type: r.type ?? 'app' }));
 
   if (appIds.length === 0) return;
 
   const prices = await getPrices(settings.apiKey, appIds, settings.regions);
   for (const region of settings.regions) {
-    for (const appId of appIds) {
-      const data = prices[appId]?.[region];
+    for (const item of appIds) {
+      if ((item.type ?? 'app') !== 'app') continue;
+      const appId = item.id;
+      const data = getPriceResult(prices, appId, item.type)?.[region];
       if (!data) continue;
       await writeSnapshot({
         appId,
@@ -176,6 +283,12 @@ async function handleMessage(msg) {
     case 'RESOLVE_TITLES': {
       // msg.titles: string[]
       const results = await Promise.all(msg.titles.map(t => resolveTitle(t)));
+      const { stats, failures } = countResolutions(msg.titles, results);
+      const current = await getDiagnostics();
+      await updateDiagnostics({
+        resolutionStats: stats,
+        recentFailures: [...failures, ...(current.recentFailures ?? [])].slice(0, DIAGNOSTICS_RETENTION.maxResolutionFailures),
+      });
       return results;
     }
 
@@ -187,7 +300,7 @@ async function handleMessage(msg) {
     }
 
     case 'CONFIRM_RESOLUTION': {
-      await confirmResolution(msg.cacheKey, msg.appId, msg.title);
+      await confirmResolution(msg.cacheKey, msg.appId, msg.title, msg.type);
       return { ok: true };
     }
 
@@ -222,20 +335,20 @@ async function handleMessage(msg) {
       // msg.appIds: string[], msg.regions: string[] (optional, falls back to settings)
       const regions = msg.regions ?? settings.regions;
       if (!settings.apiKey) return { error: 'No API key set' };
-      const prices = await getPrices(settings.apiKey, msg.appIds, regions);
+      const items = normalizePriceMessageItems(msg);
+      const targets = priceMessageTargets(msg);
+      const prices = await getPrices(settings.apiKey, items, regions);
       // Broadcast PRICE_UPDATED to all tabs for each app that got fresh data
       if (prices) {
         const region = getDisplayRegion({ ...settings, regions });
-        for (const appId of msg.appIds) {
-          if (prices[appId]?.[region]) {
+        for (const target of targets) {
+          const typedRegionData = getPriceResult(prices, target.id, target.type);
+          if (typedRegionData?.[region]) {
             try {
               chrome.tabs.query({}, tabs => {
                 tabs.forEach(tab => {
                   chrome.tabs.sendMessage(tab.id, {
-                    type: 'PRICE_UPDATED',
-                    appId,
-                    region,
-                    priceData: prices[appId][region],
+                    ...priceUpdatedMessage(target, region, typedRegionData[region]),
                   }).catch(() => {});
                 });
               });
@@ -252,7 +365,7 @@ async function handleMessage(msg) {
       // Cache-only: no API calls, just return what's in storage
       // No broadcast here — cached reads are internal and don't need to trigger UI updates
       const regions = msg.regions ?? settings.regions;
-      return getCachedPrices(msg.appIds, regions);
+      return getCachedPrices(normalizePriceMessageItems(msg), regions);
     }
 
     case 'GET_BUNDLES': {
@@ -260,15 +373,31 @@ async function handleMessage(msg) {
       return getBundles(settings.apiKey, msg.appIds);
     }
 
+    case 'REPORT_PAGE_DIAGNOSTICS': {
+      await updateDiagnostics({ activeUrl: sanitizeSteamTradesUrl(msg.url ?? '') });
+      return { ok: true };
+    }
+
+    case 'GET_DIAGNOSTIC_LOG': {
+      return { log: await buildDiagnosticLog() };
+    }
+
     case 'SAVE_ACQ_PRICE': {
-      // msg.appId, msg.price (number)
-      await cacheSet(`acq:${msg.appId}`, msg.price, 0);
+      const item = acquisitionItem(msg);
+      await cacheSet(acquisitionKey(item.id, item.type), msg.price, 0);
+      if (item.type === 'app') {
+        await cacheSet(legacyAcquisitionKey(item.id), msg.price, 0);
+      }
       return { ok: true };
     }
 
     case 'GET_ACQ_PRICE': {
-      const cached = await cacheGet(`acq:${msg.appId}`);
-      return { price: cached?.value ?? null };
+      const item = acquisitionItem(msg);
+      const cached = await cacheGet(acquisitionKey(item.id, item.type));
+      if (cached) return { price: cached.value ?? null };
+      if (item.type !== 'app') return { price: null };
+      const legacy = await cacheGet(legacyAcquisitionKey(item.id));
+      return { price: legacy?.value ?? null };
     }
 
     case 'SCRAPE_GGDEALS': {
@@ -312,7 +441,10 @@ async function handleMessage(msg) {
     case 'OPEN_POPUP':
     case 'OPEN_POPUP_TAB': {
       // Open the extension popup as a tab (chrome.action.openPopup requires user gesture)
-      const popupUrl = chrome.runtime.getURL('popup/popup.html');
+      const params = new URLSearchParams();
+      if (msg.tab) params.set('tab', msg.tab);
+      if (msg.focus) params.set('focus', msg.focus);
+      const popupUrl = chrome.runtime.getURL('popup/popup.html') + (params.toString() ? `?${params}` : '');
       chrome.tabs.create({ url: popupUrl });
       return { ok: true };
     }
@@ -341,25 +473,22 @@ async function handleMessage(msg) {
     case 'REFRESH_PRICES': {
       if (!settings.apiKey) return { error: 'No API key set' };
       const regions = msg.regions ?? settings.regions;
-      const appIds = msg.appIds ?? [];
-      if (appIds.length === 0) return {};
-      // Remove only price keys for these appIds (targeted, not cacheClear)
-      const keysToDelete = appIds.flatMap(id => regions.map(r => `price:${id}:${r}`));
-      await chrome.storage.local.remove(keysToDelete);
-      const prices = await getPrices(settings.apiKey, appIds, regions);
+      const items = normalizePriceMessageItems(msg);
+      const targets = priceMessageTargets(msg);
+      if (items.length === 0) return {};
+      const prices = await getPrices(settings.apiKey, items, regions, { forceRefresh: true });
       // Broadcast PRICE_UPDATED for each app (same as GET_PRICES)
       if (prices) {
         const region = getDisplayRegion({ ...settings, regions });
-        for (const appId of appIds) {
-          if (prices[appId]?.[region]) {
+        for (const target of targets) {
+          const typedRegionData = getPriceResult(prices, target.id, target.type);
+          if (typedRegionData?.[region]) {
+            if (isRefreshFallbackPrice(typedRegionData[region])) continue;
             try {
               chrome.tabs.query({}, tabs => {
                 tabs.forEach(tab => {
                   chrome.tabs.sendMessage(tab.id, {
-                    type: 'PRICE_UPDATED',
-                    appId,
-                    region,
-                    priceData: prices[appId][region],
+                    ...priceUpdatedMessage(target, region, typedRegionData[region]),
                   }).catch(() => {});
                 });
               });

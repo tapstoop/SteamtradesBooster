@@ -1,4 +1,5 @@
 // background/cache.js
+import { DIAGNOSTICS_KEY } from './diagnostics.js';
 
 function storageGet(key) {
   return new Promise((resolve, reject) => {
@@ -54,8 +55,34 @@ export async function cacheHas(key) {
   return (await cacheGet(key)) !== null;
 }
 
+/**
+ * Delete a specific key from storage.
+ * @param {string} key
+ */
+export async function cacheDelete(key) {
+  return new Promise(resolve => {
+    chrome.storage.local.remove(key, () => {
+      if (chrome.runtime.lastError) {
+        console.warn('[cache] Failed to delete key:', key, chrome.runtime.lastError.message);
+      }
+      resolve();
+    });
+  });
+}
+
 export async function cacheClear() {
-  return new Promise(resolve => chrome.storage.local.clear(resolve));
+  return new Promise(resolve => {
+    chrome.storage.local.get(DIAGNOSTICS_KEY, preserved => {
+      chrome.storage.local.clear(() => {
+        const diagnostics = preserved?.[DIAGNOSTICS_KEY];
+        if (!diagnostics) {
+          resolve();
+          return;
+        }
+        chrome.storage.local.set({ [DIAGNOSTICS_KEY]: diagnostics }, resolve);
+      });
+    });
+  });
 }
 
 /**

@@ -1,17 +1,22 @@
 // popup/tradables.js
 import { createBulkImportModal } from './tradables-bulk-modal.js';
 import { getDisplayRegion } from '../utils/similarity.js';
+import { parseSteamStoreUrl } from './tradables-parser.js';
+
+let qtySaveTimer = null;
+function debouncedSave() {
+  clearTimeout(qtySaveTimer);
+  qtySaveTimer = setTimeout(() => save(), 300);
+}
 
 function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
 }
 
 function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  return str.replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
 }
 
 function formatPrice(amount, currency = 'EUR') {
@@ -19,11 +24,17 @@ function formatPrice(amount, currency = 'EUR') {
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);
 }
 
+let searchSequence = 0;
+
 /** Migrate old newline-string format to [{name, appId}] array */
 function normalizeTradables(raw) {
-  if (Array.isArray(raw)) return raw;
+  if (Array.isArray(raw)) {
+    return raw.map(item => typeof item === 'string'
+      ? { name: item, appId: null, type: 'app', qty: 1 }
+      : { ...item, type: item.type ?? 'app', qty: Math.max(1, parseInt(item.qty) || 1) });
+  }
   if (typeof raw === 'string' && raw.trim()) {
-    return raw.split('\n').map(n => n.trim()).filter(Boolean).map(name => ({ name, appId: null }));
+    return raw.split('\n').map(n => n.trim()).filter(Boolean).map(name => ({ name, appId: null, type: 'app', qty: 1 }));
   }
   return [];
 }
@@ -60,11 +71,16 @@ function renderPriceBadge(priceData, settings, item) {
   const priceFormatted = formatPrice(bestCurrent, currency);
   const timestamp = priceData.cachedAt ? formatTimestamp(priceData.cachedAt) : '';
 
+  const qty = item?.qty ?? 1;
+  const qtySuffix = qty > 1 && bestCurrent != null
+    ? `<span class="tradables-qty-suffix"> x ${qty} = ${formatPrice(bestCurrent * qty, currency)}</span>`
+    : '';
+
   // Check if this is a DEAL (current price within threshold of ATL)
   if (bestCurrent != null && bestAtl != null && bestAtl > 0) {
     const pctAboveAtl = ((bestCurrent - bestAtl) / bestCurrent) * 100;
     if (pctAboveAtl <= (settings.dealThresholdPct ?? 10)) {
-      return `<span class="tradables-price-badge deal" title="DEAL · ATL: ${formatPrice(bestAtl, currency)}${timestamp ? ' · ' + timestamp : ''}">${priceFormatted}</span>`;
+      return `<span class="tradables-price-badge deal" title="DEAL · ATL: ${formatPrice(bestAtl, currency)}${timestamp ? ' · ' + timestamp : ''}">${priceFormatted}${qtySuffix}</span>`;
     }
   }
 
@@ -74,7 +90,7 @@ function renderPriceBadge(priceData, settings, item) {
 
   // Regular TRADE price
   const tooltip = bestAtl ? `ATL: ${formatPrice(bestAtl, currency)}${timestamp ? ' · ' + timestamp : ''}` : '';
-  return `<span class="tradables-price-badge trade" title="${tooltip}">${priceFormatted}</span>`;
+  return `<span class="tradables-price-badge trade" title="${tooltip}">${priceFormatted}${qtySuffix}</span>`;
 }
 
 function formatTimestamp(cachedAt) {
@@ -91,26 +107,113 @@ function formatTimestamp(cachedAt) {
   return 'now';
 }
 
+function normalizePriceType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+function typedPriceKey(id, type = 'app') {
+  return `${normalizePriceType(type)}:${String(id)}`;
+}
+
+function getPriceRegionData(prices, item, region) {
+  if (!prices || !item?.id) return null;
+  const type = normalizePriceType(item.type);
+  const typedRegion = prices[typedPriceKey(item.id, type)]?.[region];
+  if (typedRegion) return typedRegion;
+  return type === 'app' ? prices[item.id]?.[region] ?? null : null;
+}
+
+function setPriceEntry(store, item, data) {
+  const id = String(item.id);
+  const type = normalizePriceType(item.type);
+  store[typedPriceKey(id, type)] = data;
+  if (type === 'app') store[id] = data;
+}
+
+function readPriceEntry(store, item) {
+  if (!store || !item?.appId) return null;
+  const type = normalizePriceType(item.type ?? 'app');
+  const typed = store[typedPriceKey(item.appId, type)];
+  if (typed) return typed;
+  return type === 'app' ? store[item.appId] ?? null : null;
+}
+
+const tradablesRuntimeState = {
+  settings: null,
+  priceData: null,
+  render: null,
+  updateStats: null,
+  onSettingsUpdated: null,
+};
+let tradablesRuntimeListenersRegistered = false;
+let tradablesInitSequence = 0;
+
+export function createTradablesInitGuard() {
+  const initId = ++tradablesInitSequence;
+  return () => initId === tradablesInitSequence;
+}
+
+function bindTradablesRuntimeState(nextState) {
+  Object.assign(tradablesRuntimeState, nextState);
+}
+
+export function bindTradablesRuntimeStateForInit(isCurrentInit, nextState) {
+  if (!isCurrentInit()) return false;
+  bindTradablesRuntimeState(nextState);
+  return true;
+}
+
+function ensureTradablesRuntimeListeners() {
+  if (tradablesRuntimeListenersRegistered) return;
+  tradablesRuntimeListenersRegistered = true;
+
+  chrome.runtime.onMessage.addListener((message) => {
+    const id = message.itemId ?? message.appId;
+    if (message.type !== 'PRICE_UPDATED' || !id || !message.priceData || !tradablesRuntimeState.priceData) return;
+    if (!(message.region || tradablesRuntimeState.settings?.regions?.[0])) return;
+    const itemType = normalizePriceType(message.itemType ?? 'app');
+    setPriceEntry(tradablesRuntimeState.priceData, { id, type: itemType }, message.priceData);
+    tradablesRuntimeState.render?.();
+    tradablesRuntimeState.updateStats?.();
+  });
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type !== 'SETTINGS_UPDATED' || !tradablesRuntimeState.settings) return;
+    Object.assign(tradablesRuntimeState.settings, message.settings);
+    tradablesRuntimeState.onSettingsUpdated?.();
+    tradablesRuntimeState.render?.();
+    tradablesRuntimeState.updateStats?.();
+  });
+}
+
 export async function initTradables(container) {
+  const isCurrentInit = createTradablesInitGuard();
+
   const settings = await msg('GET_SETTINGS');
+  if (!isCurrentInit()) return;
   // Get tradables from separate storage (not from settings)
-  let tradablesList = normalizeTradables(await msg('GET_TRADABLES'));
+  const rawTradables = await msg('GET_TRADABLES');
+  if (!isCurrentInit()) return;
+  let tradablesList = normalizeTradables(rawTradables);
 
   // Resolve any tradables that have appId: null so prices can be fetched
   const unresolved = tradablesList.filter(t => !t.appId && t.name);
   if (unresolved.length > 0 && settings.apiKey) {
     const titles = unresolved.map(t => t.name);
     const resolutions = await msg('RESOLVE_TITLES', { titles });
+    if (!isCurrentInit()) return;
     let changed = false;
     resolutions.forEach((res, i) => {
       if (res && (res.status === 'hit' || res.status === 'resolved') && res.appId) {
         unresolved[i].appId = String(res.appId);
+        unresolved[i].type = res.type ?? 'app';
         if (res.title) unresolved[i].name = res.title;
         changed = true;
       }
     });
     if (changed) {
       await msg('SAVE_TRADABLES', { tradables: tradablesList });
+      if (!isCurrentInit()) return;
     }
   }
   let searchQuery = '';
@@ -119,6 +222,7 @@ export async function initTradables(container) {
   let undoTimeout = null;
   let modal = null;
   let priceData = {}; // appId -> price info
+  let priceError = null;
   let undoRenderTimeout = null; // For debounced undo bar rendering
 
   // Currency from settings (default EUR)
@@ -133,18 +237,18 @@ export async function initTradables(container) {
 
     const appIds = tradablesList
       .filter(item => item.appId)
-      .map(item => item.appId);
+      .map(item => ({ id: item.appId, type: item.type ?? 'app' }));
 
     if (appIds.length === 0) return;
 
     try {
-      const cached = await msg('GET_CACHED_PRICES', { appIds, regions: settings.regions });
+      const cached = await msg('GET_CACHED_PRICES', { items: appIds, regions: settings.regions });
+      if (!isCurrentInit()) return;
       if (cached) {
         const region = getDisplayRegion(settings);
-        for (const appId of appIds) {
-          if (cached[appId]?.[region]) {
-            priceData[appId] = cached[appId][region];
-          }
+        for (const item of appIds) {
+          const data = getPriceRegionData(cached, item, region);
+          if (data) setPriceEntry(priceData, item, data);
         }
       }
     } catch (err) {
@@ -153,29 +257,33 @@ export async function initTradables(container) {
   }
 
   /**
-   * Fetch fresh prices from API for all tradables with resolved appIds.
-   * Now uses REFRESH_PRICES (cache bypass) so that page badges also update via broadcast.
+   * Fetch prices for all tradables with resolved appIds.
+   * Manual refresh bypasses cache; normal loads preserve cached prices if the API is unavailable.
    */
-  async function fetchPrices() {
+  async function fetchPrices({ refresh = false } = {}) {
     if (!settings.apiKey) return;
 
     const appIds = tradablesList
       .filter(item => item.appId)
-      .map(item => item.appId);
+      .map(item => ({ id: item.appId, type: item.type ?? 'app' }));
 
     if (appIds.length === 0) return;
 
     try {
-      const prices = await msg('REFRESH_PRICES', { appIds, regions: settings.regions });
-      if (prices && !prices.error) {
+      const prices = await msg(refresh ? 'REFRESH_PRICES' : 'GET_PRICES', { items: appIds, regions: settings.regions });
+      if (!isCurrentInit()) return;
+      priceError = prices?.error ?? null;
+      if (priceError) console.warn('Some tradables prices failed:', priceError);
+      if (prices) {
         const region = getDisplayRegion(settings);
-        for (const appId of appIds) {
-          if (prices[appId]?.[region]) {
-            priceData[appId] = prices[appId][region];
-          }
+        for (const item of appIds) {
+          const data = getPriceRegionData(prices, item, region);
+          if (data) setPriceEntry(priceData, item, data);
         }
       }
     } catch (err) {
+      if (!isCurrentInit()) return;
+      priceError = err.message;
       console.error('Failed to fetch prices:', err);
     }
   }
@@ -201,12 +309,12 @@ export async function initTradables(container) {
       
       // PHASE 4A: Check if acquisition price is set — use it for EST. VALUE
       if (item.acqPrice != null) {
-        total += Math.round(item.acqPrice * 100); // Convert to cents
-        count++;
+        total += Math.round(item.acqPrice * 100) * (item.qty ?? 1); // Convert to cents
+        count += item.qty ?? 1;
         continue;
       }
       
-      const data = priceData[item.appId];
+      const data = readPriceEntry(priceData, item);
       if (!data?.prices) continue;
 
       const prices = data.prices;
@@ -220,8 +328,8 @@ export async function initTradables(container) {
       }
 
       if (bestCurrent != null) {
-        total += bestCurrent;
-        count++;
+        total += bestCurrent * (item.qty ?? 1);
+        count += item.qty ?? 1;
       }
     }
 
@@ -233,7 +341,7 @@ export async function initTradables(container) {
    */
   function getItemPrice(item) {
     if (!item.appId) return Infinity;
-    const data = priceData[item.appId];
+    const data = readPriceEntry(priceData, item);
     if (!data?.prices) return Infinity;
     const prices = data.prices;
     const keyshopsEnabled = settings.keyshopsEnabled;
@@ -304,8 +412,8 @@ export async function initTradables(container) {
         </div>
         <div class="tradables-stats">
           <div class="stat-block">
-            <span class="stat-value" id="t-total-count">${tradablesList.length}</span>
-            <span class="stat-label">Games</span>
+            <span class="stat-value" id="t-total-count">${tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0)}</span>
+            <span class="stat-label" id="t-total-count-label">Games ${tradablesList.length !== tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0) ? `<span class="stat-unique">(${tradablesList.length} unique)</span>` : ''}</span>
           </div>
           <div class="stat-block">
             <span class="stat-value" id="t-total-value">—</span>
@@ -316,6 +424,7 @@ export async function initTradables(container) {
             <span class="stat-label">Priced</span>
           </div>
         </div>
+        ${priceError ? `<div class="tradables-warning">Price warning: ${escapeHtml(priceError.split('\n')[0])}</div>` : ''}
         <div class="tradables-list" id="t-list"></div>
         <div class="tradables-footer">
           <div id="t-snapshots-section" style="display:none; margin-top:8px;">
@@ -343,16 +452,21 @@ export async function initTradables(container) {
       listEl.innerHTML = '<div class="tradables-empty">No tradables found.</div>';
     } else {
       listEl.innerHTML = filteredSorted.map((item, i) => {
-        const itemPriceData = item.appId ? priceData[item.appId] : null;
+        const itemPriceData = item.appId ? readPriceEntry(priceData, item) : null;
         const priceBadge = renderPriceBadge(itemPriceData, settings, item);
         
         return `
           <div class="tradables-item" data-orig-index="${item._origIndex}" data-appid="${item.appId || ''}">
+            <div class="tradables-qty" data-orig-index="${item._origIndex}">
+              <button class="tradables-qty-arrow tradables-qty-up" data-orig-index="${item._origIndex}" aria-label="Increase quantity">▲</button>
+              <input type="number" min="1" max="999" class="tradables-qty-input" value="${item.qty ?? 1}" data-orig-index="${item._origIndex}" title="Quantity">
+              <button class="tradables-qty-arrow tradables-qty-down" data-orig-index="${item._origIndex}" aria-label="Decrease quantity">▼</button>
+            </div>
             <div class="tradables-item-main">
               <span class="tradables-name">${escapeHtml(item.name)}</span>
               <div class="tradables-item-meta">
                 ${item.appId
-                  ? `<span class="tradables-appid">#${item.appId}</span>`
+                  ? `<span class="tradables-appid">${item.type === 'bundle' ? 'Bundle' : item.type === 'sub' ? 'Sub' : 'App'} #${item.appId}</span>`
                   : `<span class="tradables-unresolved tradables-resolve-link" data-orig-index="${item._origIndex}" title="Click to search for this game">unresolved ↗</span>`
                 }
                 ${priceBadge}
@@ -394,9 +508,11 @@ export async function initTradables(container) {
       btn.textContent = '↻ Loading…';
       btn.disabled = true;
       try {
-        await fetchPrices();
-        render();
-        updateStats();
+        await fetchPrices({ refresh: true });
+        if (isCurrentInit()) {
+          render();
+          updateStats();
+        }
       } catch (err) {
         console.error('Refresh failed:', err);
       }
@@ -407,13 +523,18 @@ export async function initTradables(container) {
     container.querySelector('#t-add-btn').addEventListener('click', (e) => {
       e.stopPropagation();
       if (modal) modal.destroy();
-      modal = createBulkImportModal(async (newTradables) => {
-        tradablesList = [...tradablesList, ...newTradables];
+      modal = createBulkImportModal(async ({ additions, increments }) => {
+        for (const inc of increments ?? []) {
+          if (tradablesList[inc.index]) {
+            tradablesList[inc.index].qty = Math.max(1, parseInt(tradablesList[inc.index].qty) || 1) + inc.amount;
+          }
+        }
+        tradablesList = [...tradablesList, ...(additions ?? [])];
         await save();
         await fetchPrices();
         render();
         updateStats();
-      });
+      }, { existingTradables: tradablesList });
     });
 
     // Undo button (Phase 4D: ensure undo bar renders outside the loop)
@@ -469,6 +590,40 @@ export async function initTradables(container) {
       });
     });
 
+    listEl.querySelectorAll('.tradables-qty-arrow').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const origIdx = parseInt(btn.dataset.origIndex);
+        const item = tradablesList[origIdx];
+        if (!item) return;
+        const delta = btn.classList.contains('tradables-qty-up') ? 1 : -1;
+        let qty = (item.qty ?? 1) + delta;
+        if (qty < 1) qty = 1;
+        if (qty > 999) qty = 999;
+        item.qty = qty;
+        debouncedSave();
+        render();
+        updateStats();
+      });
+    });
+
+    listEl.querySelectorAll('.tradables-qty-input').forEach(input => {
+      input.addEventListener('change', async (e) => {
+        e.stopPropagation();
+        const origIdx = parseInt(input.dataset.origIndex);
+        const item = tradablesList[origIdx];
+        if (!item) return;
+        let qty = parseInt(input.value) || 1;
+        if (qty < 1) qty = 1;
+        if (qty > 999) qty = 999;
+        input.value = qty;
+        item.qty = qty;
+        debouncedSave();
+        render();
+        updateStats();
+      });
+    });
+
     // Resolve unresolved games — click to search and pick a match
     listEl.querySelectorAll('.tradables-resolve-link').forEach(link => {
       link.addEventListener('click', async (e) => {
@@ -479,27 +634,35 @@ export async function initTradables(container) {
 
         // Build a tiny search popover
         const popover = document.createElement('div');
-        popover.className = 'stpt-candidates';
-        popover.style.minWidth = '260px';
+        popover.className = 'tradables-resolve-popover';
+        
+        const isBundle = item.type === 'bundle';
+        const bundleGuidance = isBundle ? `
+          <div class="trp-bundle-guidance">
+            <div class="trp-bundle-warning">⚠️ Bundles cannot be searched by name.</div>
+            <div class="trp-bundle-help">Paste a Steam bundle URL to resolve:</div>
+            <code class="trp-bundle-url">https://store.steampowered.com/bundle/&lt;id&gt;/&lt;name&gt;/</code>
+            <a href="https://store.steampowered.com/search/?term=${encodeURIComponent(item.name)}" target="_blank" class="trp-bundle-search-link">Search on Steam ↗</a>
+          </div>
+        ` : '';
+        
         popover.innerHTML = `
-          <div style="color:#888;font-size:9px;padding:3px 5px 5px;border-bottom:1px solid #1e1e2e;margin-bottom:3px;">
+          <div class="trp-header">
             Search for "${escapeHtml(item.name)}"
           </div>
-          <div style="padding:5px;">
-            <input type="text" class="tradables-resolve-search" placeholder="Search Steam..." value="${escapeHtml(item.name)}"
-              style="width:100%;padding:4px 6px;border:1px solid #333;border-radius:3px;background:#1e1e2e;color:#cdd6f4;font-size:11px;box-sizing:border-box;">
+          ${bundleGuidance}
+          <div class="trp-search-wrap">
+            <input type="text" class="tradables-resolve-search" placeholder="Search Steam or paste URL..." value="${escapeHtml(item.name)}">
           </div>
-          <div class="tradables-resolve-results" style="max-height:150px;overflow-y:auto;"></div>
-          <div class="stpt-cand-item stpt-cand-dismiss" style="margin-top:2px;">Cancel</div>
+          <div class="tradables-resolve-results"></div>
+          <div class="trp-cancel">Cancel</div>
         `;
 
         // Position near the clicked link
         const rect = link.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
-        popover.style.position = 'absolute';
         popover.style.left = `${rect.left - containerRect.left}px`;
         popover.style.top = `${rect.bottom - containerRect.top + 4}px`;
-        popover.style.zIndex = '9999';
         container.style.position = 'relative';
         container.appendChild(popover);
 
@@ -511,9 +674,37 @@ export async function initTradables(container) {
 
         let searchTimeout = null;
         const performSearch = async (query) => {
+          // Check if query is a Steam URL
+          const steamUrl = parseSteamStoreUrl(query);
+          if (steamUrl) {
+            resultsContainer.innerHTML = '';
+            const resultItem = document.createElement('div');
+            resultItem.className = 'trp-result-item trp-url-result';
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = `Use ${steamUrl.type} ${steamUrl.id}`;
+            const metaSpan = document.createElement('span');
+            metaSpan.style.color = '#66c0f4';
+            metaSpan.style.fontSize = '9px';
+            metaSpan.textContent = steamUrl.type.charAt(0).toUpperCase() + steamUrl.type.slice(1);
+            resultItem.append(nameSpan, metaSpan);
+            resultItem.addEventListener('click', async () => {
+              item.appId = steamUrl.id;
+              item.type = steamUrl.type;
+              await save();
+              popover.remove();
+              await fetchPrices();
+              render();
+              updateStats();
+            });
+            resultsContainer.appendChild(resultItem);
+            return;
+          }
+
           resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">Searching...</div>';
+          const searchSeq = ++searchSequence;
           try {
             const results = await msg('SEARCH_STEAM', { query });
+            if (searchSequence !== searchSeq) return;
             resultsContainer.innerHTML = '';
             if (!results.items?.length) {
               resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">No results</div>';
@@ -521,12 +712,20 @@ export async function initTradables(container) {
             }
             results.items.forEach(r => {
               const resultItem = document.createElement('div');
-              resultItem.className = 'stpt-cand-item';
-              resultItem.innerHTML = `<span>${r.name}</span><span style="color:#555;font-size:9px;">App ${r.id}</span>`;
+              resultItem.className = 'trp-result-item';
+              const nameSpan = document.createElement('span');
+              nameSpan.textContent = r.name ?? `App ${r.id}`;
+              const metaSpan = document.createElement('span');
+              metaSpan.style.color = '#555';
+              metaSpan.style.fontSize = '9px';
+              const itemType = r.type === 'bundle' ? 'Bundle' : r.type === 'sub' ? 'Sub' : 'App';
+              metaSpan.textContent = `${itemType} ${r.id}`;
+              resultItem.append(nameSpan, metaSpan);
               resultItem.addEventListener('click', async () => {
                 // Update the tradable with the new name and appId
                 item.name = r.name;
                 item.appId = String(r.id);
+                item.type = r.type ?? 'app';
                 await save();
                 popover.remove();
                 await fetchPrices();
@@ -550,7 +749,7 @@ export async function initTradables(container) {
         // Auto-search on open
         if (item.name && item.name.length >= 2) performSearch(item.name);
 
-        popover.querySelector('.stpt-cand-dismiss').addEventListener('click', () => popover.remove());
+        popover.querySelector('.trp-cancel').addEventListener('click', () => popover.remove());
         setTimeout(() => document.addEventListener('click', () => popover.remove(), { once: true }), 0);
         setTimeout(() => { searchInput.focus(); searchInput.select(); }, 0);
       });
@@ -636,16 +835,24 @@ export async function initTradables(container) {
   function updateStats() {
     const valueEl = container.querySelector('#t-total-value');
     const countEl = container.querySelector('#t-prices-count');
-    
+    const totalCountEl = container.querySelector('#t-total-count');
+    const totalCountLabelEl = container.querySelector('#t-total-count-label');
+
     if (!valueEl || !countEl) return;
 
     const pricedCount = tradablesList.filter(item => {
       if (!item.appId) return false;
-      const data = priceData[item.appId];
+      const data = readPriceEntry(priceData, item);
       return data?.prices?.currentRetail != null || data?.prices?.currentKeyshops != null;
     }).length;
 
     countEl.textContent = pricedCount;
+
+    const totalQty = tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0);
+    if (totalCountEl) totalCountEl.textContent = totalQty;
+    if (totalCountLabelEl) {
+      totalCountLabelEl.innerHTML = `Games ${totalQty !== tradablesList.length ? `<span class="stat-unique">(${tradablesList.length} unique)</span>` : ''}`;
+    }
 
     if (!settings.apiKey) {
       valueEl.textContent = '—';
@@ -671,38 +878,33 @@ export async function initTradables(container) {
     await msg('SAVE_TRADABLES', { tradables: tradablesList });
   }
 
-  // Listen for PRICE_UPDATED broadcasts (Phase 6B)
-  const priceUpdatedListener = (message) => {
-    if (message.type === 'PRICE_UPDATED' && message.appId && message.priceData) {
-      const region = message.region || settings.regions?.[0];
-      if (region && message.priceData) {
-        priceData[message.appId] = message.priceData;
-        render();
-        updateStats();
-      }
-    }
-  };
-  chrome.runtime.onMessage.addListener(priceUpdatedListener);
-
-  // Listen for SETTINGS_UPDATED — update currency and re-render
-  const settingsUpdatedListener = (message) => {
-    if (message.type !== 'SETTINGS_UPDATED') return;
-    Object.assign(settings, message.settings);
-    currency = settings.currency || 'EUR';
-    currencySymbol = currency === 'USD' ? '$' : '€';
-    render();
-    updateStats();
-  };
-  chrome.runtime.onMessage.addListener(settingsUpdatedListener);
+  if (!bindTradablesRuntimeStateForInit(isCurrentInit, {
+    settings,
+    priceData,
+    render,
+    updateStats,
+    onSettingsUpdated: () => {
+      currency = settings.currency || 'EUR';
+      currencySymbol = currency === 'USD' ? '$' : '€';
+    },
+  })) return;
+  ensureTradablesRuntimeListeners();
 
   // Initial: load cached prices first (fast, no API call), render immediately
   await loadCachedPrices();
+  if (!isCurrentInit()) return;
   render();
   updateStats();
 
   // Then optionally refresh from API to get latest prices
-  fetchPrices().then(() => {
-    render();
-    updateStats();
-  }).catch(console.error);
+  (async () => {
+    try {
+      await fetchPrices();
+      if (!isCurrentInit()) return;
+      render();
+      updateStats();
+    } catch (err) {
+      console.error(err);
+    }
+  })();
 }

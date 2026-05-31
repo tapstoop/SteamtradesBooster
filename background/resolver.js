@@ -1,6 +1,6 @@
 // background/resolver.js
 import { cacheGet, cacheSet, isDismissed, isDelisted } from './cache.js';
-import { normalizeTitle, wordSimilarity } from '../utils/similarity.js';
+import { normalizeTitle, wordSimilarity, normalizeSteamType } from '../utils/similarity.js';
 
 // Re-export for backwards compatibility and tests
 export { normalizeTitle, wordSimilarity };
@@ -8,6 +8,84 @@ export { normalizeTitle, wordSimilarity };
 const STEAM_SEARCH = 'https://store.steampowered.com/api/storesearch/';
 const RESOLVE_TTL = 0; // permanent
 const SIMILARITY_THRESHOLD = 0.85; // 85% word overlap for fuzzy matching
+const RESOLVE_REQUEST_INTERVAL_MS = 200;
+let lastResolveRequestAt = 0;
+
+async function rateLimitedFetch(url) {
+  const now = Date.now();
+  const waitMs = Math.max(0, RESOLVE_REQUEST_INTERVAL_MS - (now - lastResolveRequestAt));
+  if (waitMs > 0) {
+    await new Promise(r => setTimeout(r, waitMs));
+  }
+  lastResolveRequestAt = Date.now();
+  return fetch(url);
+}
+
+function resolutionValue(id, type = 'app') {
+  return { appId: String(id), type: normalizeSteamType(type) };
+}
+
+function readResolutionValue(value) {
+  if (!value) return null;
+  if (typeof value === 'object') {
+    const appId = value.appId ?? value.id;
+    if (!appId) return null;
+    return { appId: String(appId), type: normalizeSteamType(value.type) };
+  }
+  return { appId: String(value), type: 'app' };
+}
+
+function resultFromCache(value, status, cacheKey, extra = {}) {
+  const resolved = readResolutionValue(value);
+  if (!resolved) return null;
+  return { ...resolved, status, cacheKey, ...extra };
+}
+
+function candidateFromItem(item) {
+  return {
+    id: String(item.id),
+    name: item.name,
+    type: normalizeSteamType(item.type),
+  };
+}
+
+function stripEditionNoise(title) {
+  return title
+    .replace(/\s*[-–—:]\s*(deluxe|ultimate|complete|collector'?s|goty|game of the year|definitive|enhanced|gold|premium|standard)\s+edition\b.*$/i, '')
+    .replace(/\s*\b(deluxe|ultimate|complete|collector'?s|goty|game of the year|definitive|enhanced|gold|premium|standard)\s+edition\b.*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
+
+function getSearchTerms(title) {
+  const terms = [title, stripEditionNoise(title)];
+  const punctuationLight = title
+    .replace(/[™®]/g, '')
+    .replace(/[–—]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+  terms.push(punctuationLight, stripEditionNoise(punctuationLight));
+
+  const bundleMatch = title.match(BUNDLE_KEYWORDS);
+  if (bundleMatch) {
+    const withoutKeyword = title.replace(BUNDLE_KEYWORDS, '').replace(/\s+/g, ' ').trim();
+    if (withoutKeyword && withoutKeyword.length >= 3) {
+      terms.push(`${withoutKeyword} bundle`);
+    }
+  }
+
+  return [...new Set(terms.filter(t => t && t.length >= 2))];
+}
+
+async function fetchSteamItems(term) {
+  const url = `${STEAM_SEARCH}?term=${encodeURIComponent(term)}&l=english&cc=us`;
+  const resp = await rateLimitedFetch(url);
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  return data.items ?? [];
+}
 
 /**
  * @returns {{ appId: string, status: 'hit'|'resolved' }
@@ -30,11 +108,11 @@ export async function resolveTitle(title) {
     const confirmed = await cacheGet(`${key}:confirmed`);
     if (confirmed?.value) {
       const confirmedTitle = await cacheGet(`${key}:confirmed:title`);
-      return { status: 'delisted', cacheKey: key, appId: String(confirmed.value), title: confirmedTitle?.value };
+      return resultFromCache(confirmed.value, 'delisted', key, { title: confirmedTitle?.value });
     }
     const cached = await cacheGet(key);
     if (cached?.value) {
-      return { status: 'delisted', cacheKey: key, appId: String(cached.value) };
+      return resultFromCache(cached.value, 'delisted', key);
     }
     return { status: 'delisted', cacheKey: key };
   }
@@ -43,77 +121,100 @@ export async function resolveTitle(title) {
   const confirmed = await cacheGet(`${key}:confirmed`);
   if (confirmed?.value) {
     const confirmedTitle = await cacheGet(`${key}:confirmed:title`);
-    return { appId: String(confirmed.value), status: 'hit', cacheKey: key, title: confirmedTitle?.value };
+    return resultFromCache(confirmed.value, 'hit', key, { title: confirmedTitle?.value });
   }
 
   // Check resolved cache
   const cached = await cacheGet(key);
-  if (cached?.value) return { appId: String(cached.value), status: 'hit', cacheKey: key };
+  if (cached?.value) return resultFromCache(cached.value, 'hit', key);
 
-  // Fetch from Steam
-  const url = `${STEAM_SEARCH}?term=${encodeURIComponent(title)}&l=english&cc=us`;
-  let items = [];
-  try {
-    const resp = await fetch(url);
-    if (!resp.ok) return { status: 'not-found', cacheKey: key };
-    const data = await resp.json();
-    items = data.items ?? [];
-  } catch {
-    return { status: 'not-found', cacheKey: key };
-  }
+  let bestExactMatch = null;
+  let bestFuzzyResult = null;
+  let bestFuzzyScore = 0;
+  let bestAmbiguous = null;
+  let bestAmbiguousScore = 0;
+  let sawItems = false;
 
-  if (items.length === 0) return { status: 'not-found', cacheKey: key };
+  for (const term of getSearchTerms(title)) {
+    let items;
+    try {
+      items = await fetchSteamItems(term);
+    } catch {
+      continue;
+    }
+    if (items.length === 0) continue;
+    sawItems = true;
 
-  // Single result or top result matches closely
-  if (items.length === 1) {
-    await cacheSet(key, String(items[0].id), RESOLVE_TTL);
-    return { appId: String(items[0].id), status: 'resolved', cacheKey: key };
-  }
+    const normalizedTerm = normalizeTitle(term);
+    const isOriginalTerm = normalizedTerm === normalizeTitle(title);
 
-  // Check if any result is an exact match — pick it over showing ambiguous
-  const normalizedQuery = normalizeTitle(title);
-  const exactMatch = items.find(item => normalizeTitle(item.name) === normalizedQuery);
-  if (exactMatch) {
-    await cacheSet(key, String(exactMatch.id), RESOLVE_TTL);
-    return { appId: String(exactMatch.id), status: 'resolved', cacheKey: key };
-  }
+    // Exact match for this search term
+    const exactMatch = items.find(item => normalizeTitle(item.name) === normalizedTerm);
+    if (exactMatch) {
+      // Prefer exact match on the original title; otherwise keep first found
+      if (!bestExactMatch || isOriginalTerm) {
+        bestExactMatch = { item: exactMatch, isOriginalTerm };
+      }
+    }
 
-  // No exact match — try fuzzy matching
-  let bestMatch = null;
-  let bestScore = 0;
+    // Fuzzy match for this term
+    let termBestMatch = null;
+    let termBestScore = 0;
+    for (const item of items) {
+      const score = wordSimilarity(term, item.name);
+      if (score > termBestScore) {
+        termBestScore = score;
+        termBestMatch = item;
+      }
+    }
 
-  for (const item of items) {
-    const score = wordSimilarity(title, item.name);
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = item;
+    if (termBestMatch && termBestScore >= SIMILARITY_THRESHOLD) {
+      if (termBestScore > bestFuzzyScore || (!bestFuzzyResult && !bestExactMatch)) {
+        bestFuzzyScore = termBestScore;
+        bestFuzzyResult = { item: termBestMatch, score: termBestScore, isOriginalTerm };
+      }
+    }
+
+    if (termBestScore > bestAmbiguousScore) {
+      bestAmbiguousScore = termBestScore;
+      bestAmbiguous = items;
+    } else if (!bestAmbiguous) {
+      bestAmbiguous = items;
     }
   }
 
-  if (bestMatch && bestScore >= SIMILARITY_THRESHOLD) {
-    // High confidence match — auto-resolve with fuzzy status
-    await cacheSet(key, String(bestMatch.id), RESOLVE_TTL);
+  // Return best exact match if found (on any term, preferring original)
+  if (bestExactMatch) {
+    const value = resolutionValue(bestExactMatch.item.id, bestExactMatch.item.type);
+    await cacheSet(key, value, RESOLVE_TTL);
+    return { ...value, status: 'resolved', cacheKey: key };
+  }
+
+  // Return best fuzzy match if found (with sufficient similarity)
+  if (bestFuzzyResult) {
+    const value = resolutionValue(bestFuzzyResult.item.id, bestFuzzyResult.item.type);
+    await cacheSet(key, value, RESOLVE_TTL);
     return {
-      appId: String(bestMatch.id),
+      ...value,
       status: 'resolved',
       fuzzy: true,
-      similarity: Math.round(bestScore * 100),
-      title: bestMatch.name,
-      cacheKey: key
+      similarity: Math.round(bestFuzzyResult.score * 100),
+      title: bestFuzzyResult.item.name,
+      cacheKey: key,
     };
   }
 
-  // No good match — multiple candidates, let user pick
+  if (!sawItems) return { status: 'not-found', cacheKey: key };
   return {
     status: 'ambiguous',
-    candidates: items.slice(0, 5).map(i => ({ id: String(i.id), name: i.name })),
+    candidates: (bestAmbiguous ?? []).slice(0, 5).map(candidateFromItem),
     cacheKey: key,
   };
 }
 
 /** Called when user confirms a candidate from the ? badge dropdown */
-export async function confirmResolution(cacheKey, appId, title) {
-  await cacheSet(`${cacheKey}:confirmed`, appId, 0);
+export async function confirmResolution(cacheKey, appId, title, type = 'app') {
+  await cacheSet(`${cacheKey}:confirmed`, resolutionValue(appId, type), 0);
   if (title) {
     await cacheSet(`${cacheKey}:confirmed:title`, title, 0);
   }

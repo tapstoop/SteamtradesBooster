@@ -2,25 +2,105 @@
 
 /**
  * Parse bulk input string into array of non-empty trimmed entries.
-   * Supports comma, newline, or mixed separation.
-   */
-  export function parseInput(input) {
-    if (!input || !input.trim()) return [];
-    return input
-      .split(/[,\r\n]+/)
-      .map(s => s.trim())
-      .filter(Boolean);
+ * Supports newline-separated and comma-separated entries while preserving
+ * comma-thousands inside title text, such as "Warhammer 40,000".
+ */
+export function parseInput(input) {
+  if (!input || !input.trim()) return [];
+  return input
+    .split(/\r?\n/)
+    .flatMap(splitInputLine)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function splitInputLine(line) {
+  const numericCsv = /^\s*\d+(?:\s*,\s*\d+)+\s*$/.test(line);
+  if (numericCsv) {
+    return line.split(',');
   }
 
+  const entries = [];
+  let token = '';
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char !== ',') {
+      token += char;
+      continue;
+    }
+
+    if (isThousandsComma(line, i, token)) {
+      token += char;
+      continue;
+    }
+
+    entries.push(token);
+    token = '';
+
+    while (line[i + 1] === ',' || /\s/.test(line[i + 1] || '')) {
+      i++;
+    }
+  }
+
+  entries.push(token);
+  return entries;
+}
+
+function isThousandsComma(line, commaIndex, token) {
+  const before = line.slice(0, commaIndex).match(/(\d+)$/)?.[1] ?? '';
+  const after = line.slice(commaIndex + 1).match(/^(\d+)/)?.[1] ?? '';
+  const afterEnd = commaIndex + 1 + after.length;
+  const tokenHasText = /[^\d\s]/.test(token);
+
+  return (
+    tokenHasText &&
+    before.length >= 1 &&
+    before.length <= 3 &&
+    after.length === 3 &&
+    !/\d/.test(line[afterEnd] || '')
+  );
+}
+
+const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
+
 /**
- * Classify a parsed entry as either an App ID (pure numeric) or a game name.
+ * Check if a game name contains bundle-indicating keywords
+ * such as "collection", "bundle", "pack", etc.
+ */
+export function hasBundleKeywords(name) {
+  return BUNDLE_KEYWORDS.test(name);
+}
+
+/**
+ * Classify a parsed entry as a typed Steam entity, App ID, or game name.
  */
 export function classifyEntry(entry) {
   const trimmed = entry.trim();
+  const steamUrl = parseSteamStoreUrl(trimmed);
+  if (steamUrl) {
+    return { type: 'typedId', value: steamUrl.id, itemType: steamUrl.type, raw: trimmed };
+  }
   if (/^\d+$/.test(trimmed)) {
     return { type: 'appId', value: trimmed };
   }
   return { type: 'name', value: trimmed };
+}
+
+export function parseSteamStoreUrl(entry) {
+  let url;
+  try {
+    url = new URL(entry);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host !== 'store.steampowered.com' && host !== 'steampowered.com' && !host.endsWith('.steampowered.com')) {
+    return null;
+  }
+  const match = url.pathname.match(/^\/(app|bundle|sub)\/(\d+)(?:\/|$)/);
+  if (!match) return null;
+  return { type: match[1], id: match[2] };
 }
 
 /**

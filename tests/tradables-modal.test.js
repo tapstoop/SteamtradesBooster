@@ -1,9 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   categorizeResults,
+  categorizeSingle,
   filterVisible,
+  getEntriesToAdd,
   getAddCount,
-  toggleAllVisible
+  toggleAllVisible,
+  findDuplicateTradables,
+  prepareTradablesToAdd,
+  dedupeTradableEntries,
+  buildPreviewItemHtml
 } from '../popup/tradables-bulk-modal.js';
 
 describe('categorizeResults', () => {
@@ -77,6 +83,27 @@ describe('getAddCount', () => {
   });
 });
 
+describe('getEntriesToAdd', () => {
+  it('excludes entries hidden by inactive filters', () => {
+    const entries = [
+      { category: 'exact', checked: true, visible: true, matchedName: 'Hollow Knight' },
+      { category: 'notfound', checked: true, visible: true, raw: 'Unknown Game' }
+    ];
+
+    expect(getEntriesToAdd(entries, new Set(['exact']))).toEqual([
+      { category: 'exact', checked: true, visible: true, matchedName: 'Hollow Knight' }
+    ]);
+  });
+
+  it('excludes unchecked unresolved entries', () => {
+    const entries = [
+      { category: 'notfound', checked: false, visible: true, raw: 'Unknown Game' }
+    ];
+
+    expect(getEntriesToAdd(entries, new Set(['notfound']))).toEqual([]);
+  });
+});
+
 describe('toggleAllVisible', () => {
   it('checks all visible entries', () => {
     const entries = [
@@ -96,5 +123,270 @@ describe('toggleAllVisible', () => {
     const result = toggleAllVisible(entries, false);
     expect(result[0].checked).toBe(false);
     expect(result[1].checked).toBe(false);
+  });
+});
+
+describe('duplicate tradables', () => {
+  it('dedupes same-batch typed entries before preparing additions', () => {
+    const entries = [
+      { matchedName: 'Hollow Knight', appId: '367520', type: 'app' },
+      { matchedName: 'Hollow Knight duplicate', appId: '367520', type: 'app' },
+      { matchedName: 'Hollow Knight Bundle', appId: '367520', type: 'bundle' },
+    ];
+
+    expect(dedupeTradableEntries(entries)).toEqual([
+      entries[0],
+      entries[2],
+    ]);
+
+    expect(prepareTradablesToAdd(entries, [], 'skip').additions).toEqual([
+      { name: 'Hollow Knight', appId: '367520', type: 'app', qty: 1 },
+      { name: 'Hollow Knight Bundle', appId: '367520', type: 'bundle', qty: 1 },
+    ]);
+  });
+
+  it('detects duplicates by app id', () => {
+    const duplicates = findDuplicateTradables(
+      [{ matchedName: 'Hollow Knight', appId: '367520', type: 'app' }],
+      [{ name: 'Hollow Knight', appId: '367520', type: 'app', qty: 1 }]
+    );
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].index).toBe(0);
+  });
+
+  it('keeps app, bundle, and sub duplicate keys distinct for the same numeric id', () => {
+    const duplicates = findDuplicateTradables(
+      [
+        { matchedName: 'App Item', appId: '123', type: 'app' },
+        { matchedName: 'Bundle Item', appId: '123', type: 'bundle' },
+        { matchedName: 'Sub Item', appId: '123', type: 'sub' },
+      ],
+      [
+        { name: 'Existing Bundle', appId: '123', type: 'bundle', qty: 1 },
+      ]
+    );
+
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].entry.type).toBe('bundle');
+    expect(duplicates[0].index).toBe(0);
+  });
+
+  it('falls back to normalized title for unresolved duplicates', () => {
+    const duplicates = findDuplicateTradables(
+      [{ raw: 'Warhammer 40,000' }],
+      [{ name: 'Warhammer 40000', appId: null, qty: 1 }]
+    );
+    expect(duplicates).toHaveLength(1);
+  });
+
+  it('detects resolved imports that match unresolved existing tradables by title', () => {
+    const duplicates = findDuplicateTradables(
+      [{ raw: 'Hollow Knight', matchedName: 'Hollow Knight', appId: '367520', type: 'app' }],
+      [{ name: 'Hollow Knight', appId: null, qty: 1 }]
+    );
+
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].index).toBe(0);
+  });
+
+  it('prepares increments instead of duplicate additions', () => {
+    const prepared = prepareTradablesToAdd(
+      [
+        { matchedName: 'Hollow Knight', appId: '367520', type: 'app' },
+        { matchedName: 'Celeste', appId: '504230', type: 'app' },
+      ],
+      [{ name: 'Hollow Knight', appId: '367520', type: 'app', qty: 1 }],
+      'increment'
+    );
+    expect(prepared.increments).toEqual([{ index: 0, amount: 1, name: 'Hollow Knight' }]);
+    expect(prepared.additions).toEqual([{ name: 'Celeste', appId: '504230', type: 'app', qty: 1 }]);
+  });
+
+  it('skips resolved imports that duplicate unresolved existing tradables by title', () => {
+    const prepared = prepareTradablesToAdd(
+      [
+        { raw: 'Hollow Knight', matchedName: 'Hollow Knight', appId: '367520', type: 'app' },
+        { matchedName: 'Celeste', appId: '504230', type: 'app' },
+      ],
+      [{ name: 'Hollow Knight', appId: null, qty: 1 }],
+      'skip'
+    );
+
+    expect(prepared.duplicates).toHaveLength(1);
+    expect(prepared.additions).toEqual([{ name: 'Celeste', appId: '504230', type: 'app', qty: 1 }]);
+  });
+
+  it('prepares app, bundle, and sub additions independently when ids collide', () => {
+    const prepared = prepareTradablesToAdd(
+      [
+        { matchedName: 'App Item', appId: '123', type: 'app' },
+        { matchedName: 'Bundle Item', appId: '123', type: 'bundle' },
+        { matchedName: 'Sub Item', appId: '123', type: 'sub' },
+      ],
+      [{ name: 'Existing Bundle', appId: '123', type: 'bundle', qty: 1 }],
+      'skip'
+    );
+
+    expect(prepared.duplicates).toHaveLength(1);
+    expect(prepared.additions).toEqual([
+      { name: 'App Item', appId: '123', type: 'app', qty: 1 },
+      { name: 'Sub Item', appId: '123', type: 'sub', qty: 1 },
+    ]);
+  });
+});
+
+describe('categorizeSingle', () => {
+  it('categorizes hit as exact', () => {
+    expect(categorizeSingle({ status: 'hit', appId: '367520' }).category).toBe('exact');
+  });
+
+  it('categorizes resolved as exact', () => {
+    expect(categorizeSingle({ status: 'resolved', appId: '367520' }).category).toBe('exact');
+  });
+
+  it('categorizes appid-resolved as appid', () => {
+    expect(categorizeSingle({ status: 'appid-resolved', appId: '236850' }).category).toBe('appid');
+  });
+
+  it('categorizes ambiguous >= 90 as fuzzy-auto', () => {
+    expect(categorizeSingle({ status: 'ambiguous', confidence: 95 }).category).toBe('fuzzy-auto');
+  });
+
+  it('categorizes ambiguous < 90 as fuzzy-manual', () => {
+    expect(categorizeSingle({ status: 'ambiguous', confidence: 75 }).category).toBe('fuzzy-manual');
+  });
+
+  it('all entries default to checked and visible', () => {
+    const result = categorizeSingle({ status: 'hit', appId: '367520' });
+    expect(result.checked).toBe(true);
+    expect(result.visible).toBe(true);
+  });
+});
+
+describe('buildPreviewItemHtml', () => {
+  it('escapes dynamic content in preview entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: '<img src=x onerror=alert(1)>',
+      matchedName: 'Bad "Name"',
+      appId: '123',
+      confidence: 95,
+      checked: true,
+    }, 0, '#fff');
+
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).toContain('Bad &quot;Name&quot;');
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
+  });
+
+  it('shows bundle hint for not-found entries with bundle keywords', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Asterix & Obelix XXL Collection',
+      matchedName: 'Asterix & Obelix XXL Collection',
+      category: 'notfound',
+      status: 'not-found',
+      checked: true,
+    }, 0, '#e74c3c');
+
+    expect(html).toContain('preview-bundle-hint');
+    expect(html).toContain('Paste the Steam bundle URL');
+  });
+
+  it('does not show bundle hint for not-found entries without bundle keywords', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Hollow Knight',
+      matchedName: 'Hollow Knight',
+      category: 'notfound',
+      status: 'not-found',
+      checked: true,
+    }, 0, '#e74c3c');
+
+    expect(html).not.toContain('preview-bundle-hint');
+  });
+
+  it('shows soft bundle hint for fuzzy entries with bundle keywords', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Valve Complete Pack',
+      matchedName: 'Valve Complete Pack',
+      category: 'fuzzy-manual',
+      status: 'ambiguous',
+      confidence: 75,
+      checked: true,
+    }, 0, '#e67e22');
+
+    expect(html).toContain('preview-bundle-hint');
+    expect(html).toContain('preview-bundle-hint-soft');
+    expect(html).toContain('may be a bundle');
+  });
+
+  it('does not show bundle hint for exact entries with bundle keywords', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Asterix & Obelix XXL Collection',
+      matchedName: 'Asterix & Obelix XXL Collection',
+      category: 'exact',
+      status: 'hit',
+      appId: '12345',
+      checked: true,
+    }, 0, '#a1cd44');
+
+    expect(html).not.toContain('preview-bundle-hint');
+  });
+
+  it('fallback to matchedName when raw is absent', () => {
+    const html = buildPreviewItemHtml({
+      matchedName: 'Starter Pack',
+      category: 'notfound',
+      status: 'not-found',
+      checked: true,
+    }, 0, '#e74c3c');
+
+    expect(html).toContain('preview-bundle-hint');
+  });
+
+  it('shows resolve button for fuzzy-manual entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Hollow Knight',
+      category: 'fuzzy-manual',
+      status: 'ambiguous',
+      checked: true,
+    }, 0, '#e67e22');
+
+    expect(html).toContain('preview-resolve-btn');
+    expect(html).toContain('resolve');
+  });
+
+  it('shows resolve button for notfound entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'asdfghjkl',
+      category: 'notfound',
+      status: 'not-found',
+      checked: true,
+    }, 0, '#e74c3c');
+
+    expect(html).toContain('preview-resolve-btn');
+  });
+
+  it('does not show resolve button for exact entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Hollow Knight',
+      matchedName: 'Hollow Knight',
+      category: 'exact',
+      status: 'hit',
+      appId: '367520',
+      checked: true,
+    }, 0, '#a1cd44');
+
+    expect(html).not.toContain('preview-resolve-btn');
+  });
+
+  it('does not show resolve button for appid entries', () => {
+    const html = buildPreviewItemHtml({
+      raw: '236850',
+      category: 'appid',
+      status: 'appid-resolved',
+      appId: '236850',
+      checked: true,
+    }, 0, '#66c0f4');
+
+    expect(html).not.toContain('preview-resolve-btn');
   });
 });

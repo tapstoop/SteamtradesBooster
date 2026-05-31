@@ -3,7 +3,7 @@
 
 import { sendMessage, formatPrice, formatTimestamp, formatFullTimestamp, closeAll, positionNear } from './ui-helpers.js';
 import { injectSkeleton, injectNotFoundBadge, injectDismissedBadge, injectDelistedBadge, replaceBadge } from './ui-badges.js';
-import { getDisplayRegion } from '../utils/similarity.js';
+import { getDisplayRegion, normalizeSteamType } from '../utils/similarity.js';
 
 function escapeHtml(str) {
   return String(str)
@@ -11,6 +11,61 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function normalizeGgDealsUrl(rawUrl) {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl, location.href);
+    const isGgDeals = parsed.hostname === 'gg.deals' || parsed.hostname.endsWith('.gg.deals');
+    if (parsed.protocol !== 'https:' || !isGgDeals || parsed.username || parsed.password) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function readTypedPrice(prices, id, type = 'app', region) {
+  if (!prices || !id) return null;
+  const normalizedType = normalizeSteamType(type);
+  const typed = prices[`${normalizedType}:${id}`]?.[region];
+  if (typed) return typed;
+  return normalizedType === 'app' ? prices[id]?.[region] ?? null : null;
+}
+
+
+
+export function anchorStillMatches(anchorEl, gameInfo, itemType) {
+  if (!document.body.contains(anchorEl)) return false;
+  const expectedType = normalizeSteamType(itemType);
+  return (
+    String(anchorEl.dataset.appid ?? '') === String(gameInfo.appId ?? '') &&
+    normalizeSteamType(anchorEl.dataset.itemType ?? gameInfo.type ?? 'app') === expectedType
+  );
+}
+
+export function buildPopoverRefreshRequest(gameInfo, settings) {
+  const itemType = gameInfo.type ?? gameInfo.resolution?.type ?? 'app';
+  return {
+    type: 'REFRESH_PRICES',
+    payload: { items: [{ id: gameInfo.appId, type: itemType }], regions: settings.regions },
+    itemType,
+  };
+}
+
+function appendErrorLogLink(container) {
+  const link = document.createElement('button');
+  link.type = 'button';
+  link.className = 'stpt-error-log-link';
+  link.textContent = 'See error logs';
+  link.addEventListener('click', async e => {
+    e.stopPropagation();
+    await sendMessage('OPEN_POPUP_TAB', { tab: 'settings', focus: 'error-log' });
+  });
+  container.appendChild(link);
+  return link;
 }
 
 // ── Candidate / Fuzzy / Not-found pickers ─────────────────────────────
@@ -28,11 +83,11 @@ export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
   candidates.forEach(c => {
     const item = document.createElement('div');
     item.className = 'stpt-cand-item';
-    item.innerHTML = `<span>${escapeHtml(c.name)}</span><span style="color:#555;font-size:9px;">App ${escapeHtml(c.id)}</span>`;
+    item.innerHTML = `<span>${escapeHtml(c.name)}</span><span style="color:#555;font-size:9px;">${escapeHtml(c.type === 'bundle' ? 'Bundle' : c.type === 'sub' ? 'Sub' : 'App')} ${escapeHtml(c.id)}</span>`;
     item.addEventListener('click', async () => {
       picker.remove();
-      await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: c.id, title: c.name });
-      rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: c.id, title: c.name, cacheKey } }));
+      await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: c.id, title: c.name, type: c.type ?? 'app' });
+      rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: c.id, title: c.name, cacheKey, type: c.type ?? 'app' } }));
     });
     picker.appendChild(item);
   });
@@ -52,6 +107,7 @@ export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
     injectDismissedBadge(rowEl, cacheKey, rowEl.dataset.stptTitle);
   });
   picker.appendChild(dismiss);
+  appendErrorLogLink(picker);
 
   positionNear(picker, anchorEl);
   setTimeout(() => document.addEventListener('click', () => picker.remove(), { once: true }), 0);
@@ -66,6 +122,7 @@ export function openFuzzyPicker(anchorEl, resolution) {
   header.style.cssText = 'color:#888;font-size:9px;padding:3px 5px 5px;border-bottom:1px solid #1e1e2e;margin-bottom:3px;';
   header.textContent = `Auto-matched (${resolution.similarity}% similar)`;
   picker.appendChild(header);
+  appendErrorLogLink(picker);
 
   const matchedItem = document.createElement('div');
   matchedItem.className = 'stpt-cand-item';
@@ -145,11 +202,12 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
       results.items.forEach(item => {
         const resultItem = document.createElement('div');
         resultItem.className = 'stpt-cand-item';
-        resultItem.innerHTML = `<span>${escapeHtml(item.name)}</span><span style="color:#555;font-size:9px;">App ${escapeHtml(String(item.id))}</span>`;
+        const type = item.type ?? 'app';
+        resultItem.innerHTML = `<span>${escapeHtml(item.name)}</span><span style="color:#555;font-size:9px;">${escapeHtml(type === 'bundle' ? 'Bundle' : type === 'sub' ? 'Sub' : 'App')} ${escapeHtml(String(item.id))}</span>`;
         resultItem.addEventListener('click', async () => {
           picker.remove();
-          await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: String(item.id), title: item.name });
-          rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: String(item.id), title: item.name, cacheKey } }));
+          await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: String(item.id), title: item.name, type });
+          rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: String(item.id), title: item.name, cacheKey, type } }));
         });
         resultsContainer.appendChild(resultItem);
       });
@@ -205,6 +263,7 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
     injectDelistedBadge(rowEl, cacheKey, title);
   });
   picker.appendChild(delisted);
+  appendErrorLogLink(picker);
 
   positionNear(picker, anchorEl);
 
@@ -240,8 +299,10 @@ export function openPopover(anchorEl, priceData, gameInfo) {
     }
   }
 
+  const safeUrl = normalizeGgDealsUrl(priceData?.url);
+  const safeTitle = escapeHtml(gameInfo.title ?? 'Unknown');
   pop.innerHTML = `
-    <div class="stpt-popover-title">${gameInfo.title ?? 'Unknown'}</div>
+    <div class="stpt-popover-title">${safeTitle}</div>
     ${cachedAt ? `
     <div class="stpt-popover-row stpt-popover-ts">
       <span class="stpt-popover-label">Updated</span>
@@ -272,17 +333,18 @@ export function openPopover(anchorEl, priceData, gameInfo) {
       <span class="stpt-popover-val atl" style="color:#7fff7f;font-weight:600;">${formatPrice(bestAtl, currency)}</span>
     </div>
     ` : ''}
-    ${priceData?.url ? `<a class="stpt-popover-link" href="${priceData.url}" target="_blank">View on GG.deals ↗</a>` : ''}
+    ${safeUrl ? `<a class="stpt-popover-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">View on GG.deals ↗</a>` : ''}
   `;
 
   // Acquisition price section for tradables
   if (gameInfo.tier === 2 && gameInfo.appId) {
     const acqSection = document.createElement('div');
     acqSection.className = 'stpt-acq-section';
+    const acqValue = Number.isFinite(gameInfo.acqPrice) ? (gameInfo.acqPrice / 100).toFixed(2) : '';
     acqSection.innerHTML = `
       <div style="color:#8a9bb0;margin-bottom:4px;">Acquisition price:</div>
       <input class="stpt-acq-input" type="number" step="0.01" placeholder="€0.00"
-             value="${gameInfo.acqPrice != null ? (gameInfo.acqPrice / 100).toFixed(2) : ''}">
+             value="${acqValue}">
       <button class="stpt-acq-save">Save</button>
       ${gameInfo.acqPrice != null && currentRetail != null ? `
         <div style="margin-top:6px;color:${currentRetail >= gameInfo.acqPrice ? '#7fff7f' : '#ff8888'}">
@@ -297,7 +359,11 @@ export function openPopover(anchorEl, priceData, gameInfo) {
     saveBtn.addEventListener('click', async () => {
       const val = parseFloat(acqSection.querySelector('.stpt-acq-input').value);
       if (!isNaN(val)) {
-        await sendMessage('SAVE_ACQ_PRICE', { appId: gameInfo.appId, price: Math.round(val * 100) });
+        await sendMessage('SAVE_ACQ_PRICE', {
+          appId: gameInfo.appId,
+          itemType: gameInfo.type ?? gameInfo.resolution?.type ?? 'app',
+          price: Math.round(val * 100),
+        });
         pop.remove();
       }
     });
@@ -317,10 +383,11 @@ export function openPopover(anchorEl, priceData, gameInfo) {
       refreshBtn.disabled = true;
       try {
         const s = await sendMessage('GET_SETTINGS');
-        const prices = await sendMessage('GET_PRICES', { appIds: [gameInfo.appId], regions: s.regions });
-        const freshPrice = prices[gameInfo.appId]?.[getDisplayRegion(s)] ?? null;
+        const refreshRequest = buildPopoverRefreshRequest(gameInfo, s);
+        const prices = await sendMessage(refreshRequest.type, refreshRequest.payload);
+        const freshPrice = readTypedPrice(prices, gameInfo.appId, refreshRequest.itemType, getDisplayRegion(s));
         const gameItem = anchorEl.closest('.stpt-game-item') ?? anchorEl.parentElement?.closest('.stpt-game-item');
-        if (gameItem) {
+        if (gameItem && anchorStillMatches(anchorEl, gameInfo, refreshRequest.itemType)) {
           gameItem.querySelectorAll('.stpt-skeleton, .stpt-badge').forEach(e => e.remove());
           replaceBadge(gameItem, freshPrice, { ...gameInfo, settings: s });
         }
@@ -384,7 +451,7 @@ export function openPopover(anchorEl, priceData, gameInfo) {
         gameItem.dispatchEvent(new CustomEvent('stpt-recheck', { bubbles: true, detail: { title: gameInfo.title, cacheKey: gameInfo.cacheKey } }));
       } else {
         if (gameInfo.cacheKey && gameInfo.appId) {
-          await sendMessage('CONFIRM_RESOLUTION', { cacheKey: gameInfo.cacheKey, appId: gameInfo.appId });
+          await sendMessage('CONFIRM_RESOLUTION', { cacheKey: gameInfo.cacheKey, appId: gameInfo.appId, type: gameInfo.type ?? gameInfo.resolution?.type ?? 'app' });
         }
         if (gameInfo.cacheKey) {
           await sendMessage('SET_DELISTED', { cacheKey: gameInfo.cacheKey });

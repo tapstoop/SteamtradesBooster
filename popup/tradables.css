@@ -63,6 +63,16 @@
   border: 1px solid #2a3f5f;
 }
 
+.tradables-warning {
+  background: #2a2214;
+  border: 1px solid #5a4a1a;
+  border-radius: 4px;
+  color: #f1c40f;
+  font-size: 10px;
+  margin-bottom: 10px;
+  padding: 6px 8px;
+}
+
 .stat-block {
   display: flex;
   flex-direction: column;
@@ -81,6 +91,12 @@
   color: #8a9bb0;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.stat-unique {
+  font-size: 8px;
+  color: #555;
+  text-transform: none;
 }
 
 /* ── Toolbar ─────────────────────────────────────────────────────── */
@@ -187,6 +203,55 @@
   text-overflow: ellipsis;
 }
 
+.tradables-qty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+  margin-right: 6px;
+  gap: 0;
+}
+
+.tradables-qty-arrow {
+  background: none;
+  border: none;
+  color: #4a6a8a;
+  font-size: 7px;
+  line-height: 1;
+  padding: 1px 0;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+.tradables-qty-arrow:hover {
+  color: #66c0f4;
+}
+
+.tradables-qty-input {
+  width: 24px;
+  -moz-appearance: textfield;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #0d1117;
+  border: none;
+  border-radius: 2px;
+  padding: 1px 0;
+  color: #c6d4df;
+  font-size: 11px;
+  font-family: monospace;
+  text-align: center;
+  line-height: 1;
+}
+.tradables-qty-input:focus {
+  outline: none;
+  background: #1a2030;
+}
+.tradables-qty-input::-webkit-inner-spin-button,
+.tradables-qty-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .tradables-appid {
   font-size: 9px;
   color: #66c0f4;
@@ -269,6 +334,12 @@
 .tradables-price-badge.deal {
   background: #2a2200;
   color: #ffd700;
+}
+
+.tradables-qty-suffix {
+  font-weight: 400;
+  opacity: 0.7;
+  margin-left: 2px;
 }
 
 /* ── Modal ───────────────────────────────────────────────────────── */
@@ -354,6 +425,23 @@
 .import-input-section textarea::placeholder { color: #555; }
 .import-input-section textarea:focus { outline: none; border-color: #66c0f4; }
 
+.import-help-text {
+  font-size: 9px;
+  color: #8a9bb0;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.import-help-text code {
+  display: inline-block;
+  background: #0d1117;
+  color: #66c0f4;
+  font-size: 8px;
+  padding: 2px 4px;
+  border-radius: 2px;
+  margin-top: 2px;
+  font-family: monospace;
+}
+
 .import-preview-section {
   margin-top: 12px;
 }
@@ -386,6 +474,33 @@
   font-family: inherit;
 }
 .btn-small:hover { background: #3d6a8a; }
+
+.duplicate-warning {
+  background: #2a2214;
+  border: 1px solid #5a4a1a;
+  border-radius: 4px;
+  color: #f1c40f;
+  font-size: 10px;
+  margin-bottom: 10px;
+  padding: 8px;
+}
+
+.duplicate-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.duplicate-body {
+  color: #c6d4df;
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.duplicate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 
 /* ── Filters ─────────────────────────────────────────────────────── */
 .preview-filters {
@@ -427,6 +542,7 @@
 
 .preview-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 5px 6px;
@@ -455,6 +571,19 @@
   font-size: 9px;
   color: #66c0f4;
   font-family: monospace;
+}
+
+.preview-bundle-hint {
+  font-size: 9px;
+  color: #f39c12;
+  line-height: 1.4;
+  margin-top: 2px;
+  width: 100%;
+}
+
+.preview-bundle-hint-soft {
+  color: #e67e22;
+  opacity: 0.85;
 }
 
 /* ── Preview Actions ─────────────────────────────────────────────── */
@@ -494,3 +623,164 @@
 }
 
 #t-snapshot-select:focus { outline: none; border-color: #66c0f4; }
+
+/* ── Resolve Popover ─────────────────────────────────────────────── */
+.tradables-resolve-popover {
+  position: absolute;
+  z-index: 99999;
+  background: #0d1117;
+  border: 1px solid #3a3a5a;
+  border-radius: 4px;
+  padding: 0;
+  min-width: 260px;
+  max-width: 320px;
+  font-size: 11px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+}
+
+.trp-header {
+  color: #888;
+  font-size: 9px;
+  padding: 5px 8px 5px;
+  border-bottom: 1px solid #1e1e2e;
+}
+
+.trp-search-wrap {
+  padding: 5px;
+}
+
+.tradables-resolve-search {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #333;
+  border-radius: 3px;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  font-size: 11px;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+.tradables-resolve-search:focus {
+  outline: none;
+  border-color: #66c0f4;
+}
+
+.tradables-resolve-results {
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.trp-result-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid #1e2d3d;
+  transition: background-color 0.15s;
+}
+
+.trp-result-item:hover {
+  background-color: #1e2d3d;
+}
+
+.trp-result-item:last-child {
+  border-bottom: none;
+}
+
+.trp-url-result {
+  background-color: #0d2818;
+  border-left: 3px solid #66c0f4;
+}
+
+.trp-url-result:hover {
+  background-color: #163d28;
+}
+.trp-result-item:hover {
+  background: #1a2030;
+}
+
+.trp-cancel {
+  color: #555;
+  font-style: italic;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 10px;
+}
+.trp-cancel:hover {
+  color: #888;
+}
+
+/* ── Bundle Guidance (Resolve Popover) ───────────────────────────── */
+.trp-bundle-guidance {
+  padding: 8px;
+  background: #1a1400;
+  border-bottom: 1px solid #3a3a5a;
+}
+
+.trp-bundle-warning {
+  color: #f39c12;
+  font-size: 10px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.trp-bundle-help {
+  color: #c6d4df;
+  font-size: 9px;
+  margin-bottom: 4px;
+}
+
+.trp-bundle-url {
+  display: block;
+  background: #0d1117;
+  color: #66c0f4;
+  font-size: 8px;
+  padding: 3px 5px;
+  border-radius: 2px;
+  margin-bottom: 6px;
+  word-break: break-all;
+  font-family: monospace;
+}
+
+.trp-bundle-search-link {
+  display: inline-block;
+  color: #66c0f4;
+  font-size: 10px;
+  text-decoration: none;
+  padding: 2px 6px;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.trp-bundle-search-link:hover {
+  background: #1a3a5e;
+  border-color: #66c0f4;
+}
+
+/* ── Preview Resolve Popover (Bulk Import) ────────────────────────── */
+.preview-resolve-popover {
+  background: #0d1117;
+  border: 1px solid #3a3a5a;
+  border-radius: 4px;
+  margin: 4px 0 4px 20px;
+  font-size: 11px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+}
+
+.preview-resolve-btn {
+  background: none;
+  border: 1px solid #2a3f5f;
+  color: #66c0f4;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.preview-resolve-btn:hover {
+  background: #1a3a5e;
+  border-color: #66c0f4;
+}

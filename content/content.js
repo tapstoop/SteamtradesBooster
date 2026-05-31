@@ -1,6 +1,6 @@
 // content/content.js
 import { parseGameRows, prioritize, injectCheckboxes, getSelectedTitles, stripParentheses } from './parser.js';
-import { fuzzySetMatch, getDisplayRegion } from '../utils/similarity.js';
+import { fuzzySetMatch, getDisplayRegion, normalizeSteamType, typedPriceKey } from '../utils/similarity.js';
 import { TradeSimulator } from './trade-logic.js';
 import {
   injectSkeleton, replaceBadge, injectQuestionBadge, injectFuzzyBadge, injectNotFoundBadge, injectDismissedBadge, injectDelistedBadge,
@@ -19,6 +19,7 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
     return;
   }
   currentSettings = settings; // Store for PRICE_UPDATED / SETTINGS_UPDATED listeners
+  sendMessage('REPORT_PAGE_DIAGNOSTICS', { url: location.href }).catch(() => {});
   if (!settings.showSidebar && !settings.apiKey) return;
 
   let profile;
@@ -66,6 +67,7 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
       title: displayTitle, // Update title to confirmed title
       resolution: res,
       appId,
+      type: res?.type ?? 'app',
       fuzzy: res?.fuzzy ?? false,
       similarity: res?.similarity ?? null,
       cacheKey: res?.cacheKey ?? null,
@@ -88,11 +90,11 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
       if (skeleton) skeleton.remove();
       if (row.appId) {
         // Delisted game with confirmed appId - inject badge immediately with placeholder, update price async
-        const gameInfo = { ...row, cacheKey: row.cacheKey, settings, inBundle: false, acqPrice: null, resolution: { status: 'delisted' } };
+        const gameInfo = { ...row, cacheKey: row.cacheKey, settings, inBundle: row.type === 'bundle', acqPrice: null, resolution: { status: 'delisted' } };
         injectDelistedBadge(row.el, row.cacheKey, row.title, null, gameInfo);
         // Fetch price in background (uses getPrices which handles Sub IDs)
-        sendMessage('GET_PRICES', { appIds: [row.appId], regions: settings.regions }).then(prices => {
-          const priceData = prices[row.appId]?.[getDisplayRegion(settings)];
+        sendMessage('GET_PRICES', { items: [priceItem(row)], regions: settings.regions }).then(prices => {
+          const priceData = readPriceRegion(prices, row.appId, row.type, getDisplayRegion(settings));
           if (priceData) {
             const badge = row.el.querySelector('.stpt-badge[data-type="delisted"]');
             if (badge) badge.remove();
@@ -132,6 +134,7 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
   // Tier 1 = wishlist, Tier 2 = tradables (already calculated by prioritize())
   workstation.setPageGames(rowData.map(r => ({
     appId: r.appId,
+    type: r.type,
     title: r.title,
     price: r.price,
     tier: r.tier,
@@ -150,18 +153,18 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
     const tradableResolutions = await sendMessage('RESOLVE_TITLES', { titles: tradableNames });
     const tradableAppIds = tradableResolutions
       .filter(r => r?.status === 'hit' || r?.status === 'resolved')
-      .map(r => r.appId);
+      .map(r => ({ id: r.appId, type: r.type ?? 'app' }));
 
     if (tradableAppIds.length > 0) {
       const tradablePrices = await sendMessage('GET_CACHED_PRICES', {
-        appIds: tradableAppIds,
+        items: tradableAppIds,
         regions: settings.regions,
       });
 
       const tradablePriceMap = {};
       tradableResolutions.forEach((res, i) => {
         if (res?.appId && (res.status === 'hit' || res.status === 'resolved')) {
-          const priceData = tradablePrices[res.appId]?.[getDisplayRegion(settings)];
+          const priceData = readPriceRegion(tradablePrices, res.appId, res.type ?? 'app', getDisplayRegion(settings));
           tradablePriceMap[tradableNames[i].toLowerCase()] = {
             appId: res.appId,
             price: priceData ? _getBadgePrice(priceData, settings) : null,
@@ -180,20 +183,17 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
   const priceMap = {};
   if (resolvedRows.length > 0) {
     const cachedPrices = await sendMessage('GET_CACHED_PRICES', {
-      appIds: resolvedRows.map(r => r.appId),
+      items: resolvedRows.map(priceItem),
       regions: settings.regions,
     });
     const cachedBundles = await sendMessage('GET_BUNDLES', { appIds: resolvedRows.map(r => r.appId) });
 
     resolvedRows.forEach(row => {
-      const priceData = cachedPrices[row.appId]?.[getDisplayRegion(settings)];
+      const priceData = readPriceRegion(cachedPrices, row.appId, row.type, getDisplayRegion(settings));
       if (priceData) {
-        priceMap[row.appId] = {
-          price: _getBadgePrice(priceData, settings),
-          currency: priceData.prices?.currency ?? 'EUR',
-        };
+        setWorkstationPrice(priceMap, row.appId, row.type, priceData, settings);
         // Persist inBundle on rowData so later handlers (PRICE_UPDATED, SETTINGS_UPDATED) have it
-        row.inBundle = !!(cachedBundles[row.appId]?.length);
+        row.inBundle = row.type === 'bundle' || !!(cachedBundles[row.appId]?.length);
         const gameInfo = {
           ...row,
           cacheKey: row.cacheKey,
@@ -210,7 +210,7 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
   // Fetch acquisition prices for tier 2 tradables
   const tier2withPrice = rowData.filter(r => r.appId && r.tier === 2);
   for (const row of tier2withPrice) {
-    const { price } = await sendMessage('GET_ACQ_PRICE', { appId: row.appId });
+    const { price } = await sendMessage('GET_ACQ_PRICE', { appId: row.appId, itemType: row.type });
     if (price != null) row.acqPrice = price;
   }
 
@@ -261,7 +261,13 @@ function setupFloatingFetchButton() {
   floatingFetchBtn.id = 'stpt-floating-fetch-btn';
   floatingFetchBtn.className = 'stpt-floating-fetch-btn';
   floatingFetchBtn.style.display = 'none';
-  floatingFetchBtn.addEventListener('click', () => handleFetchSelected());
+  floatingFetchBtn.addEventListener('click', () => {
+    if (floatingFetchBtn.dataset.resultType === 'error') {
+      sendMessage('OPEN_POPUP_TAB', { tab: 'settings', focus: 'error-log' });
+      return;
+    }
+    handleFetchSelected();
+  });
   document.body.appendChild(floatingFetchBtn);
 }
 
@@ -283,8 +289,8 @@ function showResultOnButton(message, type = 'success', autoHideDelay = 4000) {
 
   // Show the button as a result message
   floatingFetchBtn.style.display = 'flex';
-  floatingFetchBtn.textContent = message;
-  floatingFetchBtn.disabled = true;
+  floatingFetchBtn.textContent = type === 'error' ? `${message} See error logs` : message;
+  floatingFetchBtn.disabled = type !== 'error';
   floatingFetchBtn.dataset.resultType = type;
 
   // Clear previous timeout if any
@@ -336,7 +342,7 @@ async function handleFetchSelected() {
   let hasError = false;
   try {
     const prices = await sendMessage('GET_PRICES', {
-      appIds: resolvableRows.map(r => r.appId),
+      items: resolvableRows.map(priceItem),
       regions: settings.regions,
     });
 
@@ -349,8 +355,8 @@ async function handleFetchSelected() {
     const priceMap = {};
 
     resolvableRows.forEach(row => {
-      const priceData = prices[row.appId]?.[region];
-      row.inBundle = !!(bundles[row.appId]?.length);
+      const priceData = readPriceRegion(prices, row.appId, row.type, region);
+      row.inBundle = row.type === 'bundle' || !!(bundles[row.appId]?.length);
 
       const gameInfo = {
         ...row,
@@ -364,10 +370,7 @@ async function handleFetchSelected() {
         replaceBadge(row.el, priceData, gameInfo);
         updateSidebarRow(row.el.dataset.stptId, gameInfo);
 
-        priceMap[row.appId] = {
-          price: _getBadgePrice(priceData, settings),
-          currency: priceData.prices?.currency ?? 'EUR',
-        };
+        setWorkstationPrice(priceMap, row.appId, row.type, priceData, settings);
 
         // Uncheck the successfully fetched game
         const checkbox = document.querySelector(
@@ -439,7 +442,7 @@ async function handleFetchSelected() {
 async function fetchAndRender(rows, settings) {
   const appIds = [...new Set(rows.map(r => r.appId))];
   const prices = await sendMessage('GET_PRICES', {
-    appIds,
+    items: rows.map(priceItem),
     regions: settings.regions,
   });
 
@@ -449,19 +452,19 @@ async function fetchAndRender(rows, settings) {
   // Fetch acquisition prices for tradables
   const acqPrices = {};
   for (const row of rows.filter(r => r.tier === 2)) {
-    const { price } = await sendMessage('GET_ACQ_PRICE', { appId: row.appId });
-    acqPrices[row.appId] = price;
+    const { price } = await sendMessage('GET_ACQ_PRICE', { appId: row.appId, itemType: row.type });
+    acqPrices[typedPriceKey(row.appId, row.type)] = price;
   }
 
   rows.forEach(row => {
-    const priceData = prices[row.appId]?.[getDisplayRegion(settings)];
+    const priceData = readPriceRegion(prices, row.appId, row.type, getDisplayRegion(settings));
     // Persist inBundle on rowData so later handlers (PRICE_UPDATED, SETTINGS_UPDATED) have it
-    row.inBundle = !!(bundles[row.appId]?.length);
+    row.inBundle = row.type === 'bundle' || !!(bundles[row.appId]?.length);
     const gameInfo = {
       ...row,
       settings,
       cacheKey: row.cacheKey,
-      acqPrice: acqPrices[row.appId] ?? null,
+      acqPrice: acqPrices[typedPriceKey(row.appId, row.type)] ?? null,
     };
     replaceBadge(row.el, priceData ?? null, gameInfo);
     updateSidebarRow(row.el.dataset.stptId, gameInfo);
@@ -470,9 +473,9 @@ async function fetchAndRender(rows, settings) {
   // Update workstation with fetched prices
   const priceMap = {};
   rows.forEach(row => {
-    const priceData = prices[row.appId]?.[getDisplayRegion(settings)];
+    const priceData = readPriceRegion(prices, row.appId, row.type, getDisplayRegion(settings));
     if (priceData) {
-      priceMap[row.appId] = { price: _getBadgePrice(priceData, settings), currency: priceData.prices?.currency ?? 'EUR' };
+      setWorkstationPrice(priceMap, row.appId, row.type, priceData, settings);
     }
   });
   if (Object.keys(priceMap).length > 0 && window.__stpt_workstation) {
@@ -511,6 +514,7 @@ function setupIntersectionObserver(rows, settings) {
 document.addEventListener('stpt-resolve', async e => {
   try {
     const { appId, title, cacheKey } = e.detail;
+    const type = e.detail.type ?? 'app';
     const rowEl = e.target;
     // Sync DOM attribute to resolved title
     rowEl.dataset.stptTitle = stripParentheses(title);
@@ -523,46 +527,48 @@ document.addEventListener('stpt-resolve', async e => {
 
     if (!settings.apiKey) {
       console.warn('[STPT] No API key, cannot fetch price for', title);
-      const gameInfo = { appId, title, el: rowEl, tier: 4, cacheKey, settings, inBundle: false, acqPrice: null, resolution: { status: 'resolved', appId } };
+      const gameInfo = { appId, type, title, el: rowEl, tier: 4, cacheKey, settings, inBundle: type === 'bundle', acqPrice: null, resolution: { status: 'resolved', appId, type } };
       replaceBadge(rowEl, null, gameInfo);
       return;
     }
 
     const [bundles, prices] = await Promise.all([
       sendMessage('GET_BUNDLES', { appIds: [appId] }),
-      sendMessage('GET_PRICES', { appIds: [appId], regions: settings.regions })
+      sendMessage('GET_PRICES', { items: [{ id: appId, type }], regions: settings.regions })
     ]);
 
     // Find and update the row data
     const row = rowData.find(r => r.el === rowEl);
     if (row) {
       row.appId = appId;
+      row.type = type;
       row.title = rowEl.dataset.stptTitle; // keep in sync with DOM
       row.cacheKey = cacheKey ?? row.cacheKey;
       row.fuzzy = false;
-      row.resolution = { status: 'resolved', appId };
+      row.resolution = { status: 'resolved', appId, type };
       // Persist inBundle on rowData so later handlers have it
-      row.inBundle = !!(bundles[appId]?.length);
+      row.inBundle = type === 'bundle' || !!(bundles[appId]?.length);
     }
 
     const region = getDisplayRegion(settings);
-    const priceData = prices[appId]?.[region] ?? null;
+    const priceData = readPriceRegion(prices, appId, type, region) ?? null;
     const gameInfo = {
       appId,
+      type,
       title,
       el: rowEl,
       tier: row?.tier ?? 4,
       cacheKey: cacheKey ?? row?.cacheKey,
       settings,
       acqPrice: row?.acqPrice ?? null,
-      resolution: { status: 'resolved', appId },
+      inBundle: type === 'bundle' || row?.inBundle,
+      resolution: { status: 'resolved', appId, type },
     };
     replaceBadge(rowEl, priceData, gameInfo);
     updateSidebarRow(rowEl.dataset.stptId, gameInfo);
     if (priceData && window.__stpt_workstation) {
       const priceMap = {};
-      const price = _getBadgePrice(priceData, settings);
-      if (price != null) priceMap[appId] = { price, currency: priceData.prices?.currency ?? 'EUR' };
+      setWorkstationPrice(priceMap, appId, type, priceData, settings);
       if (Object.keys(priceMap).length > 0) window.__stpt_workstation.updateGamePrices(priceMap);
     }
   } catch (err) {
@@ -595,9 +601,15 @@ document.addEventListener('stpt-recheck', async e => {
     if (res.appId) {
       const settings = await sendMessage('GET_SETTINGS');
       if (settings.apiKey) {
-        const priceData = await sendMessage('GET_PRICES', { appIds: [res.appId], regions: settings.regions });
-        const gameInfo = { appId: res.appId, title, tier: 4, settings, cacheKey: res.cacheKey, inBundle: false, acqPrice: null };
-        injectDelistedBadge(rowEl, res.cacheKey || cacheKey, title, priceData[res.appId]?.[getDisplayRegion(settings)] ?? null, gameInfo);
+        const priceData = await sendMessage('GET_PRICES', { items: [{ id: res.appId, type: res.type ?? 'app' }], regions: settings.regions });
+        const gameInfo = { appId: res.appId, type: res.type ?? 'app', title, tier: 4, settings, cacheKey: res.cacheKey, inBundle: res.type === 'bundle', acqPrice: null };
+        injectDelistedBadge(
+          rowEl,
+          res.cacheKey || cacheKey,
+          title,
+          readPriceRegion(priceData, res.appId, res.type ?? 'app', getDisplayRegion(settings)) ?? null,
+          gameInfo
+        );
       } else {
         injectDelistedBadge(rowEl, res.cacheKey || cacheKey, title);
       }
@@ -614,16 +626,20 @@ document.addEventListener('stpt-recheck', async e => {
     const settings = await sendMessage('GET_SETTINGS');
     if (settings.apiKey) {
       const bundles = await sendMessage('GET_BUNDLES', { appIds: [res.appId] });
-      const priceData = await sendMessage('GET_PRICES', { appIds: [res.appId], regions: settings.regions });
+      const priceData = await sendMessage('GET_PRICES', { items: [{ id: res.appId, type: res.type ?? 'app' }], regions: settings.regions });
       // Find and persist inBundle on rowData
       const row = rowData.find(r => r.el === rowEl);
-      if (row) row.inBundle = !!(bundles[res.appId]?.length);
-      const gameInfo = { appId: res.appId, title, tier: 4, settings, fuzzy: true, similarity: res.similarity, cacheKey: res.cacheKey };
-      const pd = priceData[res.appId]?.[getDisplayRegion(settings)] ?? null;
+      if (row) {
+        row.type = res.type ?? 'app';
+        row.inBundle = row.type === 'bundle' || !!(bundles[res.appId]?.length);
+      }
+      const gameInfo = { appId: res.appId, type: res.type ?? 'app', title, tier: 4, settings, fuzzy: true, similarity: res.similarity, cacheKey: res.cacheKey, inBundle: res.type === 'bundle' || row?.inBundle };
+      const pd = readPriceRegion(priceData, res.appId, res.type ?? 'app', getDisplayRegion(settings)) ?? null;
       replaceBadge(rowEl, pd, gameInfo);
       if (pd && window.__stpt_workstation) {
-        const price = _getBadgePrice(pd, settings);
-        if (price != null) window.__stpt_workstation.updateGamePrices({ [res.appId]: { price, currency: pd.prices?.currency ?? 'EUR' } });
+        const update = {};
+        setWorkstationPrice(update, res.appId, res.type ?? 'app', pd, settings);
+        if (Object.keys(update).length > 0) window.__stpt_workstation.updateGamePrices(update);
       }
     }
   } else {
@@ -631,16 +647,20 @@ document.addEventListener('stpt-recheck', async e => {
     const settings = await sendMessage('GET_SETTINGS');
     if (settings.apiKey) {
       const bundles = await sendMessage('GET_BUNDLES', { appIds: [res.appId] });
-      const priceData = await sendMessage('GET_PRICES', { appIds: [res.appId], regions: settings.regions });
+      const priceData = await sendMessage('GET_PRICES', { items: [{ id: res.appId, type: res.type ?? 'app' }], regions: settings.regions });
       // Find and persist inBundle on rowData
       const row = rowData.find(r => r.el === rowEl);
-      if (row) row.inBundle = !!(bundles[res.appId]?.length);
-      const gameInfo = { appId: res.appId, title, tier: 4, settings, cacheKey: res.cacheKey };
-      const pd = priceData[res.appId]?.[getDisplayRegion(settings)] ?? null;
+      if (row) {
+        row.type = res.type ?? 'app';
+        row.inBundle = row.type === 'bundle' || !!(bundles[res.appId]?.length);
+      }
+      const gameInfo = { appId: res.appId, type: res.type ?? 'app', title, tier: 4, settings, cacheKey: res.cacheKey, inBundle: res.type === 'bundle' || row?.inBundle };
+      const pd = readPriceRegion(priceData, res.appId, res.type ?? 'app', getDisplayRegion(settings)) ?? null;
       replaceBadge(rowEl, pd, gameInfo);
       if (pd && window.__stpt_workstation) {
-        const price = _getBadgePrice(pd, settings);
-        if (price != null) window.__stpt_workstation.updateGamePrices({ [res.appId]: { price, currency: pd.prices?.currency ?? 'EUR' } });
+        const update = {};
+        setWorkstationPrice(update, res.appId, res.type ?? 'app', pd, settings);
+        if (Object.keys(update).length > 0) window.__stpt_workstation.updateGamePrices(update);
       }
     }
   }
@@ -662,8 +682,8 @@ chrome.runtime.onMessage.addListener((message) => {
       if (regionChanged) {
         // Region changed — cached prices may not have data for the new region.
         // Fetch fresh prices from the API.
-        sendMessage('GET_PRICES', { appIds: [row.appId], regions: newSettings.regions }).then(prices => {
-          const priceData = prices[row.appId]?.[newRegion];
+        sendMessage('GET_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(prices => {
+          const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
           if (priceData) {
             const gameInfo = { ...row, settings: newSettings };
             replaceBadge(row.el, priceData, gameInfo);
@@ -677,8 +697,8 @@ chrome.runtime.onMessage.addListener((message) => {
         });
       } else {
         // Same region — just re-render with cached prices (currency-only change)
-        sendMessage('GET_CACHED_PRICES', { appIds: [row.appId], regions: newSettings.regions }).then(prices => {
-          const priceData = prices[row.appId]?.[newRegion];
+        sendMessage('GET_CACHED_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(prices => {
+          const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
           if (priceData) {
             const gameInfo = { ...row, settings: newSettings };
             replaceBadge(row.el, priceData, gameInfo);
@@ -692,13 +712,18 @@ chrome.runtime.onMessage.addListener((message) => {
 
   // Listen for PRICE_UPDATED — dynamically update badges when prices refresh from any source
   if (message.type === 'PRICE_UPDATED') {
-    const { appId, region, priceData } = message;
-    const row = rowData.find(r => r.appId === appId);
-    if (!row || !priceData) return;
-    const settings = currentSettings ?? row.settings;
-    const gameInfo = { ...row, settings };
-    replaceBadge(row.el, priceData, gameInfo);
-    updateSidebarRow(row.el.dataset.stptId, gameInfo);
+    const { itemId, appId, itemType, priceData } = message;
+    const id = String(itemId ?? appId ?? '');
+    const rows = itemType
+      ? rowData.filter(r => String(r.appId) === id && normalizeSteamType(r.type) === normalizeSteamType(itemType))
+      : rowData.filter(r => String(r.appId) === id);
+    if (rows.length === 0 || !priceData) return;
+    for (const row of rows) {
+      const settings = currentSettings ?? row.settings;
+      const gameInfo = { ...row, settings };
+      replaceBadge(row.el, priceData, gameInfo);
+      updateSidebarRow(row.el.dataset.stptId, gameInfo);
+    }
   }
 });
 
@@ -713,6 +738,25 @@ function _getBadgePrice(priceData, settings) {
   return parseFloat(match[1].replace(',', '.')) * 100;
 }
 
+function readPriceRegion(prices, appId, type = 'app', region) {
+  if (!prices || !appId) return null;
+  const normalizedType = normalizeSteamType(type);
+  const typed = prices[typedPriceKey(appId, normalizedType)]?.[region];
+  if (typed) return typed;
+  return normalizedType === 'app' ? prices[String(appId)]?.[region] ?? null : null;
+}
+
+function setWorkstationPrice(priceMap, appId, type, priceData, settings) {
+  const price = _getBadgePrice(priceData, settings);
+  if (price == null) return;
+  const key = typedPriceKey(appId, type);
+  const payload = { price, currency: priceData.prices?.currency ?? 'EUR' };
+  priceMap[key] = payload;
+  if (normalizeSteamType(type) === 'app') {
+    priceMap[String(appId)] = payload;
+  }
+}
+
 function sendMessage(type, data = {}) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type, ...data }, resp => {
@@ -720,4 +764,8 @@ function sendMessage(type, data = {}) {
       else resolve(resp);
     });
   });
+}
+
+function priceItem(row) {
+  return { id: row.appId, type: row.type ?? row.resolution?.type ?? 'app' };
 }

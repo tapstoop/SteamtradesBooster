@@ -10,6 +10,7 @@ steamtrades_booster_v*/
 .playwright-cli/
 .playwright-mcp/
 .superpowers/
+.serena/
 
 # Docs and .md files not belonging in repo (except README)
 *.md

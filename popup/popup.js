@@ -43,7 +43,8 @@ document.querySelectorAll('.tab').forEach(tab => {
 
 // Init active tab on load (lazy)
 chrome.storage.local.get('popupActiveTab', (result) => {
-  const activeTab = result.popupActiveTab || 'deals';
+  const requestedTab = new URLSearchParams(location.search).get('tab');
+  const activeTab = requestedTab || result.popupActiveTab || 'deals';
   activateTab(activeTab);
 });
 
