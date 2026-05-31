@@ -182,6 +182,26 @@ await safeRecordDiagnostics(() => recordGgDealsDiagnostics({
 
 The log includes a `Retention: last 10 API-call summaries, last 10 429/quota events, last 25 resolution failures, max age 48h` line so users and maintainers know the scope of what they are reading.
 
+### 10. Serialize diagnostic writes with a promise-chain mutex
+
+`updateDiagnostics` does an async read-modify-write (`getDiagnostics` → merge → `setDiagnostics`). If two message handlers (`RESOLVE_TITLES` and `REPORT_PAGE_DIAGNOSTICS`) call it concurrently, their `get`/`set` pairs can interleave, silently dropping one patch.
+
+Guard with a promise chain — each call chains off the previous one:
+
+```js
+let diagnosticsLock = Promise.resolve();
+
+export async function updateDiagnostics(patch) {
+  diagnosticsLock = diagnosticsLock.then(async () => {
+    const current = await getDiagnostics();
+    await setDiagnostics({ ...current, ...patch, updatedAt: Date.now() });
+  });
+  return diagnosticsLock;
+}
+```
+
+This ensures serial execution without adding a full lock library. Failed promises are caught silently so the chain never breaks.
+
 ## Why This Matters
 
 - **Survivability**: Diagnostic data persists across service-worker restarts and popup closes, so users do not lose context between interactions.
