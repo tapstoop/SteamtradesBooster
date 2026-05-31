@@ -3,6 +3,12 @@ import { createBulkImportModal } from './tradables-bulk-modal.js';
 import { getDisplayRegion } from '../utils/similarity.js';
 import { parseSteamStoreUrl } from './tradables-parser.js';
 
+let qtySaveTimer = null;
+function debouncedSave() {
+  clearTimeout(qtySaveTimer);
+  qtySaveTimer = setTimeout(() => save(), 300);
+}
+
 function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
 }
@@ -595,7 +601,7 @@ export async function initTradables(container) {
         if (qty < 1) qty = 1;
         if (qty > 999) qty = 999;
         item.qty = qty;
-        await save();
+        debouncedSave();
         render();
         updateStats();
       });
@@ -612,7 +618,7 @@ export async function initTradables(container) {
         if (qty > 999) qty = 999;
         input.value = qty;
         item.qty = qty;
-        await save();
+        debouncedSave();
         render();
         updateStats();
       });
