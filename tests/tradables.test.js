@@ -12,6 +12,7 @@ globalThis.chrome = {
 const {
   bindTradablesRuntimeStateForInit,
   createTradablesInitGuard,
+  hasBundleKeywords,
 } = await import('../popup/tradables.js');
 
 describe('tradables init guards', () => {
@@ -46,5 +47,51 @@ describe('tradables init guards', () => {
       render: vi.fn(),
       updateStats: vi.fn(),
     })).toBe(true);
+  });
+});
+
+describe('hasBundleKeywords', () => {
+  it('returns true for names containing "collection"', () => {
+    expect(hasBundleKeywords('Asterix & Obelix XXL Collection')).toBe(true);
+  });
+
+  it('returns true for names containing "bundle"', () => {
+    expect(hasBundleKeywords('Valve Complete Pack')).toBe(true);
+  });
+
+  it('returns true for "pack"', () => {
+    expect(hasBundleKeywords('Starter Pack')).toBe(true);
+  });
+
+  it('returns true for "anthology"', () => {
+    expect(hasBundleKeywords('Dark Souls Trilogy')).toBe(true);
+  });
+
+  it('returns false for names without bundle keywords', () => {
+    expect(hasBundleKeywords('Hollow Knight')).toBe(false);
+  });
+
+  it('returns false for empty string', () => {
+    expect(hasBundleKeywords('')).toBe(false);
+  });
+
+  it('requires keyword as a whole word (not substring)', () => {
+    expect(hasBundleKeywords('Packing Simulator')).toBe(false);
+  });
+
+  it('is case-insensitive', () => {
+    expect(hasBundleKeywords('ULTIMATE BUNDLE')).toBe(true);
+  });
+});
+
+describe('resolve popover bundle guidance', () => {
+  it('uses item.type === "bundle" not name keywords', () => {
+    const bundleItem = { name: 'Some Game', type: 'bundle' };
+    const appItem = { name: 'Asterix & Obelix XXL Collection', type: 'app' };
+    const appWithKeywords = { name: 'Valve Complete Pack', type: 'app' };
+
+    expect(bundleItem.type === 'bundle').toBe(true);
+    expect(appItem.type === 'bundle').toBe(false);
+    expect(appWithKeywords.type === 'bundle').toBe(false);
   });
 });

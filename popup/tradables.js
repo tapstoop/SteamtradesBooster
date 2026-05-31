@@ -14,7 +14,7 @@ function escapeHtml(str) {
 
 const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
 
-function hasBundleKeywords(name) {
+export function hasBundleKeywords(name) {
   return BUNDLE_KEYWORDS.test(name);
 }
 
@@ -633,7 +633,7 @@ export async function initTradables(container) {
         const popover = document.createElement('div');
         popover.className = 'tradables-resolve-popover';
         
-        const isBundle = hasBundleKeywords(item.name);
+        const isBundle = item.type === 'bundle';
         const bundleGuidance = isBundle ? `
           <div class="trp-bundle-guidance">
             <div class="trp-bundle-warning">⚠️ Bundles cannot be searched by name.</div>
