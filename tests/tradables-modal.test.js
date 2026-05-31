@@ -248,4 +248,68 @@ describe('buildPreviewItemHtml', () => {
     expect(html).toContain('Bad &quot;Name&quot;');
     expect(html).not.toContain('<img src=x onerror=alert(1)>');
   });
+
+  it('shows bundle hint for not-found entries with bundle keywords', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Asterix & Obelix XXL Collection',
+      matchedName: 'Asterix & Obelix XXL Collection',
+      category: 'notfound',
+      status: 'not-found',
+      checked: true,
+    }, 0, '#e74c3c');
+
+    expect(html).toContain('preview-bundle-hint');
+    expect(html).toContain('Paste the Steam bundle URL');
+  });
+
+  it('does not show bundle hint for not-found entries without bundle keywords', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Hollow Knight',
+      matchedName: 'Hollow Knight',
+      category: 'notfound',
+      status: 'not-found',
+      checked: true,
+    }, 0, '#e74c3c');
+
+    expect(html).not.toContain('preview-bundle-hint');
+  });
+
+  it('shows soft bundle hint for fuzzy entries with bundle keywords', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Valve Complete Pack',
+      matchedName: 'Valve Complete Pack',
+      category: 'fuzzy-manual',
+      status: 'ambiguous',
+      confidence: 75,
+      checked: true,
+    }, 0, '#e67e22');
+
+    expect(html).toContain('preview-bundle-hint');
+    expect(html).toContain('preview-bundle-hint-soft');
+    expect(html).toContain('may be a bundle');
+  });
+
+  it('does not show bundle hint for exact entries with bundle keywords', () => {
+    const html = buildPreviewItemHtml({
+      raw: 'Asterix & Obelix XXL Collection',
+      matchedName: 'Asterix & Obelix XXL Collection',
+      category: 'exact',
+      status: 'hit',
+      appId: '12345',
+      checked: true,
+    }, 0, '#a1cd44');
+
+    expect(html).not.toContain('preview-bundle-hint');
+  });
+
+  it('fallback to matchedName when raw is absent', () => {
+    const html = buildPreviewItemHtml({
+      matchedName: 'Starter Pack',
+      category: 'notfound',
+      status: 'not-found',
+      checked: true,
+    }, 0, '#e74c3c');
+
+    expect(html).toContain('preview-bundle-hint');
+  });
 });

@@ -542,6 +542,7 @@
 
 .preview-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 5px 6px;
@@ -570,6 +571,19 @@
   font-size: 9px;
   color: #66c0f4;
   font-family: monospace;
+}
+
+.preview-bundle-hint {
+  font-size: 9px;
+  color: #f39c12;
+  line-height: 1.4;
+  margin-top: 2px;
+  width: 100%;
+}
+
+.preview-bundle-hint-soft {
+  color: #e67e22;
+  opacity: 0.85;
 }
 
 /* ── Preview Actions ─────────────────────────────────────────────── */

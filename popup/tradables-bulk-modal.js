@@ -1,6 +1,12 @@
 import { parseInput, classifyEntry, computeConfidence } from './tradables-parser.js';
 import { normalizeTitle } from '../utils/similarity.js';
 
+const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
+
+function hasBundleKeywords(name) {
+  return BUNDLE_KEYWORDS.test(name);
+}
+
 const CATEGORY_CONFIG = {
   exact: { label: 'Exact Matches', color: '#a1cd44', defaultChecked: true },
   appid: { label: 'App ID Resolved', color: '#66c0f4', defaultChecked: true },
@@ -24,11 +30,23 @@ export function buildPreviewItemHtml(entry, idx, borderColor) {
   const safeTooltip = escapeHtml(tooltip);
   const safeName = escapeHtml(entry.matchedName || entry.raw);
   const safeAppId = escapeHtml(entry.appId ?? '');
+
+  let bundleHint = '';
+  const rawName = entry.raw || entry.matchedName || '';
+  if (hasBundleKeywords(rawName)) {
+    if (entry.category === 'notfound') {
+      bundleHint = '<div class="preview-bundle-hint">💡 Paste the Steam bundle URL to resolve this item.</div>';
+    } else if (entry.category === 'fuzzy-manual' || entry.category === 'fuzzy-auto') {
+      bundleHint = '<div class="preview-bundle-hint preview-bundle-hint-soft">💡 This may be a bundle — consider pasting the Steam bundle URL for exact matching.</div>';
+    }
+  }
+
   return `
     <div class="preview-item" style="border-left: 3px solid ${borderColor};" title="${safeTooltip}">
       <input type="checkbox" class="preview-checkbox" data-index="${idx}" ${entry.checked ? 'checked' : ''}>
       <span class="preview-name">${safeName}</span>
       ${entry.appId ? `<span class="preview-appid">#${safeAppId}</span>` : ''}
+      ${bundleHint}
     </div>
   `;
 }
