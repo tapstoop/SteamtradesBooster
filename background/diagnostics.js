@@ -162,7 +162,7 @@ export function getBrowserLabel(userAgent = '', userAgentData = null) {
 function quotaBucketFromMessage(message = '') {
   const lower = String(message).toLowerCase();
   if (lower.includes('per minute') || lower.includes('100 games per minute') || lower.includes('100 records per minute')) return 'minute';
-  if (lower.includes('per hour') || lower.includes('1000') && lower.includes('hour')) return 'hour';
+  if (lower.includes('per hour') || (lower.includes('1000') && lower.includes('hour'))) return 'hour';
   return 'unknown';
 }
 

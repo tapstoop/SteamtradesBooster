@@ -120,6 +120,16 @@ describe('quota diagnostics', () => {
   });
 });
 
+describe('classifyQuotaWindow', () => {
+  it('classifies "limit of 1000 per hour" as hour bucket', () => {
+    expect(classifyQuotaWindow({ message: 'limit of 1000 per hour' })).toBe('hour');
+  });
+
+  it('classifies "1000 hour" without "per" as hour bucket', () => {
+    expect(classifyQuotaWindow({ message: '1000 hour limit' })).toBe('hour');
+  });
+});
+
 describe('diagnostic log rendering', () => {
   it('renders redacted support log sections and retention policy', () => {
     const log = buildDiagnosticLog({
