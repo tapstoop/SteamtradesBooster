@@ -584,16 +584,15 @@ export async function initTradables(container) {
         e.stopPropagation();
         const origIdx = parseInt(input.dataset.origIndex);
         const item = tradablesList[origIdx];
-        if (item) {
-          let qty = parseInt(input.value) || 1;
-          if (qty < 1) qty = 1;
-          if (qty > 999) qty = 999;
-          input.value = qty;
-          item.qty = qty;
-          await save();
-          render();
-          updateStats();
-        }
+        if (!item) return;
+        let qty = parseInt(input.value) || 1;
+        if (qty < 1) qty = 1;
+        if (qty > 999) qty = 999;
+        input.value = qty;
+        item.qty = qty;
+        await save();
+        render();
+        updateStats();
       });
     });
 

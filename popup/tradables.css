@@ -204,12 +204,13 @@
 }
 
 .tradables-qty-input {
-  width: 42px;
+  width: 38px;
+  -moz-appearance: textfield;
   background: #0d1117;
   border: 1px solid #2a3f5f;
   border-radius: 3px;
-  padding: 2px 3px;
-  color: #66c0f4;
+  padding: 2px 2px 2px 4px;
+  color: #c6d4df;
   font-size: 11px;
   font-family: monospace;
   text-align: center;
@@ -222,7 +223,9 @@
 }
 .tradables-qty-input::-webkit-inner-spin-button,
 .tradables-qty-input::-webkit-outer-spin-button {
+  -webkit-appearance: inner-spin-button;
   opacity: 1;
+  width: 14px;
 }
 
 .tradables-appid {
