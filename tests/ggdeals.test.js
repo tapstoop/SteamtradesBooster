@@ -14,6 +14,7 @@ global.chrome = {
 
 global.fetch = vi.fn();
 
+const { DIAGNOSTICS_KEY } = await import('../background/diagnostics.js');
 const { getPrices, getCachedPrices, getPriceCacheKeys, getPriceResult, isRefreshFallbackPrice } = await import('../background/ggdeals.js');
 
 function apiResponse(data, headers = {}) {
@@ -64,6 +65,31 @@ describe('gg.deals typed prices', () => {
     expect(getPriceResult(cached, '232', 'bundle').eu.title).toBe('Valve Complete Pack');
     expect(store['bundle-price:232:eu']).toBeTruthy();
     expect(store['price:232:eu']).toBeFalsy();
+  });
+
+  it('persists API call and rate-limit diagnostics from GG.deals headers', async () => {
+    fetch.mockResolvedValueOnce(apiResponse({
+      10: {
+        title: 'App Game',
+        url: 'https://gg.deals/game/app-game/',
+        prices: { currentRetail: '1.00', currentKeyshops: null, historicalRetail: '0.50', historicalKeyshops: null, currency: 'EUR' },
+      },
+    }, {
+      'x-ratelimit-limit': '100',
+      'x-ratelimit-remaining': '88',
+      'x-ratelimit-reset': '1780000000',
+    }));
+
+    await getPrices('key', [{ id: '10', type: 'app' }], ['eu']);
+
+    expect(store[DIAGNOSTICS_KEY].rateLimit.limit).toBe(100);
+    expect(store[DIAGNOSTICS_KEY].rateLimit.remaining).toBe(88);
+    expect(store[DIAGNOSTICS_KEY].lastApiCalls[0]).toMatchObject({
+      type: 'app',
+      count: 1,
+      region: 'eu',
+      status: 200,
+    });
   });
 
   it('keeps app and bundle prices distinct when numeric IDs collide', async () => {

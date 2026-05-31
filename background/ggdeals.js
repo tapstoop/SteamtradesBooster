@@ -1,5 +1,10 @@
 // background/ggdeals.js
 import { cacheGet, cacheSet } from './cache.js';
+import {
+  buildApiCallSummary,
+  buildQuotaBlockEvent,
+  recordGgDealsDiagnostics,
+} from './diagnostics.js';
 
 const PRICE_TTL = 0; // Permanent until manual refresh
 const BASE_URL = 'https://api.gg.deals/v1';
@@ -9,8 +14,6 @@ const rateLimitState = {
   resetAt: 0,
   limit: null,
   lastUpdatedAt: null,
-  lastCalls: [],
-  recent429s: [],
 };
 
 const queue = [];
@@ -81,21 +84,34 @@ function updateRateLimit(resp) {
   rateLimitState.remaining = remaining;
   rateLimitState.resetAt = resetAt;
   rateLimitState.lastUpdatedAt = Date.now();
+  return {
+    limit: rateLimitState.limit,
+    remaining: rateLimitState.remaining,
+    resetAt: rateLimitState.resetAt,
+    lastUpdatedAt: rateLimitState.lastUpdatedAt,
+  };
 }
 
-function recordApiCall(type, ids, region, status) {
-  rateLimitState.lastCalls.unshift({
+async function safeRecordDiagnostics(fn) {
+  try {
+    await fn();
+  } catch {
+    // Diagnostics are best-effort and must not break price fetching.
+  }
+}
+
+function buildCurrentQuotaBlock({ kind, type, ids, region, status, message }) {
+  return buildQuotaBlockEvent({
+    kind,
     type,
-    count: ids.length,
+    ids,
     region,
     status,
-    at: Date.now(),
+    resetAt: rateLimitState.resetAt,
+    limit: rateLimitState.limit,
+    remaining: rateLimitState.remaining,
+    message,
   });
-  rateLimitState.lastCalls = rateLimitState.lastCalls.slice(0, 10);
-  if (status === 429) {
-    rateLimitState.recent429s.unshift({ type, count: ids.length, region, at: Date.now(), resetAt: rateLimitState.resetAt });
-    rateLimitState.recent429s = rateLimitState.recent429s.slice(0, 10);
-  }
 }
 
 async function fetchBatch(apiKey, ids, region, type = 'app') {
@@ -103,12 +119,24 @@ async function fetchBatch(apiKey, ids, region, type = 'app') {
   const url = `${BASE_URL}/${path}/?ids=${ids.join(',')}&key=${encodeURIComponent(apiKey)}&region=${encodeURIComponent(region)}`;
   const resp = await fetch(url);
 
-  updateRateLimit(resp);
-  recordApiCall(type, ids, region, resp.status);
+  const rateSnapshot = updateRateLimit(resp);
+  const apiCall = buildApiCallSummary({ type, ids, region, status: resp.status });
 
   if (resp.status === 429) {
+    let message = '';
+    try {
+      const body = await resp.json();
+      message = body?.data?.message ?? body?.message ?? '';
+    } catch {
+      // 429 body is optional for diagnostics; headers still carry reset data.
+    }
+    const quotaBlock = buildCurrentQuotaBlock({ kind: '429', type, ids, region, status: resp.status, message });
+    await safeRecordDiagnostics(() => recordGgDealsDiagnostics({ rateLimit: rateSnapshot, apiCall, quotaBlock }));
     throw { rateLimited: true, resetAt: rateLimitState.resetAt };
   }
+
+  await safeRecordDiagnostics(() => recordGgDealsDiagnostics({ rateLimit: rateSnapshot, apiCall }));
+
   if (!resp.ok) {
     let apiMessage = resp.statusText;
     try {
@@ -162,6 +190,17 @@ async function processQueue() {
   try {
     while (queue.length > 0) {
       if (rateLimitState.remaining <= 0 && rateLimitState.resetAt > Date.now()) {
+        const waitingJob = queue[0];
+        if (waitingJob) {
+          const quotaBlock = buildCurrentQuotaBlock({
+            kind: 'local-wait',
+            type: waitingJob.type,
+            ids: waitingJob.ids,
+            region: waitingJob.region,
+            status: 'local-wait',
+          });
+          await safeRecordDiagnostics(() => recordGgDealsDiagnostics({ quotaBlock }));
+        }
         const wait = rateLimitState.resetAt - Date.now() + 200;
         await new Promise(r => setTimeout(r, Math.max(200, wait)));
       }
@@ -441,10 +480,6 @@ export async function getBundles(apiKey, appIds) {
   } catch {
     return {};
   }
-}
-
-export function getRateLimitState() {
-  return { ...rateLimitState };
 }
 
 export function getPriceCacheKeys(itemsOrIds, regions) {

@@ -1,4 +1,5 @@
 // background/cache.js
+import { DIAGNOSTICS_KEY } from './diagnostics.js';
 
 function storageGet(key) {
   return new Promise((resolve, reject) => {
@@ -55,7 +56,18 @@ export async function cacheHas(key) {
 }
 
 export async function cacheClear() {
-  return new Promise(resolve => chrome.storage.local.clear(resolve));
+  return new Promise(resolve => {
+    chrome.storage.local.get(DIAGNOSTICS_KEY, preserved => {
+      chrome.storage.local.clear(() => {
+        const diagnostics = preserved?.[DIAGNOSTICS_KEY];
+        if (!diagnostics) {
+          resolve();
+          return;
+        }
+        chrome.storage.local.set({ [DIAGNOSTICS_KEY]: diagnostics }, resolve);
+      });
+    });
+  });
 }
 
 /**

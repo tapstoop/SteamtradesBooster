@@ -16,8 +16,58 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+function pad(num) {
+  return String(num).padStart(2, '0');
+}
+
+export function formatPopupDiagnosticDate(ts) {
+  if (!ts) return '';
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function buildDiagnosticsPanelHtml({ expanded = false, log = '', generatedAt = null, loading = false, error = '' } = {}) {
+  const hasLog = Boolean(log);
+  const generatedText = generatedAt ? `Generated ${formatPopupDiagnosticDate(generatedAt)}` : 'Not generated yet';
+  return `
+    <div class="settings-section diagnostics-panel${expanded ? ' expanded' : ''}" id="error-log" data-expanded="${expanded ? 'true' : 'false'}">
+      <div class="diagnostics-header">
+        <div>
+          <div class="settings-label">Diagnostics</div>
+          <div class="diagnostics-meta" id="s-error-log-meta">${escapeHtml(generatedText)}</div>
+        </div>
+        <button class="btn-refresh diagnostics-toggle" id="s-toggle-log" type="button" aria-expanded="${expanded ? 'true' : 'false'}">${expanded ? 'Minimize' : 'Open'}</button>
+      </div>
+      <div class="diagnostics-body" ${expanded ? '' : 'hidden'}>
+        <textarea class="settings-log" id="s-error-log" readonly>${escapeHtml(log || 'Click Generate to create a diagnostic snapshot.')}</textarea>
+        <div class="diagnostics-error" id="s-error-log-error" ${error ? '' : 'hidden'}>${escapeHtml(error)}</div>
+        <div class="diagnostics-actions">
+          <button class="btn-primary settings-copy" id="s-generate-log" type="button" ${loading ? 'disabled' : ''}>${hasLog ? 'Refresh' : 'Generate'}</button>
+          <button class="btn-primary settings-copy" id="s-copy-log" type="button" ${(!hasLog || loading) ? 'disabled' : ''}>Copy</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function storageGet(key) {
+  return new Promise(resolve => chrome.storage.local.get(key, result => resolve(result?.[key])));
+}
+
+function storageSet(obj) {
+  return new Promise(resolve => chrome.storage.local.set(obj, resolve));
+}
+
 export async function initSettings(container) {
-  const settings = await msg('GET_SETTINGS');
+  const focusErrorLog = new URLSearchParams(location.search).get('focus') === 'error-log';
+  const [settings, savedDiagnosticsExpanded] = await Promise.all([
+    msg('GET_SETTINGS'),
+    storageGet('diagnosticsPanelExpanded'),
+  ]);
+  let diagnosticsExpanded = focusErrorLog || Boolean(savedDiagnosticsExpanded);
+  let diagnosticsLog = '';
+  let diagnosticsGeneratedAt = null;
 
   container.innerHTML = `
     <div class="settings-section">
@@ -129,11 +179,7 @@ export async function initSettings(container) {
       <button class="btn-danger" id="s-clear">Clear all cached data</button>
     </div>
 
-    <div class="settings-section" id="error-log">
-      <div class="settings-label">Error Log</div>
-      <textarea class="settings-log" id="s-error-log" readonly>Loading diagnostics...</textarea>
-      <button class="btn-primary settings-copy" id="s-copy-log">Copy to clipboard</button>
-    </div>
+    ${buildDiagnosticsPanelHtml({ expanded: diagnosticsExpanded })}
 
     <hr class="settings-divider">
     <div class="settings-about">
@@ -150,26 +196,68 @@ export async function initSettings(container) {
   const aboutVersion = container.querySelector('#s-about-version');
   if (aboutVersion) aboutVersion.textContent = `SteamTrades Booster v${manifest?.version ?? 'unknown'}`;
 
-  async function refreshDiagnosticLog() {
-    const response = await msg('GET_DIAGNOSTIC_LOG');
-    const log = container.querySelector('#s-error-log');
-    if (log) log.value = response?.log ?? 'No diagnostics available.';
+  function renderDiagnosticsPanel({ loading = false, error = '' } = {}) {
+    const panel = container.querySelector('#error-log');
+    if (!panel) return;
+    panel.outerHTML = buildDiagnosticsPanelHtml({
+      expanded: diagnosticsExpanded,
+      log: diagnosticsLog,
+      generatedAt: diagnosticsGeneratedAt,
+      loading,
+      error,
+    });
+    bindDiagnosticsControls();
   }
 
-  await refreshDiagnosticLog();
+  async function refreshDiagnosticLog() {
+    renderDiagnosticsPanel({ loading: true });
+    const response = await msg('GET_DIAGNOSTIC_LOG');
+    if (response?.error) throw new Error(response.error);
+    diagnosticsLog = response?.log ?? 'No diagnostics available.';
+    diagnosticsGeneratedAt = Date.now();
+    renderDiagnosticsPanel();
+  }
 
-  container.querySelector('#s-copy-log').addEventListener('click', async e => {
-    e.stopPropagation();
-    await navigator.clipboard.writeText(container.querySelector('#s-error-log').value);
-    e.target.textContent = 'Copied';
-    setTimeout(() => { e.target.textContent = 'Copy to clipboard'; }, 1500);
-  });
+  function bindDiagnosticsControls() {
+    container.querySelector('#s-toggle-log')?.addEventListener('click', async e => {
+      e.stopPropagation();
+      diagnosticsExpanded = !diagnosticsExpanded;
+      await storageSet({ diagnosticsPanelExpanded: diagnosticsExpanded });
+      renderDiagnosticsPanel();
+    });
 
-  if (new URLSearchParams(location.search).get('focus') === 'error-log') {
-    const panel = container.querySelector('#error-log');
-    panel?.scrollIntoView({ block: 'start' });
-    panel?.classList.add('settings-highlight');
-    setTimeout(() => panel?.classList.remove('settings-highlight'), 1800);
+    container.querySelector('#s-generate-log')?.addEventListener('click', async e => {
+      e.stopPropagation();
+      try {
+        await refreshDiagnosticLog();
+      } catch (err) {
+        renderDiagnosticsPanel({ error: err?.message ?? 'Failed to generate diagnostics.' });
+      }
+    });
+
+    container.querySelector('#s-copy-log')?.addEventListener('click', async e => {
+      e.stopPropagation();
+      if (!diagnosticsLog) return;
+      await navigator.clipboard.writeText(diagnosticsLog);
+      e.target.textContent = 'Copied';
+      setTimeout(() => {
+        const copy = container.querySelector('#s-copy-log');
+        if (copy) copy.textContent = 'Copy';
+      }, 1500);
+    });
+  }
+
+  bindDiagnosticsControls();
+
+  if (focusErrorLog) {
+    refreshDiagnosticLog().catch(err => {
+      renderDiagnosticsPanel({ error: err?.message ?? 'Failed to generate diagnostics.' });
+    }).finally(() => {
+      const panel = container.querySelector('#error-log');
+      panel?.scrollIntoView({ block: 'start' });
+      panel?.classList.add('settings-highlight');
+      setTimeout(() => panel?.classList.remove('settings-highlight'), 3000);
+    });
   }
 
   // ── Currency change ────────────────────────────────────────────────────────

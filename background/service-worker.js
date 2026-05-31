@@ -1,17 +1,24 @@
 // background/service-worker.js
-import { getPrices, getCachedPrices, getBundles, getRateLimitState, getPriceResult, isRefreshFallbackPrice } from './ggdeals.js';
+import { getPrices, getCachedPrices, getBundles, getPriceResult, isRefreshFallbackPrice } from './ggdeals.js';
 import { resolveTitle, confirmResolution } from './resolver.js';
 import { fetchProfile, getCachedProfile } from './profile.js';
 import { cacheGet, cacheSet, cacheClear, setDismissed, setUndismissed, isDismissed, setDelisted, setUndelisted } from './cache.js';
 import { getDisplayRegion } from '../utils/similarity.js';
 import { writeSnapshot, pruneOldSnapshots } from './snapshots.js';
 import { scrapeGame, scrapeBatch, handleScrapedResult, getScrapedData } from './ggdeals-scraper.js';
+import {
+  buildDiagnosticLog as renderDiagnosticLog,
+  DEFAULT_RESOLUTION_STATS,
+  DIAGNOSTICS_RETENTION,
+  getDiagnostics,
+  sanitizeSteamTradesUrl,
+  updateDiagnostics,
+} from './diagnostics.js';
 
 const SETTINGS_KEY = 'settings';
 const TRADABLES_KEY = 'tradables_list';
 const TRADABLES_SNAPSHOTS_INDEX_KEY = 'tradables_snapshots_index';
 const ALARM_NAME = 'daily-snapshot';
-const DIAGNOSTICS_KEY = 'diagnostics_session';
 
 // --- Default Settings (tradables now stored separately) ---
 const DEFAULT_SETTINGS = {
@@ -93,41 +100,8 @@ async function getSettings() {
   return settings;
 }
 
-const diagnosticsMemory = {
-  activeUrl: '',
-  resolutionStats: { total: 0, hit: 0, resolved: 0, fuzzy: 0, ambiguous: 0, 'not-found': 0, dismissed: 0, delisted: 0 },
-  recentFailures: [],
-  updatedAt: null,
-};
-
-function getSessionStorageArea() {
-  return chrome.storage?.session ?? null;
-}
-
-async function getDiagnostics() {
-  const area = getSessionStorageArea();
-  if (!area) return { ...diagnosticsMemory };
-  return new Promise(resolve => {
-    area.get(DIAGNOSTICS_KEY, result => {
-      resolve(result?.[DIAGNOSTICS_KEY] ?? { ...diagnosticsMemory });
-    });
-  });
-}
-
-async function setDiagnostics(next) {
-  Object.assign(diagnosticsMemory, next);
-  const area = getSessionStorageArea();
-  if (!area) return;
-  await new Promise(resolve => area.set({ [DIAGNOSTICS_KEY]: next }, resolve));
-}
-
-async function updateDiagnostics(patch) {
-  const current = await getDiagnostics();
-  await setDiagnostics({ ...current, ...patch, updatedAt: Date.now() });
-}
-
 function countResolutions(titles, resolutions) {
-  const stats = { total: resolutions.length, hit: 0, resolved: 0, fuzzy: 0, ambiguous: 0, 'not-found': 0, dismissed: 0, delisted: 0 };
+  const stats = { ...DEFAULT_RESOLUTION_STATS, total: resolutions.length };
   const failures = [];
   resolutions.forEach((res, i) => {
     const status = res?.status ?? 'not-found';
@@ -140,40 +114,31 @@ function countResolutions(titles, resolutions) {
   return { stats, failures };
 }
 
-function formatDiagnosticDate(ts) {
-  return ts ? new Date(ts).toISOString() : 'n/a';
+function queryActiveTabUrl() {
+  return new Promise(resolve => {
+    try {
+      chrome.tabs.query({ active: true, currentWindow: true }, tabs => {
+        const url = tabs?.[0]?.url ?? '';
+        resolve(sanitizeSteamTradesUrl(url));
+      });
+    } catch {
+      resolve('');
+    }
+  });
 }
 
 async function buildDiagnosticLog() {
   const diagnostics = await getDiagnostics();
-  const rate = getRateLimitState();
   const manifest = chrome.runtime.getManifest();
-  const stats = diagnostics.resolutionStats ?? {};
-  const failures = diagnostics.recentFailures ?? [];
-  const calls = rate.lastCalls ?? [];
-  const rateErrors = rate.recent429s ?? [];
+  const activeUrl = await queryActiveTabUrl();
 
-  return [
-    `SteamTrades Booster v${manifest.version}`,
-    `Browser: ${navigator.userAgent}`,
-    `Active SteamTrades URL: ${diagnostics.activeUrl || 'n/a'}`,
-    `Generated: ${new Date().toISOString()}`,
-    '',
-    'Resolution stats:',
-    `total=${stats.total ?? 0} hit=${stats.hit ?? 0} resolved=${stats.resolved ?? 0} fuzzy=${stats.fuzzy ?? 0} ambiguous=${stats.ambiguous ?? 0} not-found=${stats['not-found'] ?? 0} dismissed=${stats.dismissed ?? 0} delisted=${stats.delisted ?? 0}`,
-    '',
-    'Rate limit:',
-    `limit=${rate.limit ?? 'n/a'} remaining=${rate.remaining ?? 'n/a'} resetAt=${formatDiagnosticDate(rate.resetAt)} updatedAt=${formatDiagnosticDate(rate.lastUpdatedAt)}`,
-    '',
-    'Last API calls:',
-    ...(calls.length ? calls.map(c => `${formatDiagnosticDate(c.at)} ${c.type} ${c.region} count=${c.count} status=${c.status}`) : ['none']),
-    '',
-    'Recent resolution failures:',
-    ...(failures.length ? failures.map(f => `${formatDiagnosticDate(f.at)} ${f.status}: ${f.title}`) : ['none']),
-    '',
-    'Recent 429s:',
-    ...(rateErrors.length ? rateErrors.map(e => `${formatDiagnosticDate(e.at)} ${e.type} ${e.region} count=${e.count} resetAt=${formatDiagnosticDate(e.resetAt)}`) : ['none']),
-  ].join('\n');
+  return renderDiagnosticLog({
+    diagnostics,
+    manifestVersion: manifest.version,
+    userAgent: navigator.userAgent,
+    userAgentData: navigator.userAgentData,
+    activeUrl,
+  });
 }
 
 function normalizePriceMessageItems(msg) {
@@ -325,7 +290,7 @@ async function handleMessage(msg) {
       const current = await getDiagnostics();
       await updateDiagnostics({
         resolutionStats: stats,
-        recentFailures: [...failures, ...(current.recentFailures ?? [])].slice(0, 25),
+        recentFailures: [...failures, ...(current.recentFailures ?? [])].slice(0, DIAGNOSTICS_RETENTION.maxResolutionFailures),
       });
       return results;
     }
@@ -412,7 +377,7 @@ async function handleMessage(msg) {
     }
 
     case 'REPORT_PAGE_DIAGNOSTICS': {
-      await updateDiagnostics({ activeUrl: msg.url ?? '' });
+      await updateDiagnostics({ activeUrl: sanitizeSteamTradesUrl(msg.url ?? '') });
       return { ok: true };
     }
 
