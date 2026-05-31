@@ -49,6 +49,8 @@ function stripEditionNoise(title) {
     .trim();
 }
 
+const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
+
 function getSearchTerms(title) {
   const terms = [title, stripEditionNoise(title)];
   const punctuationLight = title
@@ -57,6 +59,15 @@ function getSearchTerms(title) {
     .replace(/\s+/g, ' ')
     .trim();
   terms.push(punctuationLight, stripEditionNoise(punctuationLight));
+
+  const bundleMatch = title.match(BUNDLE_KEYWORDS);
+  if (bundleMatch) {
+    const withoutKeyword = title.replace(BUNDLE_KEYWORDS, '').replace(/\s+/g, ' ').trim();
+    if (withoutKeyword && withoutKeyword.length >= 3) {
+      terms.push(`${withoutKeyword} bundle`);
+    }
+  }
+
   return [...new Set(terms.filter(t => t && t.length >= 2))];
 }
 

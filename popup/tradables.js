@@ -64,11 +64,16 @@ function renderPriceBadge(priceData, settings, item) {
   const priceFormatted = formatPrice(bestCurrent, currency);
   const timestamp = priceData.cachedAt ? formatTimestamp(priceData.cachedAt) : '';
 
+  const qty = item?.qty ?? 1;
+  const qtySuffix = qty > 1 && bestCurrent != null
+    ? `<span class="tradables-qty-suffix"> x ${qty} = ${formatPrice(bestCurrent * qty, currency)}</span>`
+    : '';
+
   // Check if this is a DEAL (current price within threshold of ATL)
   if (bestCurrent != null && bestAtl != null && bestAtl > 0) {
     const pctAboveAtl = ((bestCurrent - bestAtl) / bestCurrent) * 100;
     if (pctAboveAtl <= (settings.dealThresholdPct ?? 10)) {
-      return `<span class="tradables-price-badge deal" title="DEAL · ATL: ${formatPrice(bestAtl, currency)}${timestamp ? ' · ' + timestamp : ''}">${priceFormatted}</span>`;
+      return `<span class="tradables-price-badge deal" title="DEAL · ATL: ${formatPrice(bestAtl, currency)}${timestamp ? ' · ' + timestamp : ''}">${priceFormatted}${qtySuffix}</span>`;
     }
   }
 
@@ -78,7 +83,7 @@ function renderPriceBadge(priceData, settings, item) {
 
   // Regular TRADE price
   const tooltip = bestAtl ? `ATL: ${formatPrice(bestAtl, currency)}${timestamp ? ' · ' + timestamp : ''}` : '';
-  return `<span class="tradables-price-badge trade" title="${tooltip}">${priceFormatted}</span>`;
+  return `<span class="tradables-price-badge trade" title="${tooltip}">${priceFormatted}${qtySuffix}</span>`;
 }
 
 function formatTimestamp(cachedAt) {
@@ -400,8 +405,8 @@ export async function initTradables(container) {
         </div>
         <div class="tradables-stats">
           <div class="stat-block">
-            <span class="stat-value" id="t-total-count">${tradablesList.length}</span>
-            <span class="stat-label">Games</span>
+            <span class="stat-value" id="t-total-count">${tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0)}</span>
+            <span class="stat-label" id="t-total-count-label">Games ${tradablesList.length !== tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0) ? `<span class="stat-unique">(${tradablesList.length} unique)</span>` : ''}</span>
           </div>
           <div class="stat-block">
             <span class="stat-value" id="t-total-value">—</span>
@@ -445,9 +450,9 @@ export async function initTradables(container) {
         
         return `
           <div class="tradables-item" data-orig-index="${item._origIndex}" data-appid="${item.appId || ''}">
+            <input type="number" min="1" max="999" class="tradables-qty-input" value="${item.qty ?? 1}" data-orig-index="${item._origIndex}" title="Quantity">
             <div class="tradables-item-main">
               <span class="tradables-name">${escapeHtml(item.name)}</span>
-              ${item.qty > 1 ? `<span class="tradables-qty">x${item.qty}</span>` : ''}
               <div class="tradables-item-meta">
                 ${item.appId
                   ? `<span class="tradables-appid">${item.type === 'bundle' ? 'Bundle' : item.type === 'sub' ? 'Sub' : 'App'} #${item.appId}</span>`
@@ -574,6 +579,24 @@ export async function initTradables(container) {
       });
     });
 
+    listEl.querySelectorAll('.tradables-qty-input').forEach(input => {
+      input.addEventListener('change', async (e) => {
+        e.stopPropagation();
+        const origIdx = parseInt(input.dataset.origIndex);
+        const item = tradablesList[origIdx];
+        if (item) {
+          let qty = parseInt(input.value) || 1;
+          if (qty < 1) qty = 1;
+          if (qty > 999) qty = 999;
+          input.value = qty;
+          item.qty = qty;
+          await save();
+          render();
+          updateStats();
+        }
+      });
+    });
+
     // Resolve unresolved games — click to search and pick a match
     listEl.querySelectorAll('.tradables-resolve-link').forEach(link => {
       link.addEventListener('click', async (e) => {
@@ -584,27 +607,23 @@ export async function initTradables(container) {
 
         // Build a tiny search popover
         const popover = document.createElement('div');
-        popover.className = 'stpt-candidates';
-        popover.style.minWidth = '260px';
+        popover.className = 'tradables-resolve-popover';
         popover.innerHTML = `
-          <div style="color:#888;font-size:9px;padding:3px 5px 5px;border-bottom:1px solid #1e1e2e;margin-bottom:3px;">
+          <div class="trp-header">
             Search for "${escapeHtml(item.name)}"
           </div>
-          <div style="padding:5px;">
-            <input type="text" class="tradables-resolve-search" placeholder="Search Steam..." value="${escapeHtml(item.name)}"
-              style="width:100%;padding:4px 6px;border:1px solid #333;border-radius:3px;background:#1e1e2e;color:#cdd6f4;font-size:11px;box-sizing:border-box;">
+          <div class="trp-search-wrap">
+            <input type="text" class="tradables-resolve-search" placeholder="Search Steam..." value="${escapeHtml(item.name)}">
           </div>
-          <div class="tradables-resolve-results" style="max-height:150px;overflow-y:auto;"></div>
-          <div class="stpt-cand-item stpt-cand-dismiss" style="margin-top:2px;">Cancel</div>
+          <div class="tradables-resolve-results"></div>
+          <div class="trp-cancel">Cancel</div>
         `;
 
         // Position near the clicked link
         const rect = link.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
-        popover.style.position = 'absolute';
         popover.style.left = `${rect.left - containerRect.left}px`;
         popover.style.top = `${rect.bottom - containerRect.top + 4}px`;
-        popover.style.zIndex = '9999';
         container.style.position = 'relative';
         container.appendChild(popover);
 
@@ -626,7 +645,7 @@ export async function initTradables(container) {
             }
             results.items.forEach(r => {
               const resultItem = document.createElement('div');
-              resultItem.className = 'stpt-cand-item';
+              resultItem.className = 'trp-result-item';
               const nameSpan = document.createElement('span');
               nameSpan.textContent = r.name ?? `App ${r.id}`;
               const metaSpan = document.createElement('span');
@@ -663,7 +682,7 @@ export async function initTradables(container) {
         // Auto-search on open
         if (item.name && item.name.length >= 2) performSearch(item.name);
 
-        popover.querySelector('.stpt-cand-dismiss').addEventListener('click', () => popover.remove());
+        popover.querySelector('.trp-cancel').addEventListener('click', () => popover.remove());
         setTimeout(() => document.addEventListener('click', () => popover.remove(), { once: true }), 0);
         setTimeout(() => { searchInput.focus(); searchInput.select(); }, 0);
       });
@@ -749,7 +768,9 @@ export async function initTradables(container) {
   function updateStats() {
     const valueEl = container.querySelector('#t-total-value');
     const countEl = container.querySelector('#t-prices-count');
-    
+    const totalCountEl = container.querySelector('#t-total-count');
+    const totalCountLabelEl = container.querySelector('#t-total-count-label');
+
     if (!valueEl || !countEl) return;
 
     const pricedCount = tradablesList.filter(item => {
@@ -759,6 +780,12 @@ export async function initTradables(container) {
     }).length;
 
     countEl.textContent = pricedCount;
+
+    const totalQty = tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0);
+    if (totalCountEl) totalCountEl.textContent = totalQty;
+    if (totalCountLabelEl) {
+      totalCountLabelEl.innerHTML = `Games ${totalQty !== tradablesList.length ? `<span class="stat-unique">(${tradablesList.length} unique)</span>` : ''}`;
+    }
 
     if (!settings.apiKey) {
       valueEl.textContent = '—';

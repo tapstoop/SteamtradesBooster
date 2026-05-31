@@ -93,6 +93,12 @@
   letter-spacing: 0.5px;
 }
 
+.stat-unique {
+  font-size: 8px;
+  color: #555;
+  text-transform: none;
+}
+
 /* ── Toolbar ─────────────────────────────────────────────────────── */
 .tradables-toolbar {
   display: flex;
@@ -197,10 +203,26 @@
   text-overflow: ellipsis;
 }
 
-.tradables-qty {
+.tradables-qty-input {
+  width: 42px;
+  background: #0d1117;
+  border: 1px solid #2a3f5f;
+  border-radius: 3px;
+  padding: 2px 3px;
   color: #66c0f4;
-  font-size: 10px;
-  margin-left: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  text-align: center;
+  flex-shrink: 0;
+  margin-right: 6px;
+}
+.tradables-qty-input:focus {
+  outline: none;
+  border-color: #66c0f4;
+}
+.tradables-qty-input::-webkit-inner-spin-button,
+.tradables-qty-input::-webkit-outer-spin-button {
+  opacity: 1;
 }
 
 .tradables-appid {
@@ -285,6 +307,12 @@
 .tradables-price-badge.deal {
   background: #2a2200;
   color: #ffd700;
+}
+
+.tradables-qty-suffix {
+  font-weight: 400;
+  opacity: 0.7;
+  margin-left: 2px;
 }
 
 /* ── Modal ───────────────────────────────────────────────────────── */
@@ -537,3 +565,72 @@
 }
 
 #t-snapshot-select:focus { outline: none; border-color: #66c0f4; }
+
+/* ── Resolve Popover ─────────────────────────────────────────────── */
+.tradables-resolve-popover {
+  position: absolute;
+  z-index: 99999;
+  background: #0d1117;
+  border: 1px solid #3a3a5a;
+  border-radius: 4px;
+  padding: 0;
+  min-width: 260px;
+  max-width: 320px;
+  font-size: 11px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+}
+
+.trp-header {
+  color: #888;
+  font-size: 9px;
+  padding: 5px 8px 5px;
+  border-bottom: 1px solid #1e1e2e;
+}
+
+.trp-search-wrap {
+  padding: 5px;
+}
+
+.tradables-resolve-search {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #333;
+  border-radius: 3px;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  font-size: 11px;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+.tradables-resolve-search:focus {
+  outline: none;
+  border-color: #66c0f4;
+}
+
+.tradables-resolve-results {
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.trp-result-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px;
+  color: #c6d4df;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.trp-result-item:hover {
+  background: #1a2030;
+}
+
+.trp-cancel {
+  color: #555;
+  font-style: italic;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 10px;
+}
+.trp-cancel:hover {
+  color: #888;
+}
