@@ -8,6 +8,18 @@ export { normalizeTitle, wordSimilarity };
 const STEAM_SEARCH = 'https://store.steampowered.com/api/storesearch/';
 const RESOLVE_TTL = 0; // permanent
 const SIMILARITY_THRESHOLD = 0.85; // 85% word overlap for fuzzy matching
+const RESOLVE_REQUEST_INTERVAL_MS = 200;
+let lastResolveRequestAt = 0;
+
+async function rateLimitedFetch(url) {
+  const now = Date.now();
+  const waitMs = Math.max(0, RESOLVE_REQUEST_INTERVAL_MS - (now - lastResolveRequestAt));
+  if (waitMs > 0) {
+    await new Promise(r => setTimeout(r, waitMs));
+  }
+  lastResolveRequestAt = Date.now();
+  return fetch(url);
+}
 
 function resolutionValue(id, type = 'app') {
   return { appId: String(id), type: normalizeSteamType(type) };
@@ -69,7 +81,7 @@ function getSearchTerms(title) {
 
 async function fetchSteamItems(term) {
   const url = `${STEAM_SEARCH}?term=${encodeURIComponent(term)}&l=english&cc=us`;
-  const resp = await fetch(url);
+  const resp = await rateLimitedFetch(url);
   if (!resp.ok) return [];
   const data = await resp.json();
   return data.items ?? [];

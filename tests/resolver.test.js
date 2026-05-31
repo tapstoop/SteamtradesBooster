@@ -229,6 +229,24 @@ describe('resolveTitle', () => {
     expect(result.candidates.length).toBeGreaterThan(0);
   });
 
+  it('rate-limits Steam API calls with minimum delay between requests', async () => {
+    let callCount = 0;
+    global.fetch = vi.fn(async (url) => {
+      callCount++;
+      return {
+        ok: true,
+        json: async () => ({ items: [{ id: '1', name: 'Test Game', type: 'app' }] }),
+      };
+    });
+
+    const start = Date.now();
+    await resolveTitle('Game Alpha');
+    await resolveTitle('Game Beta');
+    const elapsed = Date.now() - start;
+
+    expect(callCount).toBeGreaterThanOrEqual(2);
+  }, 15000);
+
   it('returns not-found when Steam returns empty', async () => {
     fetch.mockResolvedValue({
       ok: true,
