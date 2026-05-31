@@ -439,4 +439,25 @@ describe('gg.deals typed prices', () => {
     expect(isRefreshFallbackPrice({ title: 'Fresh price' })).toBe(false);
     expect(isRefreshFallbackPrice(null)).toBe(false);
   });
+
+  it('persists rateLimitState to chrome.storage after API calls', async () => {
+    fetch.mockResolvedValueOnce(apiResponse({
+      '123': {
+        title: 'Test',
+        url: 'https://gg.deals/test/',
+        prices: { currentRetail: '5.00', currentKeyshops: '3.00', historicalRetail: '4.00', historicalKeyshops: '2.00', currency: 'EUR' },
+      },
+    }, {
+      'x-ratelimit-limit': '100',
+      'x-ratelimit-remaining': '75',
+      'x-ratelimit-reset': '60',
+    }));
+
+    await getPrices('test-key', [{ id: '123', type: 'app' }], ['eu']);
+
+    expect(store.ggdeals_rate_limit_state).toBeDefined();
+    expect(store.ggdeals_rate_limit_state.remaining).toBe(75);
+    expect(store.ggdeals_rate_limit_state.limit).toBe(100);
+    expect(store.ggdeals_rate_limit_state.lastUpdatedAt).toBeGreaterThan(0);
+  });
 });
