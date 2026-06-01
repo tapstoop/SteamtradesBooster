@@ -55,11 +55,21 @@ Build complete trades in a side panel workstation:
 
 1. Get a free API key at [https://gg.deals/api/](https://gg.deals/api/)
 2. Activate your account through the confirmation email
-3. [Install from the Chrome Web Store](https://chromewebstore.google.com/detail/steamtrades-booster/nonelebfpfibhlmajbejoilgiojalhba?authuser=0&hl=fr) (recommended) or load the built folder as an unpacked extension
+3. [Install from the Chrome Web Store](https://chromewebstore.google.com/detail/steamtrades-booster/nonelebfpfibhlmajbejoilgiojalhba?authuser=0&hl=fr) (recommended) or download the latest package from the [releases page](https://github.com/tapstoop/SteamtradesBooster/releases) and install manually (see below)
 4. Open the popup → **Settings** → paste your API key and Steam profile URL
 5. Visit any trade page on [steamtrades.com](https://www.steamtrades.com) — overlays and sidebar activate automatically
 
 > **Note:** The Chrome Web Store version may be a few releases behind. The GitHub version is the latest nightly build — expect newer features but also potential rough edges.
+
+### Installing from a Release
+
+1. Go to the [releases page](https://github.com/tapstoop/SteamtradesBooster/releases)
+2. Download the `steamtrades_booster_v<version>.zip` file from the latest release
+3. Unzip it anywhere on your computer
+4. Open your Chromium-based browser (Chrome, Brave, Edge, Opera, etc.) and go to `chrome://extensions/`
+5. Enable **Developer mode** (toggle in the top-right corner)
+6. Click **Load unpacked** and select the unzipped folder
+7. Click the puzzle piece icon in the toolbar, find SteamTrades Booster, and click the pin icon to keep it visible
 
 ---
 
