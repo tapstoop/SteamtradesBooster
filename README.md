@@ -1,9 +1,11 @@
 # SteamTrades Booster
 
+[![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Install-4285F4?logo=google-chrome&logoColor=white)](https://chromewebstore.google.com/detail/steamtrades-booster/nonelebfpfibhlmajbejoilgiojalhba?authuser=0&hl=fr)
+[![GitHub Release](https://img.shields.io/github/v/release/tapstoop/SteamtradesBooster)](https://github.com/tapstoop/SteamtradesBooster/releases)
+
 The essential trading companion for SteamTrades. Make smarter trades in seconds.
 
 <img width="1280" height="320" alt="logo" src="https://github.com/user-attachments/assets/1425bb0e-6dd1-4eb2-9dc7-5011d3275894" />
-
 
 ## Why SteamTrades Booster?
 
@@ -51,21 +53,63 @@ Build complete trades in a side panel workstation:
 
 ## Quick Start
 
-1. Get a free API key at [https://gg.deals/api/](https://gg.deals/api/)  
-2. Install in Chrome → Developer mode → **Load unpacked** → select the extension folder  
-3. Open the popup → **Settings** → paste your API key and Steam profile URL  
-4. Visit any trade page on [steamtrades.com](https://www.steamtrades.com) — overlays and sidebar activate automatically
+1. Get a free API key at [https://gg.deals/api/](https://gg.deals/api/)
+2. Activate your account through the confirmation email
+3. [Install from the Chrome Web Store](https://chromewebstore.google.com/detail/steamtrades-booster/nonelebfpfibhlmajbejoilgiojalhba?authuser=0&hl=fr) (recommended) or load the built folder as an unpacked extension
+4. Open the popup → **Settings** → paste your API key and Steam profile URL
+5. Visit any trade page on [steamtrades.com](https://www.steamtrades.com) — overlays and sidebar activate automatically
+
+> **Note:** The Chrome Web Store version may be a few releases behind. The GitHub version is the latest nightly build — expect newer features but also potential rough edges.
 
 ---
 
-## Build
+## Development
+
+Built with **Manifest V3**, **esbuild**, **Vitest**, and vanilla JavaScript.
+
+### Prerequisites
+
+- Node.js 18+
+- Git
+
+### Setup
 
 ```bash
-npm install
+git clone https://github.com/tapstoop/SteamtradesBooster.git
+cd SteamtradesBooster
+npm ci
+```
+
+### Build
+
+```bash
 npm run build
 ```
 
-Load the `dist/` folder as an unpacked extension in Chrome.
+This produces a `steamtrades_booster_v<version>/` folder and a `steamtrades_booster_v<version>.zip` package in the project root.
+
+To test in Chrome:
+1. Open `chrome://extensions/`
+2. Enable **Developer mode** (top right)
+3. Click **Load unpacked** and select the `steamtrades_booster_v<version>/` folder
+
+### Testing
+
+```bash
+npm test
+```
+
+All tests use Vitest with mocked Chrome APIs. Network-dependent tests use fixture data.
+
+### Contributing
+
+1. Fork the repo and create a branch from `main`.
+2. Make your changes — keep them focused (one feature/fix per PR).
+3. If implementing a new feature, add tests for it when existing coverage is insufficient.
+4. Run `npm test` to verify nothing breaks.
+5. Open a PR with a clear description of what changed and why.
+
+Commits follow conventional commit format (`feat:`, `fix:`, `refactor:`, `docs:`, etc.).
 
 ---
 
@@ -76,3 +120,9 @@ Load the `dist/` folder as an unpacked extension in Chrome.
 - **Background service worker** — Fast GG.deals API caching  
 - **Steam integration** — Direct wishlist and inventory fetching  
 - **Fuzzy title matching** — Handles game name variations automatically
+
+---
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
