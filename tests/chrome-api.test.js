@@ -63,4 +63,13 @@ describe('chrome api wrappers', () => {
 
     await expect(runtimeSendMessage({ type: 'PING' })).rejects.toThrow('Receiving end does not exist');
   });
+
+  it('rejects runtimeSendMessage when chrome reports lastError with an empty message', async () => {
+    chrome.runtime.sendMessage.mockImplementation((message, callback) => {
+      chrome.runtime.lastError = { message: '' };
+      callback(undefined);
+    });
+
+    await expect(runtimeSendMessage({ type: 'PING' })).rejects.toThrow(Error);
+  });
 });

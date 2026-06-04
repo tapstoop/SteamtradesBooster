@@ -1,11 +1,7 @@
-function getLastErrorMessage() {
-  return chrome.runtime.lastError?.message || null;
-}
-
 function rejectLastError(reject) {
-  const message = getLastErrorMessage();
-  if (message) {
-    reject(new Error(message));
+  const lastError = chrome.runtime.lastError;
+  if (lastError) {
+    reject(new Error(lastError.message));
     return true;
   }
   return false;
