@@ -88,7 +88,7 @@ describe('build manifest helpers', () => {
     expect(packaged.browser_specific_settings).toEqual({
       gecko: {
         id: 'steamtrades-booster@example.com',
-        strict_min_version: '109.0',
+        strict_min_version: '142.0',
         data_collection_permissions: {
           required: ['none']
         }
