@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.worktrees/
 *.log
 *.zip
 steamtrades_booster_v*/
