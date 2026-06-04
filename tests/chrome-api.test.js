@@ -32,6 +32,15 @@ describe('chrome api wrappers', () => {
     await expect(tabsCreate({ url: 'https://example.com/' })).rejects.toThrow('Cannot create tab');
   });
 
+  it('rejects tabsCreate when chrome reports lastError with an empty message', async () => {
+    chrome.tabs.create.mockImplementation((options, callback) => {
+      chrome.runtime.lastError = { message: '' };
+      callback(undefined);
+    });
+
+    await expect(tabsCreate({ url: 'https://example.com/' })).rejects.toThrow(Error);
+  });
+
   it('resolves tabsRemove after removing a tab', async () => {
     chrome.tabs.remove.mockImplementation((tabId, callback) => callback());
 
@@ -46,6 +55,15 @@ describe('chrome api wrappers', () => {
     });
 
     await expect(tabsRemove(42)).rejects.toThrow('No tab with id: 42');
+  });
+
+  it('rejects tabsRemove when chrome reports lastError with an empty message', async () => {
+    chrome.tabs.remove.mockImplementation((tabId, callback) => {
+      chrome.runtime.lastError = { message: '' };
+      callback();
+    });
+
+    await expect(tabsRemove(42)).rejects.toThrow(Error);
   });
 
   it('resolves runtimeSendMessage with the response', async () => {
