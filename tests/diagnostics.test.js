@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const store = {};
+const TEST_NOW_MS = Date.UTC(2026, 4, 31, 8, 0);
 
 global.chrome = {
   storage: {
@@ -29,6 +30,11 @@ const {
 beforeEach(() => {
   Object.keys(store).forEach(key => delete store[key]);
   vi.clearAllMocks();
+  vi.spyOn(Date, 'now').mockReturnValue(TEST_NOW_MS);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('diagnostic formatting', () => {
