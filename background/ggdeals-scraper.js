@@ -46,7 +46,7 @@ async function scrapeSingleTab(gameId, url) {
       }, SCRAPE_TIMEOUT_MS);
 
       const listener = (message, sender) => {
-        if (message.type === 'GGDEALS_SCRAPED') {
+        if (message.type === 'GGDEALS_SCRAPED' && sender?.tab?.id === tab.id) {
           clearTimeout(timeoutId);
           chrome.runtime.onMessage.removeListener(listener);
           closeTab();
