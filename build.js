@@ -1,8 +1,11 @@
 import { readFileSync, writeFileSync, copyFileSync, rmSync, existsSync, mkdirSync } from 'fs';
 import { execSync } from 'child_process';
+import { createPackagedManifest, getBuildTarget, getOutputNames } from './build/manifest.js';
 
 const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
 const version = manifest.version;
+const target = getBuildTarget(process.argv[2]);
+const { outDir: OUTDIR, packageName: PACKAGE } = getOutputNames(target, version);
 const esbuild = 'npx esbuild';
 // Preflight checks
 try {
@@ -18,7 +21,6 @@ for (const f of ['content/content.js', 'background/service-worker.js', 'popup/po
   }
 }
 
-const OUTDIR = `steamtrades_booster_v${version}`;
 rmSync(OUTDIR, { recursive: true, force: true });
 mkdirSync(OUTDIR, { recursive: true });
 
@@ -35,23 +37,8 @@ execSync(`${esbuild} popup/popup.js --bundle --outfile=${OUTDIR}/dist/popup.js -
 copyFileSync('content/ggdeals-scraper.js', `${OUTDIR}/dist/ggdeals-scraper.js`);
 
 // Write packaged manifest (bundled version — no module type)
-const packagedManifest = {
-  manifest_version: manifest.manifest_version,
-  name: manifest.name,
-  version: manifest.version,
-  description: manifest.description,
-  permissions: manifest.permissions,
-  host_permissions: manifest.host_permissions,
-  background: {
-    service_worker: 'dist/service-worker.js'
-  },
-  content_scripts: manifest.content_scripts,
-  action: manifest.action
-};
-// Include icons only if they exist
-if (existsSync('icons')) {
-  packagedManifest.icons = manifest.icons;
-}
+const includeIcons = existsSync('icons');
+const packagedManifest = createPackagedManifest(manifest, { target, includeIcons });
 writeFileSync(`${OUTDIR}/manifest.json`, JSON.stringify(packagedManifest, null, 2));
 
 // Write packaged popup.html (no type="module" — bundled IIFE)
@@ -99,7 +86,6 @@ if (existsSync('icons')) {
 }
 
 // Package as ZIP
-const PACKAGE = `steamtrades_booster_v${version}.zip`;
 if (existsSync(PACKAGE)) rmSync(PACKAGE);
 execSync(`cd ${OUTDIR} && zip -r ../${PACKAGE} .`, { stdio: 'inherit' });
 

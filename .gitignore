@@ -4,6 +4,7 @@ dist/
 *.log
 *.zip
 steamtrades_booster_v*/
+steamtrades_booster_*_v*/
 
 # Agent/coding tool configs
 .claude/
