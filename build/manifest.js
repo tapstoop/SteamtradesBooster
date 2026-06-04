@@ -4,8 +4,7 @@ const FIREFOX_GECKO_SETTINGS = {
   id: 'steamtrades-booster@example.com',
   strict_min_version: '109.0',
   data_collection_permissions: {
-    required: [],
-    optional: []
+    required: ['none']
   }
 };
 
