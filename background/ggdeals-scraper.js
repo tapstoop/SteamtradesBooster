@@ -3,6 +3,7 @@
 // Each tab stays active until content script finishes, then closes and moves to next
 
 import { cacheSet, cacheGet } from './cache.js';
+import { runtimeSendMessage, tabsCreate, tabsRemove } from '../utils/chrome-api.js';
 
 const SCRAPED_TTL = 86400 * 30;
 const RETRY_ATTEMPTS = 1;
@@ -11,7 +12,7 @@ const SCRAPE_TIMEOUT_MS = 30000;
 const pendingScrapes = new Map();
 
 function broadcastProgress(message) {
-  chrome.runtime.sendMessage(message).catch(() => {});
+  runtimeSendMessage(message).catch(() => {});
 }
 
 export async function scrapeGame(gameId, ggdealsUrl) {
@@ -30,13 +31,17 @@ export async function scrapeGame(gameId, ggdealsUrl) {
 }
 
 async function scrapeSingleTab(gameId, url) {
-  return new Promise((resolve) => {
-    const tabCreated = chrome.tabs.create({ url, active: true });
+  try {
+    const tab = await tabsCreate({ url, active: true });
 
-    tabCreated.then((tab) => {
+    return await new Promise((resolve) => {
+      const closeTab = () => {
+        tabsRemove(tab.id).catch(() => {});
+      };
+
       const timeoutId = setTimeout(() => {
         chrome.runtime.onMessage.removeListener(listener);
-        chrome.tabs.remove(tab.id).catch(() => {});
+        closeTab();
         resolve({ success: false, error: 'Scrape timeout (30s)', tabId: tab.id });
       }, SCRAPE_TIMEOUT_MS);
 
@@ -44,7 +49,7 @@ async function scrapeSingleTab(gameId, url) {
         if (message.type === 'GGDEALS_SCRAPED') {
           clearTimeout(timeoutId);
           chrome.runtime.onMessage.removeListener(listener);
-          chrome.tabs.remove(tab.id).catch(() => {});
+          closeTab();
           resolve({
             success: message.success,
             data: message.data,
@@ -55,10 +60,10 @@ async function scrapeSingleTab(gameId, url) {
       };
 
       chrome.runtime.onMessage.addListener(listener);
-    }).catch((err) => {
-      resolve({ success: false, error: err.message });
     });
-  });
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 }
 
 export async function handleScrapedResult(message) {
