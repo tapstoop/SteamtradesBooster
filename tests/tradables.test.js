@@ -1,4 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
+import { JSDOM } from 'jsdom';
+
+const dom = new JSDOM('<!doctype html><html><body></body></html>');
+globalThis.document = dom.window.document;
+globalThis.HTMLElement = dom.window.HTMLElement;
 
 globalThis.chrome = {
   runtime: {
@@ -10,6 +15,7 @@ globalThis.chrome = {
 };
 
 const {
+  buildTradablesListItemElement,
   bindTradablesRuntimeStateForInit,
   createTradablesInitGuard,
 } = await import('../popup/tradables.js');
@@ -48,6 +54,85 @@ describe('tradables init guards', () => {
       render: vi.fn(),
       updateStats: vi.fn(),
     })).toBe(true);
+  });
+});
+
+describe('buildTradablesListItemElement', () => {
+  it('renders stored item data as text and preserves row metadata', () => {
+    const item = {
+      name: 'Bad <img src=x onerror=alert(1)>',
+      appId: '123',
+      type: 'bundle',
+      qty: 2,
+      acqPrice: 1.5,
+      _origIndex: 7,
+    };
+
+    const element = buildTradablesListItemElement(item, {
+      priceData: {
+        prices: {
+          currentRetail: 250,
+          historicalRetail: 240,
+        },
+        cachedAt: Date.now(),
+      },
+      settings: {
+        currency: 'EUR',
+        dealThresholdPct: 10,
+        keyshopsEnabled: false,
+      },
+      currencySymbol: '€',
+    });
+
+    expect(element.className).toBe('tradables-item');
+    expect(element.dataset.origIndex).toBe('7');
+    expect(element.dataset.appid).toBe('123');
+    expect(element.querySelector('img')).toBeNull();
+    expect(element.querySelector('[onerror]')).toBeNull();
+    expect(element.querySelector('[onclick]')).toBeNull();
+    expect(element.querySelector('[onfocus]')).toBeNull();
+    expect(element.querySelector('.tradables-name').textContent).toBe(item.name);
+    expect(element.querySelector('.tradables-appid').textContent).toBe('Bundle #123');
+    expect(element.querySelector('.tradables-price-badge.deal')).not.toBeNull();
+    expect(element.querySelector('.tradables-qty-suffix').textContent).toContain(' x 2 = ');
+    const qtyUp = element.querySelector('.tradables-qty-arrow.tradables-qty-up');
+    const qtyDown = element.querySelector('.tradables-qty-arrow.tradables-qty-down');
+    const qtyInput = element.querySelector('.tradables-qty-input');
+    expect(qtyUp.dataset.origIndex).toBe('7');
+    expect(qtyUp.getAttribute('aria-label')).toBe('Increase quantity');
+    expect(qtyUp.textContent).toBe('▲');
+    expect(qtyDown.dataset.origIndex).toBe('7');
+    expect(qtyDown.getAttribute('aria-label')).toBe('Decrease quantity');
+    expect(qtyDown.textContent).toBe('▼');
+    expect(qtyInput.dataset.origIndex).toBe('7');
+    expect(qtyInput.type).toBe('number');
+    expect(qtyInput.min).toBe('1');
+    expect(qtyInput.max).toBe('999');
+    expect(qtyInput.title).toBe('Quantity');
+    expect(qtyInput.value).toBe('2');
+    expect(element.querySelector('.tradables-acq-input').placeholder).toBe('Acq. €');
+    expect(element.querySelector('.tradables-remove').getAttribute('aria-label')).toBe(`Remove ${item.name}`);
+  });
+
+  it('renders invalid stored app ids as unresolved', () => {
+    const element = buildTradablesListItemElement({
+      name: 'Broken App',
+      appId: '<script>alert(1)</script>',
+      type: 'app',
+      qty: 1,
+      _origIndex: 2,
+    }, {
+      settings: { currency: 'EUR' },
+      currencySymbol: '€',
+    });
+
+    expect(element.dataset.appid).toBe('');
+    expect(element.querySelector('.tradables-appid')).toBeNull();
+    const unresolved = element.querySelector('.tradables-unresolved.tradables-resolve-link');
+    expect(unresolved).not.toBeNull();
+    expect(unresolved.dataset.origIndex).toBe('2');
+    expect(unresolved.textContent).toBe('unresolved ↗');
+    expect(element.querySelector('.tradables-price-badge.na').textContent).toBe('N/A');
   });
 });
 

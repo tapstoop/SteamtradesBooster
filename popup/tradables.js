@@ -43,8 +43,13 @@ function normalizeTradables(raw) {
  * Render a price badge similar to the ones on SteamTrades pages.
  */
 function renderPriceBadge(priceData, settings, item) {
+  const badge = document.createElement('span');
+  badge.className = 'tradables-price-badge';
+
   if (!priceData || !priceData.prices) {
-    return '<span class="tradables-price-badge na">N/A</span>';
+    badge.classList.add('na');
+    badge.textContent = 'N/A';
+    return badge;
   }
 
   const prices = priceData.prices;
@@ -72,25 +77,39 @@ function renderPriceBadge(priceData, settings, item) {
   const timestamp = priceData.cachedAt ? formatTimestamp(priceData.cachedAt) : '';
 
   const qty = item?.qty ?? 1;
-  const qtySuffix = qty > 1 && bestCurrent != null
-    ? `<span class="tradables-qty-suffix"> x ${qty} = ${formatPrice(bestCurrent * qty, currency)}</span>`
-    : '';
+  const appendBadgeText = () => {
+    badge.append(document.createTextNode(priceFormatted));
+    if (qty > 1 && bestCurrent != null) {
+      const qtySuffix = document.createElement('span');
+      qtySuffix.className = 'tradables-qty-suffix';
+      qtySuffix.textContent = ` x ${qty} = ${formatPrice(bestCurrent * qty, currency)}`;
+      badge.appendChild(qtySuffix);
+    }
+  };
 
   // Check if this is a DEAL (current price within threshold of ATL)
   if (bestCurrent != null && bestAtl != null && bestAtl > 0) {
     const pctAboveAtl = ((bestCurrent - bestAtl) / bestCurrent) * 100;
     if (pctAboveAtl <= (settings.dealThresholdPct ?? 10)) {
-      return `<span class="tradables-price-badge deal" title="DEAL · ATL: ${formatPrice(bestAtl, currency)}${timestamp ? ' · ' + timestamp : ''}">${priceFormatted}${qtySuffix}</span>`;
+      badge.classList.add('deal');
+      badge.title = `DEAL · ATL: ${formatPrice(bestAtl, currency)}${timestamp ? ' · ' + timestamp : ''}`;
+      appendBadgeText();
+      return badge;
     }
   }
 
   if (bestCurrent == null) {
-    return '<span class="tradables-price-badge na">N/A</span>';
+    badge.classList.add('na');
+    badge.textContent = 'N/A';
+    return badge;
   }
 
   // Regular TRADE price
   const tooltip = bestAtl ? `ATL: ${formatPrice(bestAtl, currency)}${timestamp ? ' · ' + timestamp : ''}` : '';
-  return `<span class="tradables-price-badge trade" title="${tooltip}">${priceFormatted}${qtySuffix}</span>`;
+  badge.classList.add('trade');
+  badge.title = tooltip;
+  appendBadgeText();
+  return badge;
 }
 
 function formatTimestamp(cachedAt) {
@@ -136,6 +155,106 @@ function readPriceEntry(store, item) {
   const typed = store[typedPriceKey(item.appId, type)];
   if (typed) return typed;
   return type === 'app' ? store[item.appId] ?? null : null;
+}
+
+function isValidTradablesItemId(id) {
+  return /^\d+$/.test(String(id ?? ''));
+}
+
+function getTradablesTypeLabel(type) {
+  if (type === 'bundle') return 'Bundle';
+  if (type === 'sub') return 'Sub';
+  return 'App';
+}
+
+export function buildTradablesListItemElement(item, {
+  priceData = null,
+  settings = {},
+  currencySymbol = '€',
+} = {}) {
+  const origIndex = String(item._origIndex ?? '');
+  const appId = isValidTradablesItemId(item.appId) ? String(item.appId) : '';
+
+  const row = document.createElement('div');
+  row.className = 'tradables-item';
+  row.dataset.origIndex = origIndex;
+  row.dataset.appid = appId;
+
+  const qty = document.createElement('div');
+  qty.className = 'tradables-qty';
+  qty.dataset.origIndex = origIndex;
+
+  const qtyUp = document.createElement('button');
+  qtyUp.className = 'tradables-qty-arrow tradables-qty-up';
+  qtyUp.dataset.origIndex = origIndex;
+  qtyUp.setAttribute('aria-label', 'Increase quantity');
+  qtyUp.textContent = '▲';
+
+  const qtyInput = document.createElement('input');
+  qtyInput.type = 'number';
+  qtyInput.min = '1';
+  qtyInput.max = '999';
+  qtyInput.className = 'tradables-qty-input';
+  qtyInput.value = String(item.qty ?? 1);
+  qtyInput.dataset.origIndex = origIndex;
+  qtyInput.title = 'Quantity';
+
+  const qtyDown = document.createElement('button');
+  qtyDown.className = 'tradables-qty-arrow tradables-qty-down';
+  qtyDown.dataset.origIndex = origIndex;
+  qtyDown.setAttribute('aria-label', 'Decrease quantity');
+  qtyDown.textContent = '▼';
+
+  qty.append(qtyUp, qtyInput, qtyDown);
+
+  const main = document.createElement('div');
+  main.className = 'tradables-item-main';
+
+  const name = document.createElement('span');
+  name.className = 'tradables-name';
+  name.textContent = item.name ?? '';
+
+  const meta = document.createElement('div');
+  meta.className = 'tradables-item-meta';
+
+  if (appId) {
+    const appMeta = document.createElement('span');
+    appMeta.className = 'tradables-appid';
+    appMeta.textContent = `${getTradablesTypeLabel(item.type)} #${appId}`;
+    meta.appendChild(appMeta);
+  } else {
+    const unresolved = document.createElement('span');
+    unresolved.className = 'tradables-unresolved tradables-resolve-link';
+    unresolved.dataset.origIndex = origIndex;
+    unresolved.title = 'Click to search for this game';
+    unresolved.textContent = 'unresolved ↗';
+    meta.appendChild(unresolved);
+  }
+
+  meta.appendChild(renderPriceBadge(priceData, settings, item));
+  main.append(name, meta);
+
+  const actions = document.createElement('div');
+  actions.className = 'tradables-item-actions';
+
+  const acqInput = document.createElement('input');
+  acqInput.type = 'number';
+  acqInput.className = 'tradables-acq-input';
+  acqInput.placeholder = `Acq. ${currencySymbol}`;
+  acqInput.step = '0.01';
+  acqInput.value = item.acqPrice != null ? String(item.acqPrice) : '';
+  acqInput.dataset.origIndex = origIndex;
+  acqInput.title = 'Your acquisition price (optional)';
+
+  const remove = document.createElement('button');
+  remove.className = 'tradables-remove';
+  remove.dataset.origIndex = origIndex;
+  remove.setAttribute('aria-label', `Remove ${item.name ?? ''}`);
+  remove.textContent = '×';
+
+  actions.append(acqInput, remove);
+  row.append(qty, main, actions);
+  return row;
 }
 
 const tradablesRuntimeState = {
@@ -449,37 +568,15 @@ export async function initTradables(container) {
     // Render list
     const listEl = container.querySelector('#t-list');
     if (filteredSorted.length === 0) {
-      listEl.innerHTML = '<div class="tradables-empty">No tradables found.</div>';
+      const empty = document.createElement('div');
+      empty.className = 'tradables-empty';
+      empty.textContent = 'No tradables found.';
+      listEl.replaceChildren(empty);
     } else {
-      listEl.innerHTML = filteredSorted.map((item, i) => {
+      listEl.replaceChildren(...filteredSorted.map((item) => {
         const itemPriceData = item.appId ? readPriceEntry(priceData, item) : null;
-        const priceBadge = renderPriceBadge(itemPriceData, settings, item);
-        
-        return `
-          <div class="tradables-item" data-orig-index="${item._origIndex}" data-appid="${item.appId || ''}">
-            <div class="tradables-qty" data-orig-index="${item._origIndex}">
-              <button class="tradables-qty-arrow tradables-qty-up" data-orig-index="${item._origIndex}" aria-label="Increase quantity">▲</button>
-              <input type="number" min="1" max="999" class="tradables-qty-input" value="${item.qty ?? 1}" data-orig-index="${item._origIndex}" title="Quantity">
-              <button class="tradables-qty-arrow tradables-qty-down" data-orig-index="${item._origIndex}" aria-label="Decrease quantity">▼</button>
-            </div>
-            <div class="tradables-item-main">
-              <span class="tradables-name">${escapeHtml(item.name)}</span>
-              <div class="tradables-item-meta">
-                ${item.appId
-                  ? `<span class="tradables-appid">${item.type === 'bundle' ? 'Bundle' : item.type === 'sub' ? 'Sub' : 'App'} #${item.appId}</span>`
-                  : `<span class="tradables-unresolved tradables-resolve-link" data-orig-index="${item._origIndex}" title="Click to search for this game">unresolved ↗</span>`
-                }
-                ${priceBadge}
-              </div>
-            </div>
-            <div class="tradables-item-actions">
-              <input type="number" class="tradables-acq-input" placeholder="Acq. ${currencySymbol}" step="0.01"
-                value="${item.acqPrice != null ? item.acqPrice : ''}" data-orig-index="${item._origIndex}" title="Your acquisition price (optional)">
-              <button class="tradables-remove" data-orig-index="${item._origIndex}" aria-label="Remove ${escapeHtml(item.name)}">×</button>
-            </div>
-          </div>
-        `;
-      }).join('');
+        return buildTradablesListItemElement(item, { priceData: itemPriceData, settings, currencySymbol });
+      }));
     }
 
     // PHASE 2A: Prevent popup close on interaction
