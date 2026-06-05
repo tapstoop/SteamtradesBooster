@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { JSDOM } from 'jsdom';
 
 globalThis.chrome = {
   runtime: {
@@ -23,6 +24,7 @@ const {
   mergePriceResponse,
   normalizeGgDealsUrl,
   renderGgDealsLink,
+  createDealsGameListElement,
 } = await import('../popup/deals.js');
 
 describe('formatRefreshDate', () => {
@@ -151,13 +153,14 @@ describe('mergePriceResponse', () => {
 });
 
 describe('normalizeGgDealsUrl', () => {
-  it('accepts HTTPS gg.deals URLs and subdomains', () => {
+  it('accepts HTTPS gg.deals URLs and www host URLs', () => {
     expect(normalizeGgDealsUrl('https://gg.deals/game/hollow-knight/')).toBe('https://gg.deals/game/hollow-knight/');
-    expect(normalizeGgDealsUrl('https://store.gg.deals/us/game/hollow-knight/')).toBe('https://store.gg.deals/us/game/hollow-knight/');
+    expect(normalizeGgDealsUrl('https://www.gg.deals/game/hollow-knight/')).toBe('https://www.gg.deals/game/hollow-knight/');
   });
 
-  it('rejects non-HTTPS, non-GG.deals, and credentialed URLs', () => {
+  it('rejects non-HTTPS, non-GG.deals, subdomain, and credentialed URLs', () => {
     expect(normalizeGgDealsUrl('http://gg.deals/game/hollow-knight/')).toBeNull();
+    expect(normalizeGgDealsUrl('https://store.gg.deals/us/game/hollow-knight/')).toBeNull();
     expect(normalizeGgDealsUrl('https://gg.deals.evil.test/game/hollow-knight/')).toBeNull();
     expect(normalizeGgDealsUrl('javascript:alert(1)')).toBeNull();
     expect(normalizeGgDealsUrl('https://user@gg.deals/game/hollow-knight/')).toBeNull();
@@ -175,5 +178,77 @@ describe('renderGgDealsLink', () => {
 
   it('does not render invalid GG.deals links', () => {
     expect(renderGgDealsLink('https://evil.test/game/hollow-knight/')).toBe('');
+  });
+});
+
+describe('createDealsGameListElement', () => {
+  it('renders valid wishlist deal links and normal price card elements', () => {
+    const dom = new JSDOM('<!doctype html><body></body>');
+    globalThis.document = dom.window.document;
+
+    const list = createDealsGameListElement([
+      {
+        title: 'Hollow Knight',
+        appId: '367520',
+        type: 'app',
+        bestCurrent: 749,
+        bestAtl: 399,
+        pctAboveAtl: 88,
+        currency: 'EUR',
+        usedRegion: 'eu',
+        url: 'https://gg.deals/game/hollow-knight/',
+      },
+    ], { dealThresholdPct: 10 }, 'best-deal');
+
+    const gameCard = list.querySelector('.game-card');
+    const title = list.querySelector('.game-card-title');
+    const meta = list.querySelector('.game-card-meta');
+    const atl = list.querySelector('.atl');
+
+    expect(gameCard).not.toBeNull();
+    expect(title).not.toBeNull();
+    expect(meta).not.toBeNull();
+    expect(atl).not.toBeNull();
+    expect(meta.textContent).toContain('€7.49');
+    expect(meta.textContent).toContain('€3.99');
+
+    const steamLink = title.querySelector('a');
+    expect(steamLink.textContent).toBe('Hollow Knight');
+    expect(steamLink.href).toMatch(/^https:\/\/store\.steampowered\.com\/app\/367520/);
+    expect(steamLink.target).toBe('_blank');
+    expect(steamLink.rel).toBe('noopener noreferrer');
+
+    const ggDealsLink = [...meta.querySelectorAll('a')]
+      .find(link => link.textContent === 'GG.deals ↗');
+    expect(ggDealsLink.href).toBe('https://gg.deals/game/hollow-knight/');
+    expect(ggDealsLink.target).toBe('_blank');
+    expect(ggDealsLink.rel).toBe('noopener noreferrer');
+  });
+
+  it('renders malicious wishlist deal data as inert text and omits unsafe links', () => {
+    const dom = new JSDOM('<!doctype html><body></body>');
+    globalThis.document = dom.window.document;
+
+    const list = createDealsGameListElement([
+      {
+        title: 'Game <script>alert(1)</script>',
+        appId: '10" onclick="alert(1)',
+        type: 'app',
+        bestCurrent: 499,
+        bestAtl: 299,
+        pctAboveAtl: 40,
+        currency: 'EUR',
+        url: 'javascript:alert(1)',
+        ggdealsUrl: 'https://evil.test/game/<img src=x onerror=alert(1)>',
+      },
+    ], { dealThresholdPct: 10 }, 'best-deal');
+
+    expect(list.querySelector('script')).toBeNull();
+    expect(list.querySelector('img')).toBeNull();
+    expect(list.textContent).toContain('Game <script>alert(1)</script>');
+    expect(list.innerHTML).not.toMatch(/\son(?:error|click|focus)=/i);
+
+    const links = [...list.querySelectorAll('a')];
+    expect(links).toHaveLength(0);
   });
 });

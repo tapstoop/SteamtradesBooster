@@ -40,12 +40,44 @@ export function normalizeGgDealsUrl(url) {
   }
 
   const host = parsed.hostname.toLowerCase();
-  const isGgDealsHost = host === 'gg.deals' || host.endsWith('.gg.deals');
+  const isGgDealsHost = host === 'gg.deals' || host === 'www.gg.deals';
   if (parsed.protocol !== 'https:' || !isGgDealsHost || parsed.username || parsed.password) {
     return null;
   }
 
   return parsed.href;
+}
+
+function normalizeSafeExternalUrl(url) {
+  if (!url) return null;
+  let parsed;
+  try {
+    parsed = new URL(String(url));
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const isSteamStore = host === 'store.steampowered.com';
+  const isGgDeals = host === 'gg.deals' || host === 'www.gg.deals';
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (!isSteamStore && !isGgDeals)) {
+    return null;
+  }
+
+  return parsed.href;
+}
+
+function createExternalLink(url, text, options = {}) {
+  const safeUrl = normalizeSafeExternalUrl(url);
+  if (!safeUrl) return null;
+  const link = document.createElement('a');
+  link.href = safeUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = text;
+  if (options.className) link.className = options.className;
+  if (options.style) link.setAttribute('style', options.style);
+  return link;
 }
 
 export function renderGgDealsLink(url) {
@@ -54,8 +86,24 @@ export function renderGgDealsLink(url) {
   return `· <a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" style="color:#66c0f4;">GG.deals ↗</a>`;
 }
 
-function errorLogLink() {
-  return ' <a class="error-log-inline" href="popup.html?tab=settings&focus=error-log">See error logs</a>';
+function createErrorLogLinkElement() {
+  const link = document.createElement('a');
+  link.className = 'error-log-inline';
+  link.href = 'popup.html?tab=settings&focus=error-log';
+  link.textContent = 'See error logs';
+  return link;
+}
+
+function appendErrorLogLink(parent) {
+  parent.append(' ');
+  parent.append(createErrorLogLinkElement());
+}
+
+function createStateElement(className, message) {
+  const state = document.createElement('div');
+  state.className = className;
+  state.textContent = message;
+  return state;
 }
 
 function formatTimestamp(ts) {
@@ -173,6 +221,7 @@ function typedPriceResult(prices, id, type = 'app') {
 }
 
 function steamStoreUrl(id, type = 'app') {
+  if (!/^\d+$/.test(String(id ?? ''))) return null;
   const normalizedType = ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
   return `https://store.steampowered.com/${normalizedType}/${encodeURIComponent(id)}`;
 }
@@ -356,16 +405,18 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
 
   const sortMode = await getSortMode();
   const refreshOptions = await getRefreshOptions();
-  body.innerHTML = '<div class="empty-state">Loading wishlist…</div>';
+  body.replaceChildren(createStateElement('empty-state', 'Loading wishlist…'));
   summary.textContent = '';
-  freeSection.innerHTML = '';
+  freeSection.replaceChildren();
 
   const settings = await msg('GET_SETTINGS');
   const cacheIdentity = getDealsCacheIdentity(settings);
   if (!isCurrentLoad()) return;
   if (!settings.steamId) {
     dealsState = null;
-    body.innerHTML = `<div class="error-state">No Steam ID set. Add your profile URL in Settings.${errorLogLink()}</div>`;
+    const state = createStateElement('error-state', 'No Steam ID set. Add your profile URL in Settings.');
+    appendErrorLogLink(state);
+    body.replaceChildren(state);
     return;
   }
 
@@ -376,13 +427,22 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
     if (!profile.wishlist?.length) profile = await msg('GET_PROFILE');
   } catch (err) {
     if (!isCurrentLoad(cacheIdentity)) return;
-    body.innerHTML = `<div class="error-state">Failed to load wishlist: ${escapeHtml(err.message)}${errorLogLink()}</div>`;
+    const state = createStateElement('error-state', `Failed to load wishlist: ${err.message}`);
+    appendErrorLogLink(state);
+    body.replaceChildren(state);
     return;
   }
   if (!isCurrentLoad(cacheIdentity)) return;
 
   if (!profile.wishlist?.length) {
-    body.innerHTML = `<div class="error-state">No wishlist games found. Make sure your Steam wishlist is set to <strong>Public</strong>.${errorLogLink()}</div>`;
+    const state = document.createElement('div');
+    state.className = 'error-state';
+    state.append('No wishlist games found. Make sure your Steam wishlist is set to ');
+    const strong = document.createElement('strong');
+    strong.textContent = 'Public';
+    state.append(strong, '.');
+    appendErrorLogLink(state);
+    body.replaceChildren(state);
     return;
   }
 
@@ -419,7 +479,7 @@ async function loadDealsInternal(container, { manualRefresh = false } = {}) {
   const appIds = priceItems.map(item => item.id);
   if (!appIds.length) {
     summary.textContent = `${profile.wishlist.length} games on wishlist`;
-    body.innerHTML = '<div class="empty-state">Could not resolve any wishlist games to App IDs.</div>';
+    body.replaceChildren(createStateElement('empty-state', 'Could not resolve any wishlist games to App IDs.'));
     return;
   }
 
@@ -529,13 +589,25 @@ function renderDeals(container) {
 
   // Summary
   if (!settings.apiKey) {
-    summary.innerHTML = `${cards.length} games on wishlist — <span style="color:#66c0f4">Add GG.deals API key for prices</span>`;
+    const hint = document.createElement('span');
+    hint.setAttribute('style', 'color:#66c0f4');
+    hint.textContent = 'Add GG.deals API key for prices';
+    summary.replaceChildren(`${cards.length} games on wishlist — `, hint);
   } else if (priceError) {
     // Split error message and actionable hint onto separate lines
     const errorParts = priceError.split('\n');
-    const mainError = escapeHtml(errorParts[0]);
-    const hint = errorParts.slice(1).map(h => `<br><span style="font-size:10px;color:#e8a735">${escapeHtml(h)}</span>`).join('');
-    summary.innerHTML = `${cards.length} games on wishlist — <span style="color:#e74c3c">Price error: ${mainError}</span>${hint}${errorLogLink()}`;
+    const mainError = document.createElement('span');
+    mainError.setAttribute('style', 'color:#e74c3c');
+    mainError.textContent = `Price error: ${errorParts[0]}`;
+    summary.replaceChildren(`${cards.length} games on wishlist — `, mainError);
+    for (const hintText of errorParts.slice(1)) {
+      const lineBreak = document.createElement('br');
+      const hint = document.createElement('span');
+      hint.setAttribute('style', 'font-size:10px;color:#e8a735');
+      hint.textContent = hintText;
+      summary.append(lineBreak, hint);
+    }
+    appendErrorLogLink(summary);
   } else {
     summary.textContent = `${cards.length} games on wishlist — ${withPrices} with prices`;
   }
@@ -544,22 +616,32 @@ function renderDeals(container) {
   if (freeGamesCount > 0) {
     const freeGames = cards.filter(c => c.isFree);
     const fetchedCount = freeGames.filter(c => c.scrapedAtl != null).length;
-    freeSection.innerHTML = `
-      <div style="font-size:11px;color:#f1c40f;">
-        ⚠ ${freeGamesCount} games were FREE (giveaway) ${fetchedCount > 0 ? `✓ ${fetchedCount} fetched` : ''}
-      </div>
-      <button class="btn-fetch-free" id="fetch-free-btn" style="font-size:10px;padding:2px 8px;${fetchedCount === freeGamesCount ? 'opacity:0.5' : ''}">
-        ${fetchedCount === freeGamesCount ? 'Already fetched' : 'Fetch better ATL'}
-      </button>
-      <div id="fetch-free-status" style="font-size:10px;color:#8a9bb0;"></div>`;
+    const note = document.createElement('div');
+    note.setAttribute('style', 'font-size:11px;color:#f1c40f;');
+    note.textContent = `⚠ ${freeGamesCount} games were FREE (giveaway) ${fetchedCount > 0 ? `✓ ${fetchedCount} fetched` : ''}`;
+
+    const button = document.createElement('button');
+    button.className = 'btn-fetch-free';
+    button.id = 'fetch-free-btn';
+    button.setAttribute('style', `font-size:10px;padding:2px 8px;${fetchedCount === freeGamesCount ? 'opacity:0.5' : ''}`);
+    button.textContent = fetchedCount === freeGamesCount ? 'Already fetched' : 'Fetch better ATL';
+
+    const status = document.createElement('div');
+    status.id = 'fetch-free-status';
+    status.setAttribute('style', 'font-size:10px;color:#8a9bb0;');
+    freeSection.replaceChildren(note, button, status);
   } else {
-    freeSection.innerHTML = '';
+    freeSection.replaceChildren();
   }
 
   renderGameList(body, cards, settings, sortMode);
 }
 
 function renderGameList(body, cards, settings, sortMode) {
+  body.replaceChildren(createDealsGameListElement(cards, settings, sortMode));
+}
+
+export function createDealsGameListElement(cards, settings, sortMode) {
   cards.sort((a, b) => {
     if (a.isFree !== b.isFree) return a.isFree ? 1 : -1;
     switch (sortMode) {
@@ -576,52 +658,97 @@ function renderGameList(body, cards, settings, sortMode) {
     }
   });
 
-  body.innerHTML = `<div class="game-list">${cards.map(c => {
-    const steamUrl = c.appId ? steamStoreUrl(c.appId, c.type ?? 'app') : null;
-    const refreshDate = formatRefreshDate(getCardRefreshTimestamp(c, settings));
-    const titleSuffix = refreshDate ? ` <span class="game-card-refresh">- Last refresh ${refreshDate}</span>` : '';
+  const list = document.createElement('div');
+  list.className = 'game-list';
+  list.replaceChildren(...cards.map(card => createDealsGameCardElement(card, settings)));
+  return list;
+}
 
-    if (c.isFree) {
-      const atlDisplay = c.scrapedAtl != null
-        ? `Best paid: ${formatPrice(c.scrapedAtl, c.currency)}`
-        : 'Best paid: -- (not fetched)';
-      const pctDisplay = c.scrapedAtl != null ? ` · ${Math.round(c.pctAboveAtl)}% above` : '';
-      return `<div class="game-card">
-        <div class="game-card-title">
-          ${steamUrl ? `<a href="${steamUrl}" target="_blank" style="color:inherit;text-decoration:none;">${escapeHtml(c.title)}</a>` : escapeHtml(c.title)}
-          ${titleSuffix}
-          <span class="badge-was-free">Was free</span>
-        </div>
-        <div class="game-card-meta">
-          <span class="highlight">${formatPrice(c.bestCurrent, c.currency)}</span>
-          · ${atlDisplay}${pctDisplay}
-          ${renderGgDealsLink(c.url)}
-        </div>
-      </div>`;
+function appendCardTitle(title, card, settings) {
+  const steamUrl = card.appId ? steamStoreUrl(card.appId, card.type ?? 'app') : null;
+  const steamLink = steamUrl
+    ? createExternalLink(steamUrl, card.title ?? '', { style: 'color:inherit;text-decoration:none;' })
+    : null;
+  title.append(steamLink ?? String(card.title ?? ''));
+
+  const refreshDate = formatRefreshDate(getCardRefreshTimestamp(card, settings));
+  if (refreshDate) {
+    const refresh = document.createElement('span');
+    refresh.className = 'game-card-refresh';
+    refresh.textContent = `- Last refresh ${refreshDate}`;
+    title.append(' ', refresh);
+  }
+}
+
+function appendGgDealsLink(meta, card) {
+  const ggDealsUrl = card.ggdealsUrl ?? card.url;
+  const link = createExternalLink(ggDealsUrl, 'GG.deals ↗', { style: 'color:#66c0f4;' });
+  if (!link) return;
+  meta.append(' · ', link);
+}
+
+export function createDealsGameCardElement(card, settings) {
+  const gameCard = document.createElement('div');
+  gameCard.className = 'game-card';
+
+  const title = document.createElement('div');
+  title.className = 'game-card-title';
+  appendCardTitle(title, card, settings);
+
+  const meta = document.createElement('div');
+  meta.className = 'game-card-meta';
+
+  if (card.isFree) {
+    const badge = document.createElement('span');
+    badge.className = 'badge-was-free';
+    badge.textContent = 'Was free';
+    title.append(' ', badge);
+
+    const current = document.createElement('span');
+    current.className = 'highlight';
+    current.textContent = formatPrice(card.bestCurrent, card.currency);
+
+    const atlDisplay = card.scrapedAtl != null
+      ? `Best paid: ${formatPrice(card.scrapedAtl, card.currency)}`
+      : 'Best paid: -- (not fetched)';
+    const pctDisplay = card.scrapedAtl != null ? ` · ${Math.round(card.pctAboveAtl)}% above` : '';
+    meta.append(current, ` · ${atlDisplay}${pctDisplay}`);
+    appendGgDealsLink(meta, card);
+    gameCard.replaceChildren(title, meta);
+    return gameCard;
+  }
+
+  if (card.bestCurrent != null) {
+    const deal = card.pctAboveAtl != null && card.pctAboveAtl <= (settings.dealThresholdPct ?? 10);
+    const current = document.createElement('span');
+    if (deal) current.className = 'highlight';
+    current.textContent = formatPrice(card.bestCurrent, card.currency);
+
+    const region = document.createElement('span');
+    region.setAttribute('style', 'color:#666;font-size:10px;text-transform:uppercase;margin-left:2px');
+    region.textContent = `(${card.usedRegion?.toUpperCase() ?? ''})`;
+
+    const atl = document.createElement('span');
+    atl.className = 'atl';
+    atl.textContent = formatPrice(card.bestAtl, card.currency);
+
+    const atlLabel = settings.keyshopsEnabled && card.historicalKeyshops != null
+      && (card.historicalRetail == null || card.historicalKeyshops < card.historicalRetail)
+      ? 'Keyshop ATL' : 'ATL';
+    meta.append(current, ' ', region, ` · ${atlLabel}: `, atl);
+    if (card.pctAboveAtl != null) {
+      const pct = document.createElement('span');
+      pct.textContent = `${Math.round(card.pctAboveAtl)}% above`;
+      meta.append(' · ', pct);
     }
+    appendGgDealsLink(meta, card);
+    gameCard.replaceChildren(title, meta);
+    return gameCard;
+  }
 
-    if (c.bestCurrent != null) {
-      const deal = c.pctAboveAtl != null && c.pctAboveAtl <= (settings.dealThresholdPct ?? 10);
-      const atlLabel = settings.keyshopsEnabled && c.historicalKeyshops != null
-        && (c.historicalRetail == null || c.historicalKeyshops < c.historicalRetail)
-        ? 'Keyshop ATL' : 'ATL';
-      return `<div class="game-card">
-        <div class="game-card-title">${steamUrl ? `<a href="${steamUrl}" target="_blank" style="color:inherit;text-decoration:none;">${escapeHtml(c.title)}</a>` : escapeHtml(c.title)}${titleSuffix}</div>
-        <div class="game-card-meta">
-          <span class="${deal ? 'highlight' : ''}">${formatPrice(c.bestCurrent, c.currency)}</span>
-          <span style="color:#666;font-size:10px;text-transform:uppercase;margin-left:2px">(${c.usedRegion?.toUpperCase() ?? ''})</span>
-          · ${atlLabel}: <span class="atl">${formatPrice(c.bestAtl, c.currency)}</span>
-          ${c.pctAboveAtl != null ? `· <span>${Math.round(c.pctAboveAtl)}% above</span>` : ''}
-          ${renderGgDealsLink(c.url)}
-        </div>
-      </div>`;
-    }
-
-    return `<div class="game-card" style="opacity:0.7">
-      <div class="game-card-title">${steamUrl ? `<a href="${steamUrl}" target="_blank" style="color:inherit;text-decoration:none;">${escapeHtml(c.title)}</a>` : escapeHtml(c.title)}${titleSuffix}</div>
-      <div class="game-card-meta" style="color:#666">
-        ${c.appId ? `App ID: ${c.appId}` : 'Unresolved'} — Price unavailable
-      </div>
-    </div>`;
-  }).join('')}</div>`;
+  gameCard.setAttribute('style', 'opacity:0.7');
+  meta.setAttribute('style', 'color:#666');
+  meta.textContent = `${card.appId ? `App ID: ${card.appId}` : 'Unresolved'} — Price unavailable`;
+  gameCard.replaceChildren(title, meta);
+  return gameCard;
 }
