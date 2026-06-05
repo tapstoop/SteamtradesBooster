@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+/**
+ * @vitest-environment jsdom
+ */
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   categorizeResults,
   categorizeSingle,
@@ -9,8 +12,23 @@ import {
   findDuplicateTradables,
   prepareTradablesToAdd,
   dedupeTradableEntries,
-  buildPreviewItemHtml
+  buildPreviewItemHtml,
+  buildPreviewEntryElement,
+  buildDuplicateWarningElement,
+  buildSearchResultElement,
+  buildSearchStatusElement,
+  createBulkImportModal
 } from '../popup/tradables-bulk-modal.js';
+
+function flushPromises() {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+afterEach(() => {
+  document.body.innerHTML = '';
+  delete globalThis.chrome;
+  vi.restoreAllMocks();
+});
 
 describe('categorizeResults', () => {
   it('categorizes exact matches as exact', () => {
@@ -388,5 +406,121 @@ describe('buildPreviewItemHtml', () => {
     }, 0, '#66c0f4');
 
     expect(html).not.toContain('preview-resolve-btn');
+  });
+});
+
+function expectNoExecutableMarkup(element) {
+  expect(element.querySelector('script')).toBeNull();
+  expect(element.querySelector('img')).toBeNull();
+  expect(element.querySelector('[onerror]')).toBeNull();
+  expect(element.querySelector('[onclick]')).toBeNull();
+  expect(element.querySelector('[onfocus]')).toBeNull();
+}
+
+describe('DOM data rendering', () => {
+  it('renders preview entry data as text while preserving event selectors', () => {
+    const entry = {
+      raw: '<img src=x onerror=alert(1)> Raw',
+      matchedName: '<script>alert(1)</script> Matched',
+      appId: '123" onclick="alert(1)',
+      category: 'fuzzy-manual',
+      confidence: 91,
+      checked: true,
+    };
+
+    const element = buildPreviewEntryElement(entry, 2, '#e67e22');
+
+    expect(element.classList.contains('preview-item')).toBe(true);
+    expect(element.querySelector('.preview-checkbox')?.dataset.index).toBe('2');
+    expect(element.querySelector('.preview-checkbox')?.checked).toBe(true);
+    expect(element.querySelector('.preview-resolve-btn')?.dataset.ri).toBe('2');
+    expect(element.querySelector('.preview-name')?.textContent).toBe(entry.matchedName);
+    expect(element.querySelector('.preview-appid')?.textContent).toBe(`#${entry.appId}`);
+    expect(element.title).toContain(entry.raw);
+    expect(element.title).toContain(entry.matchedName);
+    expectNoExecutableMarkup(element);
+  });
+
+  it('renders duplicate warning text without executable markup and keeps controls', () => {
+    const element = buildDuplicateWarningElement([
+      { existing: { name: '<img src=x onerror=alert(1)> Existing' }, entry: { raw: 'Ignored' } },
+      { existing: {}, entry: { raw: '<script>alert(2)</script> Raw' } },
+    ]);
+
+    expect(element.querySelector('.duplicate-title')?.textContent).toBe('Duplicate tradables found');
+    expect(element.querySelector('.duplicate-body')?.textContent).toContain('<img src=x onerror=alert(1)> Existing');
+    expect(element.querySelector('.duplicate-body')?.textContent).toContain('<script>alert(2)</script> Raw');
+    expect(element.querySelector('#dup-increment')).not.toBeNull();
+    expect(element.querySelector('#dup-skip')).not.toBeNull();
+    expectNoExecutableMarkup(element);
+  });
+
+  it('renders search result titles as text while preserving result selectors', () => {
+    const result = { id: '456" onclick="alert(1)', name: '<img src=x onerror=alert(1)> Result', type: 'bundle' };
+
+    const element = buildSearchResultElement(result);
+
+    expect(element.classList.contains('trp-result-item')).toBe(true);
+    expect(element.querySelector('span')?.textContent).toBe(result.name);
+    expect(element.textContent).toContain(`Bundle ${result.id}`);
+    expectNoExecutableMarkup(element);
+  });
+
+  it('renders search status messages as text', () => {
+    const element = buildSearchStatusElement('<script>alert(1)</script> Searching', '#555');
+
+    expect(element.textContent).toBe('<script>alert(1)</script> Searching');
+    expectNoExecutableMarkup(element);
+  });
+
+  it('keeps preview checkbox indexes mapped to original entries after filters hide rows', async () => {
+    const onAdd = vi.fn();
+    globalThis.chrome = {
+      runtime: {
+        sendMessage: vi.fn((message, callback) => {
+          if (message.type === 'RESOLVE_TITLES') {
+            callback([
+              { status: 'hit', appId: '367520', title: 'Hollow Knight' },
+              { status: 'not-found', appId: null, title: null },
+              { status: 'ambiguous', candidates: [{ appId: '504230', title: 'Celeste' }] },
+            ]);
+          }
+        }),
+      },
+    };
+
+    const modal = createBulkImportModal(onAdd);
+    document.querySelector('#bulk-input').value = [
+      'Hollow Knight',
+      'Unknown Game',
+      'Celest',
+    ].join('\n');
+
+    document.querySelector('#bulk-preview-btn').click();
+    await flushPromises();
+
+    const filters = document.querySelector('#preview-filters');
+    expect(filters).not.toBeNull();
+    expect(filters.querySelector('input[data-filter="exact"]')).not.toBeNull();
+    expect(document.querySelector('.preview-checkbox')).not.toBeNull();
+    expect(document.querySelector('.preview-resolve-btn')).not.toBeNull();
+
+    filters.querySelector('input[data-filter="exact"]').click();
+
+    const visibleCheckboxes = [...document.querySelectorAll('.preview-checkbox')];
+    expect(visibleCheckboxes.map(cb => cb.dataset.index)).toEqual(['1', '2']);
+
+    visibleCheckboxes[0].click();
+    document.querySelector('#bulk-add-btn').click();
+    await flushPromises();
+
+    expect(onAdd).toHaveBeenCalledWith({
+      additions: [{ name: 'Celest', appId: null, type: 'app', qty: 1 }],
+      increments: [],
+      duplicates: [],
+    });
+
+    modal.destroy();
+    delete globalThis.chrome;
   });
 });

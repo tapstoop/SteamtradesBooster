@@ -51,6 +51,207 @@ export function buildPreviewItemHtml(entry, idx, borderColor) {
   `;
 }
 
+export function buildPreviewEntryElement(entry, idx, borderColor) {
+  const tooltip = entry.confidence
+    ? `Auto-selected: closest match for '${entry.raw}' → '${entry.matchedName}' (${entry.confidence}%)`
+    : '';
+
+  const showResolve = entry.category !== 'exact' && entry.category !== 'appid';
+
+  const item = document.createElement('div');
+  item.className = 'preview-item';
+  item.style.borderLeft = `3px solid ${borderColor}`;
+  item.title = tooltip;
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.className = 'preview-checkbox';
+  checkbox.dataset.index = String(idx);
+  checkbox.checked = Boolean(entry.checked);
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'preview-name';
+  nameSpan.textContent = entry.matchedName || entry.raw || '';
+
+  item.append(checkbox, nameSpan);
+
+  if (entry.appId) {
+    const appIdSpan = document.createElement('span');
+    appIdSpan.className = 'preview-appid';
+    appIdSpan.textContent = `#${entry.appId}`;
+    item.appendChild(appIdSpan);
+  }
+
+  if (showResolve) {
+    const resolveBtn = document.createElement('button');
+    resolveBtn.className = 'preview-resolve-btn';
+    resolveBtn.dataset.ri = String(idx);
+    resolveBtn.title = 'Resolve this game';
+    resolveBtn.textContent = '↗ resolve';
+    item.appendChild(resolveBtn);
+  }
+
+  const rawName = entry.raw || entry.matchedName || '';
+  if (hasBundleKeywords(rawName)) {
+    if (entry.category === 'notfound') {
+      const bundleHint = document.createElement('div');
+      bundleHint.className = 'preview-bundle-hint';
+      bundleHint.textContent = '💡 Paste the Steam bundle URL to resolve this item.';
+      item.appendChild(bundleHint);
+    } else if (entry.category === 'fuzzy-manual' || entry.category === 'fuzzy-auto') {
+      const bundleHint = document.createElement('div');
+      bundleHint.className = 'preview-bundle-hint preview-bundle-hint-soft';
+      bundleHint.textContent = '💡 This may be a bundle — consider pasting the Steam bundle URL for exact matching.';
+      item.appendChild(bundleHint);
+    }
+  }
+
+  return item;
+}
+
+function buildFilterElement(key, config, activeFilters) {
+  const label = document.createElement('label');
+  label.className = 'filter-label';
+  label.style.borderLeft = `3px solid ${config.color}`;
+  label.style.paddingLeft = '6px';
+
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.dataset.filter = key;
+  input.checked = activeFilters.has(key);
+
+  label.append(input, document.createTextNode(` ${config.label}`));
+  return label;
+}
+
+export function buildDuplicateWarningElement(duplicates) {
+  const fragment = document.createDocumentFragment();
+
+  const title = document.createElement('div');
+  title.className = 'duplicate-title';
+  title.textContent = 'Duplicate tradables found';
+
+  const body = document.createElement('div');
+  body.className = 'duplicate-body';
+  body.textContent = duplicates.map(d => d.existing.name || d.entry.raw).join(', ');
+
+  const actions = document.createElement('div');
+  actions.className = 'duplicate-actions';
+
+  const incrementButton = document.createElement('button');
+  incrementButton.className = 'btn-small';
+  incrementButton.id = 'dup-increment';
+  incrementButton.textContent = 'Yes, increment quantity';
+
+  const skipButton = document.createElement('button');
+  skipButton.className = 'btn-small';
+  skipButton.id = 'dup-skip';
+  skipButton.textContent = 'No, skip duplicates';
+
+  actions.append(incrementButton, skipButton);
+  fragment.append(title, body, actions);
+  return fragment;
+}
+
+export function buildSearchStatusElement(message, color) {
+  const status = document.createElement('div');
+  status.style.padding = '5px';
+  status.style.color = color;
+  status.style.fontSize = '10px';
+  status.textContent = message;
+  return status;
+}
+
+export function buildSearchResultElement(result) {
+  const resultItem = document.createElement('div');
+  resultItem.className = 'trp-result-item';
+
+  const nameSpan = document.createElement('span');
+  nameSpan.textContent = result.name ?? `App ${result.id}`;
+
+  const metaSpan = document.createElement('span');
+  metaSpan.style.cssText = 'color:#555;font-size:9px';
+  const itemType = result.type === 'bundle' ? 'Bundle' : result.type === 'sub' ? 'Sub' : 'App';
+  metaSpan.textContent = `${itemType} ${result.id}`;
+
+  resultItem.append(nameSpan, metaSpan);
+  return resultItem;
+}
+
+function buildUrlSearchResultElement(steamUrl) {
+  const resultItem = document.createElement('div');
+  resultItem.className = 'trp-result-item trp-url-result';
+
+  const nameSpan = document.createElement('span');
+  nameSpan.textContent = `Use ${steamUrl.type} ${steamUrl.id}`;
+
+  const metaSpan = document.createElement('span');
+  metaSpan.style.color = '#66c0f4';
+  metaSpan.style.fontSize = '9px';
+  metaSpan.textContent = steamUrl.type.charAt(0).toUpperCase() + steamUrl.type.slice(1);
+
+  resultItem.append(nameSpan, metaSpan);
+  return resultItem;
+}
+
+function buildResolvePopoverElement(entry) {
+  const popover = document.createElement('div');
+  popover.className = 'preview-resolve-popover';
+
+  const header = document.createElement('div');
+  header.className = 'trp-header';
+  header.textContent = `Search for "${entry.matchedName || entry.raw || ''}"`;
+  popover.appendChild(header);
+
+  const isBundle = entry.type === 'bundle';
+  if (isBundle) {
+    const guidance = document.createElement('div');
+    guidance.className = 'trp-bundle-guidance';
+
+    const warning = document.createElement('div');
+    warning.className = 'trp-bundle-warning';
+    warning.textContent = '⚠️ Bundles cannot be searched by name.';
+
+    const help = document.createElement('div');
+    help.className = 'trp-bundle-help';
+    help.textContent = 'Paste a Steam bundle URL to resolve:';
+
+    const url = document.createElement('code');
+    url.className = 'trp-bundle-url';
+    url.textContent = 'https://store.steampowered.com/bundle/<id>/<name>/';
+
+    const searchLink = document.createElement('a');
+    searchLink.href = `https://store.steampowered.com/search/?term=${encodeURIComponent(entry.raw || entry.matchedName || '')}`;
+    searchLink.target = '_blank';
+    searchLink.className = 'trp-bundle-search-link';
+    searchLink.textContent = 'Search on Steam ↗';
+
+    guidance.append(warning, help, url, searchLink);
+    popover.appendChild(guidance);
+  }
+
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'trp-search-wrap';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tradables-resolve-search';
+  input.placeholder = 'Search Steam or paste URL...';
+  input.value = entry.raw || entry.matchedName || '';
+
+  searchWrap.appendChild(input);
+
+  const results = document.createElement('div');
+  results.className = 'tradables-resolve-results';
+
+  const cancel = document.createElement('div');
+  cancel.className = 'trp-cancel';
+  cancel.textContent = 'Cancel';
+
+  popover.append(searchWrap, results, cancel);
+  return popover;
+}
+
 export function categorizeSingle(entry) {
   let category;
 
@@ -300,6 +501,7 @@ async function resolveNames(entries) {
 export function createBulkImportModal(onAdd, options = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
+  // Static modal shell only; all user/import data below is inserted with DOM builders.
   overlay.innerHTML = `
     <div class="modal-dialog tradables-import-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div class="modal-header">
@@ -371,12 +573,9 @@ export function createBulkImportModal(onAdd, options = {}) {
 
   // Render filter checkboxes
   function renderFilters() {
-    filtersContainer.innerHTML = Object.entries(CATEGORY_CONFIG).map(([key, config]) => `
-      <label class="filter-label" style="border-left: 3px solid ${config.color}; padding-left: 6px;">
-        <input type="checkbox" data-filter="${key}" ${activeFilters.has(key) ? 'checked' : ''}>
-        ${config.label}
-      </label>
-    `).join('');
+    filtersContainer.replaceChildren(
+      ...Object.entries(CATEGORY_CONFIG).map(([key, config]) => buildFilterElement(key, config, activeFilters))
+    );
 
     filtersContainer.querySelectorAll('input[data-filter]').forEach(cb => {
       cb.addEventListener('change', () => {
@@ -400,11 +599,13 @@ export function createBulkImportModal(onAdd, options = {}) {
     const filtered = filterVisible(resolvedEntries, activeFilters);
     const addCount = getAddCount(filtered);
 
-    previewList.innerHTML = filtered.map((entry, idx) => {
-      if (!entry.visible) return '';
+    previewList.replaceChildren(
+      ...filtered.flatMap((entry, idx) => {
+        if (!entry.visible) return [];
       const config = CATEGORY_CONFIG[entry.category];
-      return buildPreviewItemHtml(entry, idx, config.color);
-    }).join('');
+        return [buildPreviewEntryElement(entry, idx, config.color)];
+      })
+    );
 
     // Re-attach checkbox listeners
     previewList.querySelectorAll('.preview-checkbox').forEach(cb => {
@@ -438,30 +639,7 @@ export function createBulkImportModal(onAdd, options = {}) {
       currentPopover = null;
     }
 
-    const popover = document.createElement('div');
-    popover.className = 'preview-resolve-popover';
-
-    const isBundle = entry.type === 'bundle';
-    const bundleGuidance = isBundle ? `
-      <div class="trp-bundle-guidance">
-        <div class="trp-bundle-warning">⚠️ Bundles cannot be searched by name.</div>
-        <div class="trp-bundle-help">Paste a Steam bundle URL to resolve:</div>
-        <code class="trp-bundle-url">https://store.steampowered.com/bundle/&lt;id&gt;/&lt;name&gt;/</code>
-        <a href="https://store.steampowered.com/search/?term=${encodeURIComponent(entry.raw || entry.matchedName || '')}" target="_blank" class="trp-bundle-search-link">Search on Steam ↗</a>
-      </div>
-    ` : '';
-
-    popover.innerHTML = `
-      <div class="trp-header">
-        Search for "${escapeHtml(entry.matchedName || entry.raw)}"
-      </div>
-      ${bundleGuidance}
-      <div class="trp-search-wrap">
-        <input type="text" class="tradables-resolve-search" placeholder="Search Steam or paste URL..." value="${escapeHtml(entry.raw || entry.matchedName || '')}">
-      </div>
-      <div class="tradables-resolve-results"></div>
-      <div class="trp-cancel">Cancel</div>
-    `;
+    const popover = buildResolvePopoverElement(entry);
 
     anchor.parentNode.insertBefore(popover, anchor.nextSibling);
     currentPopover = popover;
@@ -473,55 +651,38 @@ export function createBulkImportModal(onAdd, options = {}) {
     const performSearch = async (query) => {
       const steamUrl = parseSteamStoreUrl(query);
       if (steamUrl) {
-        resultsContainer.innerHTML = '';
-        const resultItem = document.createElement('div');
-        resultItem.className = 'trp-result-item trp-url-result';
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = `Use ${steamUrl.type} ${steamUrl.id}`;
-        const metaSpan = document.createElement('span');
-        metaSpan.style.color = '#66c0f4';
-        metaSpan.style.fontSize = '9px';
-        metaSpan.textContent = steamUrl.type.charAt(0).toUpperCase() + steamUrl.type.slice(1);
-        resultItem.append(nameSpan, metaSpan);
+        const resultItem = buildUrlSearchResultElement(steamUrl);
         resultItem.addEventListener('click', () => {
           applyResolve(idx, steamUrl.id, steamUrl.type);
         });
-        resultsContainer.appendChild(resultItem);
+        resultsContainer.replaceChildren(resultItem);
         return;
       }
 
-      resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">Searching...</div>';
+      resultsContainer.replaceChildren(buildSearchStatusElement('Searching...', '#555'));
       try {
         const results = await msg('SEARCH_STEAM', { query });
-        resultsContainer.innerHTML = '';
         if (!results.items?.length) {
-          resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">No results</div>';
+          resultsContainer.replaceChildren(buildSearchStatusElement('No results', '#555'));
           return;
         }
-        results.items.forEach(r => {
-          const resultItem = document.createElement('div');
-          resultItem.className = 'trp-result-item';
-          const nameSpan = document.createElement('span');
-          nameSpan.textContent = r.name ?? `App ${r.id}`;
-          const metaSpan = document.createElement('span');
-          metaSpan.style.cssText = 'color:#555;font-size:9px';
-          const itemType = r.type === 'bundle' ? 'Bundle' : r.type === 'sub' ? 'Sub' : 'App';
-          metaSpan.textContent = `${itemType} ${r.id}`;
-          resultItem.append(nameSpan, metaSpan);
+        const resultItems = results.items.map(r => {
+          const resultItem = buildSearchResultElement(r);
           resultItem.addEventListener('click', () => {
             applyResolve(idx, String(r.id), r.type ?? 'app', r.name);
           });
-          resultsContainer.appendChild(resultItem);
+          return resultItem;
         });
+        resultsContainer.replaceChildren(...resultItems);
       } catch {
-        resultsContainer.innerHTML = '<div style="padding:5px;color:#f38ba8;font-size:10px;">Search failed</div>';
+        resultsContainer.replaceChildren(buildSearchStatusElement('Search failed', '#f38ba8'));
       }
     };
 
     searchInput.addEventListener('input', (e2) => {
       clearTimeout(searchTimeout);
       const q = e2.target.value.trim();
-      if (q.length < 2) { resultsContainer.innerHTML = ''; return; }
+      if (q.length < 2) { resultsContainer.replaceChildren(); return; }
       searchTimeout = setTimeout(() => performSearch(q), 300);
     });
 
@@ -597,14 +758,7 @@ export function createBulkImportModal(onAdd, options = {}) {
     const prepared = prepareTradablesToAdd(toAdd, options.existingTradables ?? [], duplicateAction ?? 'skip');
     if (prepared.duplicates.length > 0 && duplicateAction == null) {
       duplicateWarning.style.display = 'block';
-      duplicateWarning.innerHTML = `
-        <div class="duplicate-title">Duplicate tradables found</div>
-        <div class="duplicate-body">${prepared.duplicates.map(d => escapeHtml(d.existing.name || d.entry.raw)).join(', ')}</div>
-        <div class="duplicate-actions">
-          <button class="btn-small" id="dup-increment">Yes, increment quantity</button>
-          <button class="btn-small" id="dup-skip">No, skip duplicates</button>
-        </div>
-      `;
+      duplicateWarning.replaceChildren(buildDuplicateWarningElement(prepared.duplicates));
       duplicateWarning.querySelector('#dup-increment').addEventListener('click', () => submitAdd('increment'));
       duplicateWarning.querySelector('#dup-skip').addEventListener('click', () => submitAdd('skip'));
       return;
