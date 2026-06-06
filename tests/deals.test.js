@@ -153,14 +153,14 @@ describe('mergePriceResponse', () => {
 });
 
 describe('normalizeGgDealsUrl', () => {
-  it('accepts HTTPS gg.deals URLs and www host URLs', () => {
+  it('accepts HTTPS gg.deals URLs and true subdomains', () => {
     expect(normalizeGgDealsUrl('https://gg.deals/game/hollow-knight/')).toBe('https://gg.deals/game/hollow-knight/');
     expect(normalizeGgDealsUrl('https://www.gg.deals/game/hollow-knight/')).toBe('https://www.gg.deals/game/hollow-knight/');
+    expect(normalizeGgDealsUrl('https://store.gg.deals/us/game/hollow-knight/')).toBe('https://store.gg.deals/us/game/hollow-knight/');
   });
 
-  it('rejects non-HTTPS, non-GG.deals, subdomain, and credentialed URLs', () => {
+  it('rejects non-HTTPS, lookalike, non-GG.deals, and credentialed URLs', () => {
     expect(normalizeGgDealsUrl('http://gg.deals/game/hollow-knight/')).toBeNull();
-    expect(normalizeGgDealsUrl('https://store.gg.deals/us/game/hollow-knight/')).toBeNull();
     expect(normalizeGgDealsUrl('https://gg.deals.evil.test/game/hollow-knight/')).toBeNull();
     expect(normalizeGgDealsUrl('javascript:alert(1)')).toBeNull();
     expect(normalizeGgDealsUrl('https://user@gg.deals/game/hollow-knight/')).toBeNull();
@@ -196,7 +196,7 @@ describe('createDealsGameListElement', () => {
         pctAboveAtl: 88,
         currency: 'EUR',
         usedRegion: 'eu',
-        url: 'https://gg.deals/game/hollow-knight/',
+        url: 'https://store.gg.deals/us/game/hollow-knight/',
       },
     ], { dealThresholdPct: 10 }, 'best-deal');
 
@@ -220,7 +220,7 @@ describe('createDealsGameListElement', () => {
 
     const ggDealsLink = [...meta.querySelectorAll('a')]
       .find(link => link.textContent === 'GG.deals ↗');
-    expect(ggDealsLink.href).toBe('https://gg.deals/game/hollow-knight/');
+    expect(ggDealsLink.href).toBe('https://store.gg.deals/us/game/hollow-knight/');
     expect(ggDealsLink.target).toBe('_blank');
     expect(ggDealsLink.rel).toBe('noopener noreferrer');
   });
@@ -239,7 +239,7 @@ describe('createDealsGameListElement', () => {
         pctAboveAtl: 40,
         currency: 'EUR',
         url: 'javascript:alert(1)',
-        ggdealsUrl: 'https://evil.test/game/<img src=x onerror=alert(1)>',
+        ggdealsUrl: 'https://gg.deals.evil.test/game/<img src=x onerror=alert(1)>',
       },
     ], { dealThresholdPct: 10 }, 'best-deal');
 

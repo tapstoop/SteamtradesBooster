@@ -40,7 +40,7 @@ export function normalizeGgDealsUrl(url) {
   }
 
   const host = parsed.hostname.toLowerCase();
-  const isGgDealsHost = host === 'gg.deals' || host === 'www.gg.deals';
+  const isGgDealsHost = host === 'gg.deals' || host.endsWith('.gg.deals');
   if (parsed.protocol !== 'https:' || !isGgDealsHost || parsed.username || parsed.password) {
     return null;
   }
@@ -59,7 +59,7 @@ function normalizeSafeExternalUrl(url) {
 
   const host = parsed.hostname.toLowerCase();
   const isSteamStore = host === 'store.steampowered.com';
-  const isGgDeals = host === 'gg.deals' || host === 'www.gg.deals';
+  const isGgDeals = host === 'gg.deals' || host.endsWith('.gg.deals');
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (!isSteamStore && !isGgDeals)) {
     return null;
   }
