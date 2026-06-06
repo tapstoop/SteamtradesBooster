@@ -19,6 +19,9 @@ steamtrades_booster_*_v*/
 !AGENTS.md
 !README.md
 docs/
+!docs/
+!docs/notes/
+!docs/notes/*.md
 
 # Test results
 test-results/

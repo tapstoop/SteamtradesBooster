@@ -21,6 +21,7 @@ const {
   buildTradablesSnapshotOptions,
   bindTradablesRuntimeStateForInit,
   createTradablesInitGuard,
+  normalizeTradableItem,
   populateTradablesShellState,
   renderTradablesSearchStatus,
 } = await import('../popup/tradables.js');
@@ -357,5 +358,41 @@ describe('populateTradablesShellState', () => {
     expect(shell.querySelector('#t-undo')).toBeNull();
     expect(shell.querySelector('#t-delete-all').style.display).toBe('none');
     expect(shell.querySelector('#t-total-count-label').textContent).toBe('Games');
+  });
+});
+describe('tradables list rendering', () => {
+  it('normalizes persisted malicious fields before rendering inert DOM content', () => {
+    const item = normalizeTradableItem({
+      _origIndex: 0,
+      name: 'Evil <img src=x onerror=alert(1)>',
+      appId: '1" autofocus onfocus="alert(1)',
+      type: 'sub" onclick="alert(1)',
+      qty: '2" onfocus="alert(1)',
+      acqPrice: '3" autofocus onfocus="alert(1)',
+    });
+    const element = buildTradablesListItemElement(item);
+
+    expect(item).toMatchObject({
+      appId: null,
+      type: 'app',
+      qty: 2,
+      acqPrice: null,
+    });
+    expect(element.querySelector('img')).toBeNull();
+    expect(element.querySelectorAll('[onerror], [onfocus], [onclick], [autofocus]')).toHaveLength(0);
+    expect(element.querySelector('.tradables-name')?.textContent).toBe('Evil <img src=x onerror=alert(1)>');
+    expect(element.dataset.appid).toBe('');
+    expect(element.querySelector('.tradables-unresolved')?.textContent).toContain('unresolved');
+  });
+
+  it('clamps persisted quantities and keeps finite acquisition prices', () => {
+    expect(normalizeTradableItem({ name: 'High', qty: 5000, acqPrice: '4.25' })).toMatchObject({
+      qty: 999,
+      acqPrice: 4.25,
+    });
+    expect(normalizeTradableItem({ name: 'Low', qty: -10, acqPrice: Infinity })).toMatchObject({
+      qty: 1,
+      acqPrice: null,
+    });
   });
 });

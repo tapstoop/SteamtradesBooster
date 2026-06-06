@@ -220,10 +220,20 @@ function typedPriceResult(prices, id, type = 'app') {
   return normalizedType === 'app' ? prices[id] ?? null : null;
 }
 
+function normalizeStoredAppId(appId) {
+  const value = String(appId ?? '').trim();
+  return /^\d+$/.test(value) ? value : null;
+}
+
+function normalizeSteamStoreType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
 function steamStoreUrl(id, type = 'app') {
-  if (!/^\d+$/.test(String(id ?? ''))) return null;
-  const normalizedType = ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
-  return `https://store.steampowered.com/${normalizedType}/${encodeURIComponent(id)}`;
+  const appId = normalizeStoredAppId(id);
+  if (!appId) return null;
+  const normalizedType = normalizeSteamStoreType(type);
+  return `https://store.steampowered.com/${normalizedType}/${encodeURIComponent(appId)}`;
 }
 
 /**
@@ -642,7 +652,8 @@ function renderGameList(body, cards, settings, sortMode) {
 }
 
 export function createDealsGameListElement(cards, settings, sortMode) {
-  cards.sort((a, b) => {
+  const sortedCards = [...cards];
+  sortedCards.sort((a, b) => {
     if (a.isFree !== b.isFree) return a.isFree ? 1 : -1;
     switch (sortMode) {
       case 'name-asc': return (a.title || '').localeCompare(b.title || '');
@@ -660,7 +671,7 @@ export function createDealsGameListElement(cards, settings, sortMode) {
 
   const list = document.createElement('div');
   list.className = 'game-list';
-  list.replaceChildren(...cards.map(card => createDealsGameCardElement(card, settings)));
+  list.replaceChildren(...sortedCards.map(card => createDealsGameCardElement(card, settings)));
   return list;
 }
 

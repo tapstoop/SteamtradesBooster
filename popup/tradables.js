@@ -21,11 +21,23 @@ function formatPrice(amount, currency = 'EUR') {
 let searchSequence = 0;
 
 /** Migrate old newline-string format to [{name, appId}] array */
+export function normalizeTradableItem(item) {
+  if (typeof item === 'string') {
+    return { name: item, appId: null, type: 'app', qty: 1 };
+  }
+  return {
+    ...item,
+    name: String(item.name ?? ''),
+    appId: normalizeStoredAppId(item.appId),
+    type: normalizePriceType(item.type ?? 'app'),
+    qty: normalizeQuantity(item.qty),
+    acqPrice: normalizeAcqPrice(item.acqPrice),
+  };
+}
+
 function normalizeTradables(raw) {
   if (Array.isArray(raw)) {
-    return raw.map(item => typeof item === 'string'
-      ? { name: item, appId: null, type: 'app', qty: 1 }
-      : { ...item, type: item.type ?? 'app', qty: Math.max(1, parseInt(item.qty) || 1) });
+    return raw.map(normalizeTradableItem);
   }
   if (typeof raw === 'string' && raw.trim()) {
     return raw.split('\n').map(n => n.trim()).filter(Boolean).map(name => ({ name, appId: null, type: 'app', qty: 1 }));
@@ -124,6 +136,22 @@ function normalizePriceType(type) {
   return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
 }
 
+function normalizeStoredAppId(appId) {
+  const value = String(appId ?? '').trim();
+  return /^\d+$/.test(value) ? value : null;
+}
+
+function normalizeQuantity(qty) {
+  const value = parseInt(qty, 10) || 1;
+  return Math.max(1, Math.min(999, value));
+}
+
+function normalizeAcqPrice(price) {
+  if (price == null || price === '') return null;
+  const value = Number(price);
+  return Number.isFinite(value) ? value : null;
+}
+
 function typedPriceKey(id, type = 'app') {
   return `${normalizePriceType(type)}:${String(id)}`;
 }
@@ -144,16 +172,14 @@ function setPriceEntry(store, item, data) {
 }
 
 function readPriceEntry(store, item) {
-  if (!store || !item?.appId) return null;
+  const appId = normalizeStoredAppId(item?.appId);
+  if (!store || !appId) return null;
   const type = normalizePriceType(item.type ?? 'app');
-  const typed = store[typedPriceKey(item.appId, type)];
+  const typed = store[typedPriceKey(appId, type)];
   if (typed) return typed;
-  return type === 'app' ? store[item.appId] ?? null : null;
+  return type === 'app' ? store[appId] ?? null : null;
 }
 
-function isValidTradablesItemId(id) {
-  return /^\d+$/.test(String(id ?? ''));
-}
 
 function getTradablesTypeLabel(type) {
   if (type === 'bundle') return 'Bundle';
@@ -167,7 +193,9 @@ export function buildTradablesListItemElement(item, {
   currencySymbol = '€',
 } = {}) {
   const origIndex = String(item._origIndex ?? '');
-  const appId = isValidTradablesItemId(item.appId) ? String(item.appId) : '';
+  const appId = normalizeStoredAppId(item.appId) ?? '';
+  const quantity = normalizeQuantity(item.qty);
+  const acqPrice = normalizeAcqPrice(item.acqPrice);
 
   const row = document.createElement('div');
   row.className = 'tradables-item';
@@ -189,7 +217,7 @@ export function buildTradablesListItemElement(item, {
   qtyInput.min = '1';
   qtyInput.max = '999';
   qtyInput.className = 'tradables-qty-input';
-  qtyInput.value = String(item.qty ?? 1);
+  qtyInput.value = String(quantity);
   qtyInput.dataset.origIndex = origIndex;
   qtyInput.title = 'Quantity';
 
@@ -236,7 +264,7 @@ export function buildTradablesListItemElement(item, {
   acqInput.className = 'tradables-acq-input';
   acqInput.placeholder = `Acq. ${currencySymbol}`;
   acqInput.step = '0.01';
-  acqInput.value = item.acqPrice != null ? String(item.acqPrice) : '';
+  acqInput.value = acqPrice != null ? String(acqPrice) : '';
   acqInput.dataset.origIndex = origIndex;
   acqInput.title = 'Your acquisition price (optional)';
 

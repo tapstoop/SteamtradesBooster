@@ -186,9 +186,16 @@ describe('createDealsGameListElement', () => {
     const dom = new JSDOM('<!doctype html><body></body>');
     globalThis.document = dom.window.document;
 
-    const list = createDealsGameListElement([
+    const cards = [
       {
-        title: 'Hollow Knight',
+        title: 'A Game',
+        appId: '10',
+        type: 'app',
+        bestCurrent: null,
+        currency: 'EUR',
+      },
+      {
+        title: 'Z Hollow Knight',
         appId: '367520',
         type: 'app',
         bestCurrent: 749,
@@ -198,7 +205,9 @@ describe('createDealsGameListElement', () => {
         usedRegion: 'eu',
         url: 'https://store.gg.deals/us/game/hollow-knight/',
       },
-    ], { dealThresholdPct: 10 }, 'best-deal');
+    ];
+    const originalOrder = cards.map(card => card.title);
+    const list = createDealsGameListElement(cards, { dealThresholdPct: 10 }, 'name-desc');
 
     const gameCard = list.querySelector('.game-card');
     const title = list.querySelector('.game-card-title');
@@ -213,7 +222,7 @@ describe('createDealsGameListElement', () => {
     expect(meta.textContent).toContain('€3.99');
 
     const steamLink = title.querySelector('a');
-    expect(steamLink.textContent).toBe('Hollow Knight');
+    expect(steamLink.textContent).toBe('Z Hollow Knight');
     expect(steamLink.href).toMatch(/^https:\/\/store\.steampowered\.com\/app\/367520/);
     expect(steamLink.target).toBe('_blank');
     expect(steamLink.rel).toBe('noopener noreferrer');
@@ -223,6 +232,7 @@ describe('createDealsGameListElement', () => {
     expect(ggDealsLink.href).toBe('https://store.gg.deals/us/game/hollow-knight/');
     expect(ggDealsLink.target).toBe('_blank');
     expect(ggDealsLink.rel).toBe('noopener noreferrer');
+    expect(cards.map(card => card.title)).toEqual(originalOrder);
   });
 
   it('renders malicious wishlist deal data as inert text and omits unsafe links', () => {
