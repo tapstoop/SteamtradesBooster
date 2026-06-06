@@ -140,28 +140,33 @@ Follow-up checks:
 
 ### Current status
 
-The June 4 baseline from `npm audit --omit=optional` reported six development/test-tooling vulnerabilities:
+Remediation completed on 2026-06-06. The June 4 baseline from `npm audit --omit=optional` reported six development/test-tooling vulnerabilities:
 
 - 1 critical: `vitest <4.1.0`.
 - 5 moderate: transitive `vite`, `vite-node`, `@vitest/mocker`, Vite's nested `esbuild`, and `postcss`.
 
 These dependencies are not shipped in the packaged extension runtime. The practical risk is local development exposure, especially if Vitest UI or Vite development servers are exposed beyond localhost or used on untrusted networks.
 
-### Follow-up approach
+The non-breaking audit fix updated `postcss` from 8.5.8 to 8.5.15 and `nanoid` from 3.3.11 to 3.3.12. The remaining advisories required a reviewed Vitest major upgrade. Updating `vitest` from 2.1.9 to 4.1.8 also updated its transitive Vite toolchain and removed the vulnerable nested `esbuild`.
 
-1. Try a non-breaking `npm audit fix` on a separate branch/worktree.
-2. Run:
+### Verification
 
 ```bash
 rtk npm test
 rtk npm run build:chrome
 rtk npm run build:firefox
+rtk npm audit --omit=optional
 ```
 
-3. If vulnerabilities remain, evaluate upgrading `vitest` manually.
-4. Treat a Vitest major upgrade as potentially breaking: review release notes and test behavior before merging.
-5. Avoid `npm audit fix --force` without review, because it may upgrade Vitest across major versions.
+Results:
+
+- Tests: 20 files passed, 244 tests passed.
+- Chrome build: passed.
+- Firefox build: passed.
+- Audit: found 0 vulnerabilities.
+- Runtime extension impact: none identified; the changed packages are development/test tooling and are not included in the packaged extension.
+- Compatibility requirement: Vitest 4's Vite toolchain requires Node.js `^20.19.0` or `>=22.12.0`. Verification used Node.js 24.14.0.
 
 ### Publication impact
 
-This should not block Firefox packaging smoke-test validation, but should be reviewed before publishing or distributing development tooling instructions broadly.
+The completed tooling remediation does not block Firefox packaging or publication.
