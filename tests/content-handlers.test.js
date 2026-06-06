@@ -285,7 +285,7 @@ describe('handleRuntimeMessage', () => {
     expect(replaceBadge).not.toHaveBeenCalled();
   });
 
-  it('SETTINGS_UPDATED with region change fetches fresh prices via GET_PRICES', async () => {
+  it('SETTINGS_UPDATED with region change fetches fresh prices and rerenders on success', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = '2';
     document.body.appendChild(el);
@@ -297,7 +297,9 @@ describe('handleRuntimeMessage', () => {
 
     getDisplayRegion.mockImplementation(s => (s.regions?.[0] === 'us' ? 'us' : 'eu'));
 
-    sendMessage.mockResolvedValue({ 'sub:789': { us: makePriceData(399, 'USD') } });
+    const priceData = makePriceData(399, 'USD');
+    sendMessage.mockResolvedValue({ 'sub:789': { us: priceData } });
+    readPriceRegion.mockReturnValue(priceData);
 
     const handled = handleRuntimeMessage({
       type: 'SETTINGS_UPDATED',
@@ -308,6 +310,42 @@ describe('handleRuntimeMessage', () => {
     expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.objectContaining({
       regions: ['us'],
     }));
+
+    // Settle the fire-and-forget promise and assert rerender
+    await vi.waitFor(() => {
+      expect(replaceBadge).toHaveBeenCalledWith(el, expect.objectContaining({ prices: expect.any(Object) }), expect.any(Object));
+      expect(updateSidebarRow).toHaveBeenCalledWith('2', expect.any(Object));
+    });
+  });
+
+  it('SETTINGS_UPDATED with region change injects skeleton on GET_PRICES rejection', async () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = '2b';
+    document.body.appendChild(el);
+
+    const row = { el, appId: '790', type: 'app', title: 'Reject Region Test', cacheKey: null };
+    rowData.push(row);
+
+    settingsRef.current = { apiKey: 'key', regions: ['eu'] };
+
+    getDisplayRegion.mockImplementation(s => (s.regions?.[0] === 'us' ? 'us' : 'eu'));
+
+    sendMessage.mockRejectedValue(new Error('fetch failed'));
+
+    const handled = handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['us'] },
+    }, makeDeps());
+
+    expect(handled).toBe(true);
+    expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.objectContaining({
+      regions: ['us'],
+    }));
+
+    // Settle the rejected promise — must not emit unhandled rejection
+    await vi.waitFor(() => {
+      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+    });
   });
 
   it('SETTINGS_UPDATED with unchanged region uses cached prices and rerenders on success', async () => {

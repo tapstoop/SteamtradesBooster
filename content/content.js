@@ -8,6 +8,7 @@ import {
 } from './ui.js';
 import { applyResolvedRow } from './resolution-helpers.js';
 import { handleManualResolution, handleRuntimeMessage } from './content-handlers.js';
+import { _getBadgePrice, setWorkstationPrice } from './price-helpers.js';
 
 let rowData = []; // Store row data for callback access
 let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTINGS_UPDATED listeners
@@ -643,34 +644,12 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-import { resolveBadgeType } from './ui.js';
-
-function _getBadgePrice(priceData, settings) {
-  const fakeGameInfo = { settings, tier: 4 };
-  const { priceText } = resolveBadgeType(priceData, fakeGameInfo);
-  if (!priceText || priceText === 'N/A') return null;
-  const match = priceText.match(/([\d,.]+)/);
-  if (!match) return null;
-  return parseFloat(match[1].replace(',', '.')) * 100;
-}
-
 function readPriceRegion(prices, appId, type = 'app', region) {
   if (!prices || !appId) return null;
   const normalizedType = normalizeSteamType(type);
   const typed = prices[typedPriceKey(appId, normalizedType)]?.[region];
   if (typed) return typed;
   return normalizedType === 'app' ? prices[String(appId)]?.[region] ?? null : null;
-}
-
-function setWorkstationPrice(priceMap, appId, type, priceData, settings) {
-  const price = _getBadgePrice(priceData, settings);
-  if (price == null) return;
-  const key = typedPriceKey(appId, type);
-  const payload = { price, currency: (priceData.prices?.currency) ?? (settings?.currency) ?? 'EUR' };
-  priceMap[key] = payload;
-  if (normalizeSteamType(type) === 'app') {
-    priceMap[String(appId)] = payload;
-  }
 }
 
 function sendMessage(type, data = {}) {
