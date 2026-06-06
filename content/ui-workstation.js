@@ -48,6 +48,7 @@ export class SidebarWorkstation {
         <div class="stpt-ws-data">
           <div class="stpt-ws-col-header">
             <span class="stpt-ws-section-title">All Page Games</span>
+            <span class="stpt-ws-all-count" title="Visible all-games count">0</span>
           </div>
           <div class="stpt-ws-search"></div>
           <div class="stpt-ws-list"></div>
@@ -71,6 +72,7 @@ export class SidebarWorkstation {
     this._wishlistSection = this.el.querySelector('.stpt-wishlist-section');
     this._tradablesSection = this.el.querySelector('.stpt-tradables-section');
     this._inTradeSection = this.el.querySelector('.stpt-in-trade-section');
+    this._allGamesCountEl = this.el.querySelector('.stpt-ws-all-count');
 
     this._setupDataColumn();
     this._setupSimBox();
@@ -458,6 +460,12 @@ export class SidebarWorkstation {
     const haveGames = this.pageGames.filter(g => g.section === 'have');
     const filtered = this._filterGames(haveGames, this.searchQuery);
     const sorted = this._sortGames(filtered);
+    if (this._allGamesCountEl) {
+      this._allGamesCountEl.textContent = String(filtered.length);
+      this._allGamesCountEl.title = this.searchQuery
+        ? `${filtered.length} matching games`
+        : `${filtered.length} games`;
+    }
     this._virtualList.setItems(sorted);
   }
 
