@@ -15,9 +15,14 @@ globalThis.chrome = {
 };
 
 const {
+  buildTradablesCountLabelContent,
   buildTradablesListItemElement,
+  buildTradablesResolvePopoverElement,
+  buildTradablesSnapshotOptions,
   bindTradablesRuntimeStateForInit,
   createTradablesInitGuard,
+  populateTradablesShellState,
+  renderTradablesSearchStatus,
 } = await import('../popup/tradables.js');
 
 const { hasBundleKeywords } = await import('../popup/tradables-parser.js');
@@ -179,5 +184,178 @@ describe('resolve popover bundle guidance', () => {
     expect(bundleItem.type === 'bundle').toBe(true);
     expect(appItem.type === 'bundle').toBe(false);
     expect(appWithKeywords.type === 'bundle').toBe(false);
+  });
+
+  it('renders a malicious item name as inert text and retains required selectors', () => {
+    const item = {
+      name: 'Bad "><img src=x onerror=alert(1)>',
+      type: 'bundle',
+    };
+
+    const popover = buildTradablesResolvePopoverElement(item);
+
+    expect(popover.className).toBe('tradables-resolve-popover');
+    expect(popover.querySelector('img')).toBeNull();
+    expect(popover.querySelector('[onerror]')).toBeNull();
+    expect(popover.querySelector('.trp-header').textContent).toBe(`Search for "${item.name}"`);
+    expect(popover.querySelector('.tradables-resolve-search').value).toBe(item.name);
+    expect(popover.querySelector('.tradables-resolve-results')).not.toBeNull();
+    expect(popover.querySelector('.trp-cancel').textContent).toBe('Cancel');
+    expect(popover.querySelector('.trp-bundle-guidance')).not.toBeNull();
+
+    const searchLink = popover.querySelector('.trp-bundle-search-link');
+    const url = new URL(searchLink.href);
+    expect(url.origin).toBe('https://store.steampowered.com');
+    expect(url.pathname).toBe('/search/');
+    expect(url.searchParams.get('term')).toBe(item.name);
+  });
+
+  it('omits bundle guidance for app items', () => {
+    const popover = buildTradablesResolvePopoverElement({
+      name: 'Regular Game',
+      type: 'app',
+    });
+
+    expect(popover.querySelector('.trp-bundle-guidance')).toBeNull();
+    expect(popover.querySelector('.tradables-resolve-search')).not.toBeNull();
+  });
+});
+
+describe('tradables status and summary builders', () => {
+  it('replaces search results with an inert status element', () => {
+    const container = document.createElement('div');
+    container.innerHTML = '<button onclick="alert(1)">old</button>';
+
+    renderTradablesSearchStatus(container, '<img src=x onerror=alert(1)>', { error: true });
+
+    expect(container.children).toHaveLength(1);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('[onclick]')).toBeNull();
+    expect(container.textContent).toBe('<img src=x onerror=alert(1)>');
+    expect(container.firstElementChild.style.color).toBe('rgb(243, 139, 168)');
+  });
+
+  it('builds snapshot options with labels as text', () => {
+    const options = buildTradablesSnapshotOptions([
+      { id: 'snap-1', label: '<img src=x onerror=alert(1)>', count: 3 },
+    ]);
+
+    expect(options).toHaveLength(2);
+    expect(options[0].value).toBe('');
+    expect(options[0].textContent).toBe('No snapshots');
+    expect(options[1].value).toBe('snap-1');
+    expect(options[1].textContent).toBe('<img src=x onerror=alert(1)> (3 games)');
+    expect(options[1].querySelector('img')).toBeNull();
+  });
+
+  it('builds a games label with a unique count span when quantities differ', () => {
+    const nodes = buildTradablesCountLabelContent(5, 3);
+    const label = document.createElement('div');
+    label.replaceChildren(...nodes);
+
+    expect(label.childNodes[0].textContent).toBe('Games ');
+    expect(label.querySelector('.stat-unique').textContent).toBe('(3 unique)');
+    expect(label.textContent).toBe('Games (3 unique)');
+  });
+
+  it('builds a plain games label when quantity and unique counts match', () => {
+    const label = document.createElement('div');
+    label.replaceChildren(...buildTradablesCountLabelContent(3, 3));
+
+    expect(label.textContent).toBe('Games');
+    expect(label.querySelector('.stat-unique')).toBeNull();
+  });
+});
+
+describe('populateTradablesShellState', () => {
+  function createShell() {
+    const shell = document.createElement('div');
+    shell.innerHTML = `
+      <input id="t-search">
+      <select id="t-sort">
+        <option value="name">Name A→Z</option>
+        <option value="name-desc">Name Z→A</option>
+        <option value="price">Price ↑</option>
+        <option value="price-desc">Price ↓</option>
+        <option value="acq">Acq. Price ↑</option>
+        <option value="acq-desc">Acq. Price ↓</option>
+      </select>
+      <span id="t-total-count"></span>
+      <span id="t-total-count-label"></span>
+      <div id="t-price-warning" class="tradables-warning" hidden></div>
+      <div id="t-actions">
+        <button id="t-delete-all"></button>
+      </div>
+    `;
+    return shell;
+  }
+
+  it('populates hostile search, warning, and undo values without creating markup', () => {
+    const shell = createShell();
+    const searchQuery = '"><img src=x onerror=alert(1)>';
+    const priceError = '<script>alert(2)</script>\nignored';
+    const undoLabel = '<svg onload=alert(3)>';
+
+    populateTradablesShellState(shell, {
+      searchQuery,
+      sortBy: 'price-desc',
+      totalQty: 5,
+      uniqueCount: 3,
+      priceError,
+      hasUndo: true,
+      undoLabel,
+      hasTradables: true,
+    });
+
+    expect(shell.querySelector('#t-search').value).toBe(searchQuery);
+    expect(shell.querySelector('#t-sort').value).toBe('price-desc');
+    expect(shell.querySelector('#t-total-count').textContent).toBe('5');
+    expect(shell.querySelector('#t-total-count-label').textContent).toBe('Games (3 unique)');
+    expect(shell.querySelector('#t-total-count-label .stat-unique').textContent).toBe('(3 unique)');
+    expect(shell.querySelector('#t-price-warning').hidden).toBe(false);
+    expect(shell.querySelector('#t-price-warning').textContent).toBe(`Price warning: ${priceError.split('\n')[0]}`);
+    const undo = shell.querySelector('#t-undo.btn-undo');
+    expect(undo.title).toBe(`Undo "${undoLabel}"`);
+    expect(undo.textContent).toBe('↩ Undo');
+    const deleteAll = shell.querySelector('#t-delete-all');
+    expect(undo.nextElementSibling).toBe(deleteAll);
+    expect(deleteAll.previousElementSibling).toBe(undo);
+    expect(deleteAll.style.display).toBe('inline-block');
+    expect(shell.querySelector('img')).toBeNull();
+    expect(shell.querySelector('script')).toBeNull();
+    expect(shell.querySelector('svg')).toBeNull();
+    expect(shell.querySelector('[onerror]')).toBeNull();
+    expect(shell.querySelector('[onload]')).toBeNull();
+  });
+
+  it('clears warning and undo state and hides delete-all when the list is empty', () => {
+    const shell = createShell();
+    populateTradablesShellState(shell, {
+      searchQuery: 'game',
+      sortBy: 'name',
+      totalQty: 1,
+      uniqueCount: 1,
+      priceError: 'old error',
+      hasUndo: true,
+      undoLabel: 'Old Game',
+      hasTradables: true,
+    });
+
+    populateTradablesShellState(shell, {
+      searchQuery: '',
+      sortBy: 'name-desc',
+      totalQty: 0,
+      uniqueCount: 0,
+      priceError: '',
+      hasUndo: false,
+      undoLabel: '',
+      hasTradables: false,
+    });
+
+    expect(shell.querySelector('#t-price-warning').hidden).toBe(true);
+    expect(shell.querySelector('#t-price-warning').textContent).toBe('');
+    expect(shell.querySelector('#t-undo')).toBeNull();
+    expect(shell.querySelector('#t-delete-all').style.display).toBe('none');
+    expect(shell.querySelector('#t-total-count-label').textContent).toBe('Games');
   });
 });

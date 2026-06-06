@@ -1,18 +1,6 @@
 // popup/tradables-detailed.js
 import { getPriceRange } from '../background/snapshots.js';
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function errorLogLink() {
-  return ' <a class="error-log-inline" href="popup.html?tab=settings&focus=error-log">See error logs</a>';
-}
-
 function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
 }
@@ -40,9 +28,125 @@ function rangeLabel(ratio, settings) {
   return 'LOW';
 }
 
+export function createDetailedStateElement(type, message, { includeErrorLogLink = false } = {}) {
+  const state = document.createElement('div');
+  state.className = type === 'error' ? 'error-state' : 'empty-state';
+  state.appendChild(document.createTextNode(String(message ?? '')));
+
+  if (includeErrorLogLink) {
+    state.appendChild(document.createTextNode(' '));
+    const link = document.createElement('a');
+    link.className = 'error-log-inline';
+    link.href = 'popup.html?tab=settings&focus=error-log';
+    link.textContent = 'See error logs';
+    state.appendChild(link);
+  }
+
+  return state;
+}
+
+export function createTradablesDetailedCardElement({
+  title,
+  currentRetail,
+  historicalRetail,
+  historicalKeyshops,
+  currentKeyshops,
+  currency = 'EUR',
+  snapRange = null,
+  acqPrice = null,
+  settings = {},
+}) {
+  let bestAtl = historicalRetail;
+  if (settings.keyshopsEnabled && historicalKeyshops != null
+    && (bestAtl == null || historicalKeyshops < bestAtl)) {
+    bestAtl = historicalKeyshops;
+  }
+
+  const card = document.createElement('div');
+  card.className = 'game-card';
+
+  const titleElement = document.createElement('div');
+  titleElement.className = 'game-card-title';
+  titleElement.textContent = title ?? '';
+
+  const priceMeta = document.createElement('div');
+  priceMeta.className = 'game-card-meta';
+  priceMeta.appendChild(document.createTextNode('GG.deals: '));
+  const current = document.createElement('strong');
+  current.textContent = formatPrice(currentRetail, currency);
+  priceMeta.append(current, document.createTextNode(` · ${settings.keyshopsEnabled ? 'Historical ATL' : 'ATL'}: `));
+  const atl = document.createElement('span');
+  atl.className = 'atl';
+  atl.textContent = formatPrice(bestAtl ?? historicalRetail, currency);
+  priceMeta.appendChild(atl);
+
+  const range = document.createElement('div');
+  range.className = 'game-card-range';
+  let rangeBasis = '';
+  let ratio = null;
+  if (snapRange) {
+    ratio = snapRange.min > 0 ? currentRetail / snapRange.min : 1;
+    rangeBasis = '(180d history)';
+  } else if (bestAtl > 0) {
+    ratio = currentRetail / bestAtl;
+    rangeBasis = '(ATL basis)';
+  }
+  if (ratio != null) {
+    const label = rangeLabel(ratio, settings);
+    const labelElement = document.createElement('span');
+    labelElement.className = `range-${label}`;
+    labelElement.textContent = label;
+    const basis = document.createElement('span');
+    basis.style.color = '#555';
+    basis.textContent = ` ${rangeBasis}`;
+    range.append(labelElement, basis);
+  }
+
+  card.append(titleElement, priceMeta, range);
+
+  if (acqPrice != null) {
+    const diff = currentRetail - acqPrice;
+    const acquisition = document.createElement('div');
+    acquisition.className = `game-card-meta ${diff >= 0 ? 'high' : 'low'}`;
+    const percentage = acqPrice === 0 ? '' : ` (${Math.round(diff / acqPrice * 100)}%)`;
+    acquisition.textContent = `Paid ${formatPrice(acqPrice, currency)} → Now ${formatPrice(currentRetail, currency)} → ${diff >= 0 ? '+' : ''}${formatPrice(diff, currency)}${percentage}`;
+    card.appendChild(acquisition);
+  }
+
+  if (settings.keyshopsEnabled && currentKeyshops != null) {
+    const fees = settings.keyshopFees ?? {};
+    const enabledShops = settings.keyshops ?? [];
+    if (enabledShops.length > 0) {
+      const minFee = Math.min(...enabledShops.map(shop => fees[shop]?.min ?? 8));
+      const maxFee = Math.max(...enabledShops.map(shop => fees[shop]?.max ?? 15));
+      const costMin = Math.round(currentKeyshops * (1 + minFee / 100));
+      const costMax = Math.round(currentKeyshops * (1 + maxFee / 100));
+      const gapMin = currentRetail - costMax;
+      const gapMax = currentRetail - costMin;
+      if (gapMin > 0) {
+        const keyshop = document.createElement('div');
+        keyshop.className = 'game-card-meta';
+        keyshop.appendChild(document.createTextNode(`Keyshop flip: Buy ${formatPrice(currentKeyshops, currency)} +${minFee}–${maxFee}% fee → `));
+        const gap = document.createElement('span');
+        gap.className = 'high';
+        gap.textContent = `Gap ${formatPrice(gapMin, currency)}–${formatPrice(gapMax, currency)}`;
+        const estimate = document.createElement('span');
+        estimate.style.color = '#555';
+        estimate.style.fontSize = '9px';
+        estimate.textContent = ' (est.)';
+        keyshop.append(gap, estimate);
+        card.appendChild(keyshop);
+      }
+    }
+  }
+
+  return card;
+}
+
 export async function initTradablesDetailed(container) {
   // Set up persistent wrapper with refresh button on first call
   if (!container.querySelector('#tradables-detailed-header')) {
+    // Static shell only: no user or remote data is interpolated here.
     container.innerHTML = `
       <div id="tradables-detailed-header" style="text-align:right;padding:0 0 6px">
         <button class="btn-refresh" id="tradables-detailed-refresh">↻ Refresh</button>
@@ -53,22 +157,29 @@ export async function initTradablesDetailed(container) {
   }
   const body = container.querySelector('#tradables-detailed-body');
 
-  body.innerHTML = '<div class="empty-state">Loading tradables detailed…</div>';
+  body.replaceChildren(createDetailedStateElement('empty', 'Loading tradables detailed…'));
 
   const settings = await msg('GET_SETTINGS');
   if (!settings.apiKey || !settings.steamId) {
-    body.innerHTML = `<div class="error-state">Set API key and Steam ID in Settings first.${errorLogLink()}</div>`;
+    body.replaceChildren(createDetailedStateElement(
+      'error',
+      'Set API key and Steam ID in Settings first.',
+      { includeErrorLogLink: true },
+    ));
     return;
   }
 
   const profile = await msg('GET_PROFILE');
   if (profile.error) {
-    body.innerHTML = `<div class="error-state">${escapeHtml(profile.error)}${errorLogLink()}</div>`;
+    body.replaceChildren(createDetailedStateElement('error', profile.error, { includeErrorLogLink: true }));
     return;
   }
   const tradables = profile.tradables ?? [];
   if (!tradables.length) {
-    body.innerHTML = '<div class="empty-state">No tradable games found. Add your tradables in Settings.</div>';
+    body.replaceChildren(createDetailedStateElement(
+      'empty',
+      'No tradable games found. Add your tradables in Settings.',
+    ));
     return;
   }
 
@@ -80,7 +191,7 @@ export async function initTradablesDetailed(container) {
   const prices = await msg('GET_PRICES', { items: appIds, regions: settings.regions });
   const region = settings.regions[0];
 
-  const html = [];
+  const cards = [];
 
   for (let i = 0; i < tradables.length; i++) {
     const title = tradables[i];
@@ -98,76 +209,28 @@ export async function initTradablesDetailed(container) {
     const currency = data.prices?.currency ?? 'EUR';
     if (currentRetail == null) continue;
 
-    // Determine best ATL (min of retail and keyshop)
-    let bestAtl = historicalRetail;
-    if (settings.keyshopsEnabled && historicalKeyshops != null) {
-      if (bestAtl == null || historicalKeyshops < bestAtl) {
-        bestAtl = historicalKeyshops;
-      }
-    }
-
-    // Price range indicator
-    let rangeStr = '';
     const snapRange = await getPriceRange(appId, region, settings.snapshotWindowDays ?? 180);
-    if (snapRange) {
-      const ratio = snapRange.min > 0 ? currentRetail / snapRange.min : 1;
-      const rl = rangeLabel(ratio, settings);
-      rangeStr = `<span class="range-${rl}">${rl}</span> <span style="color:#555">(180d history)</span>`;
-    } else if (bestAtl > 0) {
-      const ratio = currentRetail / bestAtl;
-      const rl = rangeLabel(ratio, settings);
-      rangeStr = `<span class="range-${rl}">${rl}</span> <span style="color:#555">(ATL basis)</span>`;
-    }
 
-    // Acquisition price P/L
     const { price: acqPrice } = await msg('GET_ACQ_PRICE', { appId, itemType: type });
-    let acqHtml = '';
-    if (acqPrice != null) {
-      const diff = currentRetail - acqPrice;
-      const pct = Math.round(diff / acqPrice * 100);
-      acqHtml = `<div class="game-card-meta ${diff >= 0 ? 'high' : 'low'}">
-        Paid ${formatPrice(acqPrice, currency)} → Now ${formatPrice(currentRetail, currency)} → ${diff >= 0 ? '+' : ''}${formatPrice(diff, currency)} (${pct}%)
-      </div>`;
-    }
-
-    // Keyshop flip opportunity
-    let keyshopHtml = '';
-    if (settings.keyshopsEnabled && currentKeyshops != null) {
-      const fees = settings.keyshopFees ?? {};
-      const enabledShops = settings.keyshops ?? [];
-      if (enabledShops.length > 0) {
-        const minFee = Math.min(...enabledShops.map(s => fees[s]?.min ?? 8));
-        const maxFee = Math.max(...enabledShops.map(s => fees[s]?.max ?? 15));
-        const costMin = Math.round(currentKeyshops * (1 + minFee / 100));
-        const costMax = Math.round(currentKeyshops * (1 + maxFee / 100));
-        const gapMin = currentRetail - costMax;
-        const gapMax = currentRetail - costMin;
-        if (gapMin > 0) {
-          keyshopHtml = `<div class="game-card-meta">
-            Keyshop flip: Buy ${formatPrice(currentKeyshops, currency)} +${minFee}–${maxFee}% fee →
-            <span class="high">Gap ${formatPrice(gapMin, currency)}–${formatPrice(gapMax, currency)}</span>
-            <span style="color:#555;font-size:9px"> (est.)</span>
-          </div>`;
-        }
-      }
-    }
-
-    const atlLabel = settings.keyshopsEnabled ? 'Historical ATL' : 'ATL';
-    html.push(`
-      <div class="game-card">
-        <div class="game-card-title">${escapeHtml(title)}</div>
-        <div class="game-card-meta">
-          GG.deals: <strong>${formatPrice(currentRetail, currency)}</strong>
-          · ${atlLabel}: <span class="atl">${formatPrice(bestAtl ?? historicalRetail, currency)}</span>
-        </div>
-        <div class="game-card-range">${rangeStr}</div>
-        ${acqHtml}
-        ${keyshopHtml}
-      </div>
-    `);
+    cards.push(createTradablesDetailedCardElement({
+      title,
+      currentRetail,
+      historicalRetail,
+      historicalKeyshops,
+      currentKeyshops,
+      currency,
+      snapRange,
+      acqPrice,
+      settings,
+    }));
   }
 
-  body.innerHTML = html.length
-    ? `<div class="game-list">${html.join('')}</div>`
-    : '<div class="empty-state">No tradables data available.</div>';
+  if (cards.length) {
+    const list = document.createElement('div');
+    list.className = 'game-list';
+    list.append(...cards);
+    body.replaceChildren(list);
+  } else {
+    body.replaceChildren(createDetailedStateElement('empty', 'No tradables data available.'));
+  }
 }

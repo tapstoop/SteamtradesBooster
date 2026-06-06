@@ -27,28 +27,83 @@ export function formatPopupDiagnosticDate(ts) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-export function buildDiagnosticsPanelHtml({ expanded = false, log = '', generatedAt = null, loading = false, error = '' } = {}) {
+export function buildDiagnosticsPanelElement({
+  expanded = false,
+  log = '',
+  generatedAt = null,
+  loading = false,
+  error = '',
+} = {}) {
   const hasLog = Boolean(log);
   const generatedText = generatedAt ? `Generated ${formatPopupDiagnosticDate(generatedAt)}` : 'Not generated yet';
-  return `
-    <div class="settings-section diagnostics-panel${expanded ? ' expanded' : ''}" id="error-log" data-expanded="${expanded ? 'true' : 'false'}">
-      <div class="diagnostics-header">
-        <div>
-          <div class="settings-label">Diagnostics</div>
-          <div class="diagnostics-meta" id="s-error-log-meta">${escapeHtml(generatedText)}</div>
-        </div>
-        <button class="btn-refresh diagnostics-toggle" id="s-toggle-log" type="button" aria-expanded="${expanded ? 'true' : 'false'}">${expanded ? 'Minimize' : 'Open'}</button>
-      </div>
-      <div class="diagnostics-body" ${expanded ? '' : 'hidden'}>
-        <textarea class="settings-log" id="s-error-log" readonly>${escapeHtml(log || 'Click Generate to create a diagnostic snapshot.')}</textarea>
-        <div class="diagnostics-error" id="s-error-log-error" ${error ? '' : 'hidden'}>${escapeHtml(error)}</div>
-        <div class="diagnostics-actions">
-          <button class="btn-primary settings-copy" id="s-generate-log" type="button" ${loading ? 'disabled' : ''}>${hasLog ? 'Refresh' : 'Generate'}</button>
-          <button class="btn-primary settings-copy" id="s-copy-log" type="button" ${(!hasLog || loading) ? 'disabled' : ''}>Copy</button>
-        </div>
-      </div>
-    </div>
-  `;
+
+  const panel = document.createElement('div');
+  panel.className = `settings-section diagnostics-panel${expanded ? ' expanded' : ''}`;
+  panel.id = 'error-log';
+  panel.dataset.expanded = expanded ? 'true' : 'false';
+
+  const header = document.createElement('div');
+  header.className = 'diagnostics-header';
+
+  const heading = document.createElement('div');
+  const label = document.createElement('div');
+  label.className = 'settings-label';
+  label.textContent = 'Diagnostics';
+  const meta = document.createElement('div');
+  meta.className = 'diagnostics-meta';
+  meta.id = 's-error-log-meta';
+  meta.textContent = generatedText;
+  heading.append(label, meta);
+
+  const toggle = document.createElement('button');
+  toggle.className = 'btn-refresh diagnostics-toggle';
+  toggle.id = 's-toggle-log';
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  toggle.textContent = expanded ? 'Minimize' : 'Open';
+  header.append(heading, toggle);
+
+  const body = document.createElement('div');
+  body.className = 'diagnostics-body';
+  body.hidden = !expanded;
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'settings-log';
+  textarea.id = 's-error-log';
+  textarea.readOnly = true;
+  textarea.textContent = log || 'Click Generate to create a diagnostic snapshot.';
+
+  const errorElement = document.createElement('div');
+  errorElement.className = 'diagnostics-error';
+  errorElement.id = 's-error-log-error';
+  errorElement.hidden = !error;
+  errorElement.textContent = error;
+
+  const actions = document.createElement('div');
+  actions.className = 'diagnostics-actions';
+
+  const generate = document.createElement('button');
+  generate.className = 'btn-primary settings-copy';
+  generate.id = 's-generate-log';
+  generate.type = 'button';
+  generate.disabled = loading;
+  generate.textContent = hasLog ? 'Refresh' : 'Generate';
+
+  const copy = document.createElement('button');
+  copy.className = 'btn-primary settings-copy';
+  copy.id = 's-copy-log';
+  copy.type = 'button';
+  copy.disabled = !hasLog || loading;
+  copy.textContent = 'Copy';
+
+  actions.append(generate, copy);
+  body.append(textarea, errorElement, actions);
+  panel.append(header, body);
+  return panel;
+}
+
+export function buildDiagnosticsPanelHtml(options = {}) {
+  return buildDiagnosticsPanelElement(options).outerHTML;
 }
 
 function storageGet(key) {
@@ -69,6 +124,7 @@ export async function initSettings(container) {
   let diagnosticsLog = '';
   let diagnosticsGeneratedAt = null;
 
+  // Structured settings shell: dynamic form values are escaped before insertion, then event-bound below.
   container.innerHTML = `
     <div class="settings-section">
       <div class="settings-label">API</div>
@@ -197,7 +253,7 @@ export async function initSettings(container) {
       </div>
     </div>
 
-    ${buildDiagnosticsPanelHtml({ expanded: diagnosticsExpanded })}
+    <div id="diagnostics-panel-slot"></div>
 
     <hr class="settings-divider">
     <div class="settings-about">
@@ -210,6 +266,9 @@ export async function initSettings(container) {
     </div>
   `;
 
+  container.querySelector('#diagnostics-panel-slot')
+    ?.replaceWith(buildDiagnosticsPanelElement({ expanded: diagnosticsExpanded }));
+
   const manifest = chrome.runtime.getManifest?.();
   const aboutVersion = container.querySelector('#s-about-version');
   if (aboutVersion) aboutVersion.textContent = `SteamTrades Booster v${manifest?.version ?? 'unknown'}`;
@@ -217,13 +276,13 @@ export async function initSettings(container) {
   function renderDiagnosticsPanel({ loading = false, error = '' } = {}) {
     const panel = container.querySelector('#error-log');
     if (!panel) return;
-    panel.outerHTML = buildDiagnosticsPanelHtml({
+    panel.replaceWith(buildDiagnosticsPanelElement({
       expanded: diagnosticsExpanded,
       log: diagnosticsLog,
       generatedAt: diagnosticsGeneratedAt,
       loading,
       error,
-    });
+    }));
     bindDiagnosticsControls();
   }
 

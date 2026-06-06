@@ -13,12 +13,6 @@ function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
 }
 
-function escapeHtml(str) {
-  return str.replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[c]));
-}
-
 function formatPrice(amount, currency = 'EUR') {
   if (amount == null) return '—';
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);
@@ -255,6 +249,149 @@ export function buildTradablesListItemElement(item, {
   actions.append(acqInput, remove);
   row.append(qty, main, actions);
   return row;
+}
+
+export function buildTradablesResolvePopoverElement(item) {
+  const itemName = String(item?.name ?? '');
+  const popover = document.createElement('div');
+  popover.className = 'tradables-resolve-popover';
+
+  const header = document.createElement('div');
+  header.className = 'trp-header';
+  header.textContent = `Search for "${itemName}"`;
+  popover.appendChild(header);
+
+  if (item?.type === 'bundle') {
+    const guidance = document.createElement('div');
+    guidance.className = 'trp-bundle-guidance';
+
+    const warning = document.createElement('div');
+    warning.className = 'trp-bundle-warning';
+    warning.textContent = '⚠️ Bundles cannot be searched by name.';
+
+    const help = document.createElement('div');
+    help.className = 'trp-bundle-help';
+    help.textContent = 'Paste a Steam bundle URL to resolve:';
+
+    const exampleUrl = document.createElement('code');
+    exampleUrl.className = 'trp-bundle-url';
+    exampleUrl.textContent = 'https://store.steampowered.com/bundle/<id>/<name>/';
+
+    const searchUrl = new URL('/search/', 'https://store.steampowered.com');
+    searchUrl.searchParams.set('term', itemName);
+    const searchLink = document.createElement('a');
+    searchLink.className = 'trp-bundle-search-link';
+    searchLink.href = searchUrl.href;
+    searchLink.target = '_blank';
+    searchLink.rel = 'noreferrer';
+    searchLink.textContent = 'Search on Steam ↗';
+
+    guidance.append(warning, help, exampleUrl, searchLink);
+    popover.appendChild(guidance);
+  }
+
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'trp-search-wrap';
+
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.className = 'tradables-resolve-search';
+  searchInput.placeholder = 'Search Steam or paste URL...';
+  searchInput.value = itemName;
+  searchWrap.appendChild(searchInput);
+
+  const results = document.createElement('div');
+  results.className = 'tradables-resolve-results';
+
+  const cancel = document.createElement('div');
+  cancel.className = 'trp-cancel';
+  cancel.textContent = 'Cancel';
+
+  popover.append(searchWrap, results, cancel);
+  return popover;
+}
+
+export function renderTradablesSearchStatus(container, message, { error = false } = {}) {
+  const status = document.createElement('div');
+  status.style.padding = '5px';
+  status.style.color = error ? '#f38ba8' : '#555';
+  status.style.fontSize = '10px';
+  status.textContent = message;
+  container.replaceChildren(status);
+}
+
+export function buildTradablesSnapshotOptions(snapshots = []) {
+  const emptyOption = document.createElement('option');
+  emptyOption.value = '';
+  emptyOption.textContent = 'No snapshots';
+
+  return [
+    emptyOption,
+    ...snapshots.map((snapshot) => {
+      const option = document.createElement('option');
+      option.value = String(snapshot.id ?? '');
+      option.textContent = `${snapshot.label ?? ''} (${snapshot.count ?? 0} games)`;
+      return option;
+    }),
+  ];
+}
+
+export function buildTradablesCountLabelContent(totalQty, uniqueCount) {
+  const nodes = [document.createTextNode(totalQty !== uniqueCount ? 'Games ' : 'Games')];
+  if (totalQty !== uniqueCount) {
+    const unique = document.createElement('span');
+    unique.className = 'stat-unique';
+    unique.textContent = `(${uniqueCount} unique)`;
+    nodes.push(unique);
+  }
+  return nodes;
+}
+
+export function populateTradablesShellState(container, {
+  searchQuery = '',
+  sortBy = 'name',
+  totalQty = 0,
+  uniqueCount = 0,
+  priceError = '',
+  hasUndo = false,
+  undoLabel = '',
+  hasTradables = false,
+} = {}) {
+  const searchInput = container.querySelector('#t-search');
+  if (searchInput) searchInput.value = searchQuery;
+
+  const sortSelect = container.querySelector('#t-sort');
+  if (sortSelect) sortSelect.value = sortBy;
+
+  const totalCount = container.querySelector('#t-total-count');
+  if (totalCount) totalCount.textContent = String(totalQty);
+
+  const totalCountLabel = container.querySelector('#t-total-count-label');
+  if (totalCountLabel) {
+    totalCountLabel.replaceChildren(...buildTradablesCountLabelContent(totalQty, uniqueCount));
+  }
+
+  const warning = container.querySelector('#t-price-warning');
+  if (warning) {
+    const firstErrorLine = String(priceError ?? '').split('\n')[0];
+    warning.textContent = firstErrorLine ? `Price warning: ${firstErrorLine}` : '';
+    warning.hidden = !firstErrorLine;
+  }
+
+  const actions = container.querySelector('#t-actions');
+  actions?.querySelector('#t-undo')?.remove();
+  if (actions && hasUndo) {
+    const undo = document.createElement('button');
+    undo.id = 't-undo';
+    undo.className = 'btn-undo';
+    undo.title = `Undo "${undoLabel}"`;
+    undo.textContent = '↩ Undo';
+    const deleteAll = actions.querySelector('#t-delete-all');
+    actions.insertBefore(undo, deleteAll);
+  }
+
+  const deleteAll = container.querySelector('#t-delete-all');
+  if (deleteAll) deleteAll.style.display = hasTradables ? 'inline-block' : 'none';
 }
 
 const tradablesRuntimeState = {
@@ -507,32 +644,29 @@ export async function initTradables(container) {
       .filter(i => (tradablesList[i].name || '').toLowerCase().includes(searchQuery.toLowerCase()))
       .map(i => ({ ...tradablesList[i], _origIndex: i }));
 
-    const sortOptions = [
-      { value: 'name', label: 'Name A→Z' },
-      { value: 'name-desc', label: 'Name Z→A' },
-      { value: 'price', label: 'Price ↑' },
-      { value: 'price-desc', label: 'Price ↓' },
-      { value: 'acq', label: 'Acq. Price ↑' },
-      { value: 'acq-desc', label: 'Acq. Price ↓' },
-    ];
-
     const hasUndo = undoStack.length > 0;
     const lastUndo = undoStack[undoStack.length - 1];
-    const undoLabel = lastUndo ? `Undo "${lastUndo.item.name}"` : 'Undo';
+    const totalQty = tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0);
 
+    // Static structured shell only; live state is populated through DOM APIs immediately below.
     container.innerHTML = `
       <div class="tradables-container">
         <div class="tradables-toolbar" style="margin-bottom:8px;">
-          <input type="text" id="t-search" class="tradables-search" placeholder="Search tradables..." value="${escapeHtml(searchQuery)}">
+          <input type="text" id="t-search" class="tradables-search" placeholder="Search tradables...">
           <select id="t-sort" class="tradables-sort" title="Sort by">
-            ${sortOptions.map(opt => `<option value="${opt.value}" ${sortBy === opt.value ? 'selected' : ''}>${opt.label}</option>`).join('')}
+            <option value="name">Name A→Z</option>
+            <option value="name-desc">Name Z→A</option>
+            <option value="price">Price ↑</option>
+            <option value="price-desc">Price ↓</option>
+            <option value="acq">Acq. Price ↑</option>
+            <option value="acq-desc">Acq. Price ↓</option>
           </select>
           <button id="t-refresh-btn" class="btn-primary" title="Refresh prices">↻ Refresh</button>
         </div>
         <div class="tradables-stats">
           <div class="stat-block">
-            <span class="stat-value" id="t-total-count">${tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0)}</span>
-            <span class="stat-label" id="t-total-count-label">Games ${tradablesList.length !== tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0) ? `<span class="stat-unique">(${tradablesList.length} unique)</span>` : ''}</span>
+            <span class="stat-value" id="t-total-count"></span>
+            <span class="stat-label" id="t-total-count-label"></span>
           </div>
           <div class="stat-block">
             <span class="stat-value" id="t-total-value">—</span>
@@ -543,7 +677,7 @@ export async function initTradables(container) {
             <span class="stat-label">Priced</span>
           </div>
         </div>
-        ${priceError ? `<div class="tradables-warning">Price warning: ${escapeHtml(priceError.split('\n')[0])}</div>` : ''}
+        <div class="tradables-warning" id="t-price-warning" hidden></div>
         <div class="tradables-list" id="t-list"></div>
         <div class="tradables-footer">
           <div id="t-snapshots-section" style="display:none; margin-top:8px;">
@@ -556,14 +690,24 @@ export async function initTradables(container) {
               <button id="t-snapshot-delete" class="btn-primary" style="font-size:9px; padding:3px 6px; background:#2a1a1a; border-color:#5a2a2a; color:#ff8888; display:none;">Delete</button>
             </div>
           </div>
-          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+          <div id="t-actions" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
             <button id="t-add-btn" class="btn-primary">+ Add Tradables</button>
-            ${hasUndo ? `<button id="t-undo" class="btn-undo" title="${escapeHtml(undoLabel)}">↩ Undo</button>` : ''}
-            <button id="t-delete-all" class="btn-danger" style="display:${tradablesList.length > 0 ? 'inline-block' : 'none'};">Delete All Tradables</button>
+            <button id="t-delete-all" class="btn-danger">Delete All Tradables</button>
           </div>
         </div>
       </div>
     `;
+
+    populateTradablesShellState(container, {
+      searchQuery,
+      sortBy,
+      totalQty,
+      uniqueCount: tradablesList.length,
+      priceError,
+      hasUndo,
+      undoLabel: lastUndo?.item?.name ?? '',
+      hasTradables: tradablesList.length > 0,
+    });
 
     // Render list
     const listEl = container.querySelector('#t-list');
@@ -729,31 +873,7 @@ export async function initTradables(container) {
         const item = tradablesList[origIdx];
         if (!item) return;
 
-        // Build a tiny search popover
-        const popover = document.createElement('div');
-        popover.className = 'tradables-resolve-popover';
-        
-        const isBundle = item.type === 'bundle';
-        const bundleGuidance = isBundle ? `
-          <div class="trp-bundle-guidance">
-            <div class="trp-bundle-warning">⚠️ Bundles cannot be searched by name.</div>
-            <div class="trp-bundle-help">Paste a Steam bundle URL to resolve:</div>
-            <code class="trp-bundle-url">https://store.steampowered.com/bundle/&lt;id&gt;/&lt;name&gt;/</code>
-            <a href="https://store.steampowered.com/search/?term=${encodeURIComponent(item.name)}" target="_blank" class="trp-bundle-search-link">Search on Steam ↗</a>
-          </div>
-        ` : '';
-        
-        popover.innerHTML = `
-          <div class="trp-header">
-            Search for "${escapeHtml(item.name)}"
-          </div>
-          ${bundleGuidance}
-          <div class="trp-search-wrap">
-            <input type="text" class="tradables-resolve-search" placeholder="Search Steam or paste URL..." value="${escapeHtml(item.name)}">
-          </div>
-          <div class="tradables-resolve-results"></div>
-          <div class="trp-cancel">Cancel</div>
-        `;
+        const popover = buildTradablesResolvePopoverElement(item);
 
         // Position near the clicked link
         const rect = link.getBoundingClientRect();
@@ -774,7 +894,6 @@ export async function initTradables(container) {
           // Check if query is a Steam URL
           const steamUrl = parseSteamStoreUrl(query);
           if (steamUrl) {
-            resultsContainer.innerHTML = '';
             const resultItem = document.createElement('div');
             resultItem.className = 'trp-result-item trp-url-result';
             const nameSpan = document.createElement('span');
@@ -793,21 +912,20 @@ export async function initTradables(container) {
               render();
               updateStats();
             });
-            resultsContainer.appendChild(resultItem);
+            resultsContainer.replaceChildren(resultItem);
             return;
           }
 
-          resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">Searching...</div>';
+          renderTradablesSearchStatus(resultsContainer, 'Searching...');
           const searchSeq = ++searchSequence;
           try {
             const results = await msg('SEARCH_STEAM', { query });
             if (searchSequence !== searchSeq) return;
-            resultsContainer.innerHTML = '';
             if (!results.items?.length) {
-              resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">No results</div>';
+              renderTradablesSearchStatus(resultsContainer, 'No results');
               return;
             }
-            results.items.forEach(r => {
+            const resultElements = results.items.map(r => {
               const resultItem = document.createElement('div');
               resultItem.className = 'trp-result-item';
               const nameSpan = document.createElement('span');
@@ -829,17 +947,18 @@ export async function initTradables(container) {
                 render();
                 updateStats();
               });
-              resultsContainer.appendChild(resultItem);
+              return resultItem;
             });
+            resultsContainer.replaceChildren(...resultElements);
           } catch {
-            resultsContainer.innerHTML = '<div style="padding:5px;color:#f38ba8;font-size:10px;">Search failed</div>';
+            renderTradablesSearchStatus(resultsContainer, 'Search failed', { error: true });
           }
         };
 
         searchInput.addEventListener('input', (e2) => {
           clearTimeout(searchTimeout);
           const query = e2.target.value.trim();
-          if (query.length < 2) { resultsContainer.innerHTML = ''; return; }
+          if (query.length < 2) { resultsContainer.replaceChildren(); return; }
           searchTimeout = setTimeout(() => performSearch(query), 300);
         });
 
@@ -875,14 +994,8 @@ export async function initTradables(container) {
 
     async function loadSnapshots() {
       const snapshots = await msg('GET_TRADABLES_SNAPSHOTS');
-      snapshotSelect.innerHTML = '<option value="">No snapshots</option>';
+      snapshotSelect.replaceChildren(...buildTradablesSnapshotOptions(snapshots));
       if (snapshots && snapshots.length > 0) {
-        for (const snap of snapshots) {
-          const opt = document.createElement('option');
-          opt.value = snap.id;
-          opt.textContent = `${snap.label} (${snap.count} games)`;
-          snapshotSelect.appendChild(opt);
-        }
         snapshotSection.style.display = 'block';
       } else {
         snapshotSection.style.display = 'none';
@@ -948,7 +1061,7 @@ export async function initTradables(container) {
     const totalQty = tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0);
     if (totalCountEl) totalCountEl.textContent = totalQty;
     if (totalCountLabelEl) {
-      totalCountLabelEl.innerHTML = `Games ${totalQty !== tradablesList.length ? `<span class="stat-unique">(${tradablesList.length} unique)</span>` : ''}`;
+      totalCountLabelEl.replaceChildren(...buildTradablesCountLabelContent(totalQty, tradablesList.length));
     }
 
     if (!settings.apiKey) {
