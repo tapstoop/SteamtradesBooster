@@ -5,14 +5,6 @@ import { sendMessage, formatPrice, formatTimestamp, formatFullTimestamp, closeAl
 import { injectSkeleton, injectNotFoundBadge, injectDismissedBadge, injectDelistedBadge, replaceBadge } from './ui-badges.js';
 import { getDisplayRegion, normalizeSteamType } from '../utils/similarity.js';
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 function normalizeGgDealsUrl(rawUrl) {
   if (!rawUrl) return null;
   try {
@@ -35,7 +27,46 @@ function readTypedPrice(prices, id, type = 'app', region) {
   return normalizedType === 'app' ? prices[id]?.[region] ?? null : null;
 }
 
+function formatPickerItemType(type) {
+  if (type === 'bundle') return 'Bundle';
+  if (type === 'sub') return 'Sub';
+  return 'App';
+}
 
+export function createPickerResultRow({
+  name,
+  meta = null,
+  className = 'stpt-cand-item',
+  nameColor = null,
+  metaColor = '#555',
+}) {
+  const row = document.createElement('div');
+  row.className = className;
+
+  const nameEl = document.createElement('span');
+  if (nameColor) nameEl.style.color = nameColor;
+  nameEl.textContent = String(name ?? '');
+  row.appendChild(nameEl);
+
+  if (meta != null) {
+    const metaEl = document.createElement('span');
+    metaEl.style.color = metaColor;
+    metaEl.style.fontSize = '9px';
+    metaEl.textContent = String(meta);
+    row.appendChild(metaEl);
+  }
+
+  return row;
+}
+
+export function createPickerStatusMessage(text, color = '#555') {
+  const status = document.createElement('div');
+  status.style.padding = '5px';
+  status.style.color = color;
+  status.style.fontSize = '10px';
+  status.textContent = String(text ?? '');
+  return status;
+}
 
 export function anchorStillMatches(anchorEl, gameInfo, itemType) {
   if (!document.body.contains(anchorEl)) return false;
@@ -81,9 +112,10 @@ export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
   picker.appendChild(header);
 
   candidates.forEach(c => {
-    const item = document.createElement('div');
-    item.className = 'stpt-cand-item';
-    item.innerHTML = `<span>${escapeHtml(c.name)}</span><span style="color:#555;font-size:9px;">${escapeHtml(c.type === 'bundle' ? 'Bundle' : c.type === 'sub' ? 'Sub' : 'App')} ${escapeHtml(c.id)}</span>`;
+    const item = createPickerResultRow({
+      name: c.name,
+      meta: `${formatPickerItemType(c.type)} ${c.id}`,
+    });
     item.addEventListener('click', async () => {
       picker.remove();
       await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: c.id, title: c.name, type: c.type ?? 'app' });
@@ -124,9 +156,10 @@ export function openFuzzyPicker(anchorEl, resolution) {
   picker.appendChild(header);
   appendErrorLogLink(picker);
 
-  const matchedItem = document.createElement('div');
-  matchedItem.className = 'stpt-cand-item';
-  matchedItem.innerHTML = `<span style="color:#7fff7f;">✓ ${escapeHtml(resolution.title || `App ${resolution.appId}`)}</span>`;
+  const matchedItem = createPickerResultRow({
+    name: `✓ ${resolution.title || `App ${resolution.appId}`}`,
+    nameColor: '#7fff7f',
+  });
   picker.appendChild(matchedItem);
 
   const dismiss = document.createElement('div');
@@ -191,28 +224,30 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
 
   let searchTimeout = null;
   const performSearch = async (query) => {
-    resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">Searching...</div>';
+    resultsContainer.replaceChildren(createPickerStatusMessage('Searching...'));
     try {
       const results = await sendMessage('SEARCH_STEAM', { query });
-      resultsContainer.innerHTML = '';
+      resultsContainer.replaceChildren();
       if (!results.items?.length) {
-        resultsContainer.innerHTML = '<div style="padding:5px;color:#555;font-size:10px;">No results</div>';
+        resultsContainer.replaceChildren(createPickerStatusMessage('No results'));
         return;
       }
-      results.items.forEach(item => {
-        const resultItem = document.createElement('div');
-        resultItem.className = 'stpt-cand-item';
+      const resultItems = results.items.map(item => {
         const type = item.type ?? 'app';
-        resultItem.innerHTML = `<span>${escapeHtml(item.name)}</span><span style="color:#555;font-size:9px;">${escapeHtml(type === 'bundle' ? 'Bundle' : type === 'sub' ? 'Sub' : 'App')} ${escapeHtml(String(item.id))}</span>`;
+        const resultItem = createPickerResultRow({
+          name: item.name,
+          meta: `${formatPickerItemType(type)} ${String(item.id)}`,
+        });
         resultItem.addEventListener('click', async () => {
           picker.remove();
           await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: String(item.id), title: item.name, type });
           rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: String(item.id), title: item.name, cacheKey, type } }));
         });
-        resultsContainer.appendChild(resultItem);
+        return resultItem;
       });
+      resultsContainer.replaceChildren(...resultItems);
     } catch (e) {
-      resultsContainer.innerHTML = '<div style="padding:5px;color:#f38ba8;font-size:10px;">Search failed</div>';
+      resultsContainer.replaceChildren(createPickerStatusMessage('Search failed', '#f38ba8'));
     }
   };
 
@@ -220,7 +255,7 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
     clearTimeout(searchTimeout);
     const query = e.target.value.trim();
     if (query.length < 2) {
-      resultsContainer.innerHTML = '';
+      resultsContainer.replaceChildren();
       return;
     }
     searchTimeout = setTimeout(() => performSearch(query), 300);
@@ -279,11 +314,31 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
 
 let activePopover = null;
 
-export function openPopover(anchorEl, priceData, gameInfo) {
-  closeAll('.stpt-popover');
-  const pop = document.createElement('div');
-  pop.className = 'stpt-popover';
+function createPopoverRow(label, value, {
+  rowClass = '',
+  valueClass = '',
+  labelStyle = '',
+  valueStyle = '',
+} = {}) {
+  const row = document.createElement('div');
+  row.className = `stpt-popover-row${rowClass ? ` ${rowClass}` : ''}`;
 
+  const labelEl = document.createElement('span');
+  labelEl.className = 'stpt-popover-label';
+  if (labelStyle) labelEl.style.cssText = labelStyle;
+  labelEl.textContent = label;
+
+  const valueEl = document.createElement('span');
+  valueEl.className = `stpt-popover-val${valueClass ? ` ${valueClass}` : ''}`;
+  if (valueStyle) valueEl.style.cssText = valueStyle;
+  valueEl.textContent = value;
+
+  row.append(labelEl, valueEl);
+  return row;
+}
+
+export function createPopoverBody(priceData, gameInfo) {
+  const body = document.createDocumentFragment();
   const currency = priceData?.prices?.currency ?? 'EUR';
   const currentRetail = priceData?.prices?.currentRetail;
   const historicalRetail = priceData?.prices?.historicalRetail;
@@ -300,75 +355,106 @@ export function openPopover(anchorEl, priceData, gameInfo) {
   }
 
   const safeUrl = normalizeGgDealsUrl(priceData?.url);
-  const safeTitle = escapeHtml(gameInfo.title ?? 'Unknown');
-  pop.innerHTML = `
-    <div class="stpt-popover-title">${safeTitle}</div>
-    ${cachedAt ? `
-    <div class="stpt-popover-row stpt-popover-ts">
-      <span class="stpt-popover-label">Updated</span>
-      <span class="stpt-popover-val">${formatFullTimestamp(cachedAt)}</span>
-    </div>
-    ` : ''}
-    <div class="stpt-popover-row">
-      <span class="stpt-popover-label">Current retail</span>
-      <span class="stpt-popover-val">${formatPrice(currentRetail, currency)}</span>
-    </div>
-    <div class="stpt-popover-row">
-      <span class="stpt-popover-label">Retail ATL</span>
-      <span class="stpt-popover-val atl">${formatPrice(historicalRetail, currency)}</span>
-    </div>
-    ${keyshopsEnabled && currentKeyshops != null ? `
-    <div class="stpt-popover-row">
-      <span class="stpt-popover-label">Keyshop price</span>
-      <span class="stpt-popover-val deal">${formatPrice(currentKeyshops, currency)}</span>
-    </div>
-    <div class="stpt-popover-row">
-      <span class="stpt-popover-label">Keyshop ATL</span>
-      <span class="stpt-popover-val">${formatPrice(historicalKeyshops, currency)}</span>
-    </div>
-    ` : ''}
-    ${bestAtl != null ? `
-    <div class="stpt-popover-row">
-      <span class="stpt-popover-label" style="font-weight:600;">Historical ATL</span>
-      <span class="stpt-popover-val atl" style="color:#7fff7f;font-weight:600;">${formatPrice(bestAtl, currency)}</span>
-    </div>
-    ` : ''}
-    ${safeUrl ? `<a class="stpt-popover-link" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">View on GG.deals ↗</a>` : ''}
-  `;
+  const title = document.createElement('div');
+  title.className = 'stpt-popover-title';
+  title.textContent = gameInfo.title ?? 'Unknown';
+  body.appendChild(title);
+
+  if (cachedAt) {
+    body.appendChild(createPopoverRow('Updated', formatFullTimestamp(cachedAt), {
+      rowClass: 'stpt-popover-ts',
+    }));
+  }
+  body.appendChild(createPopoverRow('Current retail', formatPrice(currentRetail, currency)));
+  body.appendChild(createPopoverRow('Retail ATL', formatPrice(historicalRetail, currency), {
+    valueClass: 'atl',
+  }));
+
+  if (keyshopsEnabled && currentKeyshops != null) {
+    body.appendChild(createPopoverRow('Keyshop price', formatPrice(currentKeyshops, currency), {
+      valueClass: 'deal',
+    }));
+    body.appendChild(createPopoverRow('Keyshop ATL', formatPrice(historicalKeyshops, currency)));
+  }
+
+  if (bestAtl != null) {
+    body.appendChild(createPopoverRow('Historical ATL', formatPrice(bestAtl, currency), {
+      labelStyle: 'font-weight:600;',
+      valueClass: 'atl',
+      valueStyle: 'color:#7fff7f;font-weight:600;',
+    }));
+  }
+
+  if (safeUrl) {
+    const link = document.createElement('a');
+    link.className = 'stpt-popover-link';
+    link.href = safeUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'View on GG.deals ↗';
+    body.appendChild(link);
+  }
 
   // Acquisition price section for tradables
   if (gameInfo.tier === 2 && gameInfo.appId) {
     const acqSection = document.createElement('div');
     acqSection.className = 'stpt-acq-section';
+
+    const label = document.createElement('div');
+    label.style.cssText = 'color:#8a9bb0;margin-bottom:4px;';
+    label.textContent = 'Acquisition price:';
+
+    const input = document.createElement('input');
+    input.className = 'stpt-acq-input';
+    input.type = 'number';
+    input.step = '0.01';
+    input.placeholder = '€0.00';
     const acqValue = Number.isFinite(gameInfo.acqPrice) ? (gameInfo.acqPrice / 100).toFixed(2) : '';
-    acqSection.innerHTML = `
-      <div style="color:#8a9bb0;margin-bottom:4px;">Acquisition price:</div>
-      <input class="stpt-acq-input" type="number" step="0.01" placeholder="€0.00"
-             value="${acqValue}">
-      <button class="stpt-acq-save">Save</button>
-      ${gameInfo.acqPrice != null && currentRetail != null ? `
-        <div style="margin-top:6px;color:${currentRetail >= gameInfo.acqPrice ? '#7fff7f' : '#ff8888'}">
-          Paid ${formatPrice(gameInfo.acqPrice, currency)} →
-          Now ${formatPrice(currentRetail, currency)} →
-          ${currentRetail >= gameInfo.acqPrice ? '+' : ''}${formatPrice(currentRetail - gameInfo.acqPrice, currency)}
-          (${Math.round((currentRetail - gameInfo.acqPrice) / gameInfo.acqPrice * 100)}%)
-        </div>
-      ` : ''}
-    `;
-    const saveBtn = acqSection.querySelector('.stpt-acq-save');
+    input.value = acqValue;
+
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'stpt-acq-save';
+    saveBtn.textContent = 'Save';
+    acqSection.append(label, input, saveBtn);
+
+    if (gameInfo.acqPrice != null && currentRetail != null) {
+      const comparison = document.createElement('div');
+      comparison.style.marginTop = '6px';
+      comparison.style.color = currentRetail >= gameInfo.acqPrice ? '#7fff7f' : '#ff8888';
+      const difference = currentRetail - gameInfo.acqPrice;
+      comparison.textContent = [
+        `Paid ${formatPrice(gameInfo.acqPrice, currency)}`,
+        `Now ${formatPrice(currentRetail, currency)}`,
+        `${difference >= 0 ? '+' : ''}${formatPrice(difference, currency)}`,
+      ].join(' → ');
+      if (gameInfo.acqPrice !== 0) {
+        comparison.textContent += ` (${Math.round(difference / gameInfo.acqPrice * 100)}%)`;
+      }
+      acqSection.appendChild(comparison);
+    }
+
     saveBtn.addEventListener('click', async () => {
-      const val = parseFloat(acqSection.querySelector('.stpt-acq-input').value);
+      const val = parseFloat(input.value);
       if (!isNaN(val)) {
         await sendMessage('SAVE_ACQ_PRICE', {
           appId: gameInfo.appId,
           itemType: gameInfo.type ?? gameInfo.resolution?.type ?? 'app',
           price: Math.round(val * 100),
         });
-        pop.remove();
+        saveBtn.closest('.stpt-popover')?.remove();
       }
     });
-    pop.appendChild(acqSection);
+    body.appendChild(acqSection);
   }
+
+  return body;
+}
+
+export function openPopover(anchorEl, priceData, gameInfo) {
+  closeAll('.stpt-popover');
+  const pop = document.createElement('div');
+  pop.className = 'stpt-popover';
+  pop.replaceChildren(createPopoverBody(priceData, gameInfo));
 
   positionNear(pop, anchorEl);
   activePopover = pop;

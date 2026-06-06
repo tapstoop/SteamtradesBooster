@@ -1,5 +1,252 @@
-import { describe, it, expect } from 'vitest';
-import { anchorStillMatches, buildPopoverRefreshRequest } from '../content/ui-pickers.js';
+import { JSDOM } from 'jsdom';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import {
+  anchorStillMatches,
+  buildPopoverRefreshRequest,
+  createPickerResultRow,
+  createPickerStatusMessage,
+  createPopoverBody,
+  openCandidatePicker,
+  openPopover,
+} from '../content/ui-pickers.js';
+
+const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+  url: 'https://www.steamtrades.com/trade/example',
+});
+globalThis.document = dom.window.document;
+globalThis.window = dom.window;
+globalThis.location = dom.window.location;
+globalThis.CustomEvent = dom.window.CustomEvent;
+globalThis.requestAnimationFrame = callback => callback();
+
+const sendMessageMock = vi.fn((message, callback) => callback?.({}));
+globalThis.chrome = {
+  runtime: {
+    sendMessage: sendMessageMock,
+    lastError: null,
+  },
+};
+
+beforeEach(() => {
+  document.body.replaceChildren();
+  sendMessageMock.mockClear();
+  sendMessageMock.mockImplementation((message, callback) => callback?.({}));
+});
+
+function expectNoExecutableMarkup(element) {
+  expect(element.querySelector('img')).toBeNull();
+  expect(element.querySelector('script')).toBeNull();
+  expect(element.querySelector('[onerror], [onclick], [onfocus]')).toBeNull();
+}
+
+describe('picker DOM builders', () => {
+  it('renders malicious candidate names and metadata as text', () => {
+    const name = 'Candidate <img src=x onerror=alert(1)>';
+    const meta = 'App <script>alert(2)</script>';
+    const row = createPickerResultRow({
+      name,
+      meta,
+      className: 'stpt-cand-item',
+    });
+
+    expect(row.classList.contains('stpt-cand-item')).toBe(true);
+    expect(row.children).toHaveLength(2);
+    expect(row.children[0].textContent).toBe(name);
+    expect(row.children[1].textContent).toBe(meta);
+    expectNoExecutableMarkup(row);
+  });
+
+  it('renders malicious search results and statuses without markup', () => {
+    const resultName = 'Result <script>alert(1)</script>';
+    const result = createPickerResultRow({
+      name: resultName,
+      meta: 'Bundle 123',
+      className: 'stpt-cand-item',
+    });
+    const statusText = 'No results <img src=x onerror=alert(2)>';
+    const status = createPickerStatusMessage(statusText, '#555');
+
+    expect(result.querySelector('span')?.textContent).toBe(resultName);
+    expect(result.classList.contains('stpt-cand-item')).toBe(true);
+    expect(status.textContent).toBe(statusText);
+    expect(status.style.padding).toBe('5px');
+    expectNoExecutableMarkup(result);
+    expectNoExecutableMarkup(status);
+  });
+});
+
+describe('picker interactions', () => {
+  it('confirms a candidate and dispatches the resolution event', async () => {
+    const anchor = document.createElement('button');
+    const container = document.createElement('div');
+    const row = document.createElement('div');
+    container.appendChild(row);
+    document.body.append(anchor, container);
+    const resolutionEvents = [];
+    container.addEventListener('stpt-resolve', event => resolutionEvents.push(event.detail));
+
+    openCandidatePicker(
+      anchor,
+      [{ id: '321', name: 'Candidate Game', type: 'sub' }],
+      'candidate-key',
+      row
+    );
+    document.querySelector('.stpt-cand-item')?.click();
+    await vi.waitFor(() => expect(sendMessageMock).toHaveBeenCalled());
+
+    expect(sendMessageMock).toHaveBeenCalledWith({
+      type: 'CONFIRM_RESOLUTION',
+      cacheKey: 'candidate-key',
+      appId: '321',
+      title: 'Candidate Game',
+      type: 'sub',
+    }, expect.any(Function));
+    expect(resolutionEvents).toEqual([{
+      appId: '321',
+      title: 'Candidate Game',
+      cacheKey: 'candidate-key',
+      type: 'sub',
+    }]);
+  });
+});
+
+describe('createPopoverBody', () => {
+  it('renders data-bearing popover and acquisition values as text', () => {
+    const maliciousTitle = 'Game <img src=x onerror=alert(1)><script>alert(2)</script>';
+    const body = createPopoverBody(
+      {
+        url: 'javascript:alert(3)',
+        cachedAt: Date.UTC(2026, 0, 2, 12, 0),
+        prices: {
+          currency: 'EUR',
+          currentRetail: 1000,
+          historicalRetail: 800,
+          currentKeyshops: 700,
+          historicalKeyshops: 600,
+        },
+      },
+      {
+        title: maliciousTitle,
+        appId: '123',
+        type: 'app',
+        tier: 2,
+        acqPrice: 500,
+        settings: { keyshopsEnabled: true },
+      }
+    );
+
+    expect(body.querySelector('.stpt-popover-title')?.textContent).toBe(maliciousTitle);
+    expect(body.querySelectorAll('.stpt-popover-row').length).toBeGreaterThanOrEqual(5);
+    expect(body.querySelector('.stpt-popover-link')).toBeNull();
+    expect(body.querySelector('.stpt-acq-input')?.value).toBe('5.00');
+    expect(body.querySelector('.stpt-acq-save')?.textContent).toBe('Save');
+    expect(body.querySelector('.stpt-acq-section')?.textContent).toContain('Paid');
+    expectNoExecutableMarkup(body);
+  });
+
+  it('keeps a validated GG.deals link and normal popover selectors', () => {
+    const body = createPopoverBody(
+      {
+        url: 'https://gg.deals/game/example/',
+        prices: { currency: 'EUR', currentRetail: 1000, historicalRetail: 800 },
+      },
+      {
+        title: 'Example',
+        settings: { keyshopsEnabled: false },
+      }
+    );
+
+    const link = body.querySelector('.stpt-popover-link');
+    const childClasses = [...body.children].map(element => element.className);
+    const rowLabels = [...body.querySelectorAll('.stpt-popover-label')]
+      .map(element => element.textContent);
+    expect(link?.href).toBe('https://gg.deals/game/example/');
+    expect(link?.target).toBe('_blank');
+    expect(link?.rel).toBe('noopener noreferrer');
+    expect(childClasses).toEqual([
+      'stpt-popover-title',
+      'stpt-popover-row',
+      'stpt-popover-row',
+      'stpt-popover-row',
+      'stpt-popover-link',
+    ]);
+    expect(rowLabels).toEqual(['Current retail', 'Retail ATL', 'Historical ATL']);
+    expect(body.querySelector('.stpt-popover-title')).not.toBeNull();
+    expect(body.querySelector('.stpt-popover-label')).not.toBeNull();
+    expect(body.querySelector('.stpt-popover-val')).not.toBeNull();
+    expectNoExecutableMarkup(body);
+  });
+
+  it('omits the percentage when acquisition price is zero', () => {
+    const body = createPopoverBody(
+      {
+        prices: { currency: 'EUR', currentRetail: 1000, historicalRetail: 800 },
+      },
+      {
+        title: 'Free acquisition',
+        appId: '123',
+        tier: 2,
+        acqPrice: 0,
+        settings: { keyshopsEnabled: false },
+      }
+    );
+
+    const comparisonText = body.querySelector('.stpt-acq-section')?.textContent ?? '';
+    expect(comparisonText).toContain('Paid');
+    expect(comparisonText).toContain('Now');
+    expect(comparisonText).toContain('+');
+    expect(comparisonText).not.toContain('Infinity%');
+    expect(comparisonText).not.toContain('NaN%');
+    expect(comparisonText).not.toMatch(/\(\d+%\)/);
+  });
+});
+
+describe('openPopover', () => {
+  it('renders acquisition controls after price rows and saves the entered price', async () => {
+    const anchor = document.createElement('button');
+    document.body.appendChild(anchor);
+
+    openPopover(
+      anchor,
+      {
+        prices: { currency: 'EUR', currentRetail: 1000, historicalRetail: 800 },
+      },
+      {
+        title: 'Tradable',
+        appId: '123',
+        type: 'sub',
+        tier: 2,
+        acqPrice: 500,
+        settings: { keyshopsEnabled: false },
+      }
+    );
+
+    const popover = document.querySelector('.stpt-popover');
+    const acquisition = popover?.querySelector('.stpt-acq-section');
+    const rows = [...(popover?.querySelectorAll('.stpt-popover-row') ?? [])];
+    const input = popover?.querySelector('.stpt-acq-input');
+    const save = popover?.querySelector('.stpt-acq-save');
+
+    expect(popover).not.toBeNull();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(acquisition).not.toBeNull();
+    expect(rows.every(row => (row.compareDocumentPosition(acquisition) & window.Node.DOCUMENT_POSITION_FOLLOWING) !== 0)).toBe(true);
+    expect(input).not.toBeNull();
+    expect(save).not.toBeNull();
+
+    input.value = '7.25';
+    save.click();
+    await vi.waitFor(() => expect(sendMessageMock).toHaveBeenCalled());
+
+    expect(sendMessageMock).toHaveBeenCalledWith({
+      type: 'SAVE_ACQ_PRICE',
+      appId: '123',
+      itemType: 'sub',
+      price: 725,
+    }, expect.any(Function));
+    expect(document.querySelector('.stpt-popover')).toBeNull();
+  });
+});
 
 describe('buildPopoverRefreshRequest', () => {
   it('uses REFRESH_PRICES with typed items for popover refreshes', () => {
@@ -25,14 +272,13 @@ describe('buildPopoverRefreshRequest', () => {
 
 describe('anchorStillMatches', () => {
   it('matches the captured typed app identity', () => {
-    const previousDocument = globalThis.document;
-    globalThis.document = { body: { contains: () => true } };
-    const anchor = { dataset: { appid: '123', itemType: 'sub' } };
+    const anchor = document.createElement('button');
+    anchor.dataset.appid = '123';
+    anchor.dataset.itemType = 'sub';
+    document.body.appendChild(anchor);
 
     expect(anchorStillMatches(anchor, { appId: '123', type: 'sub' }, 'sub')).toBe(true);
     expect(anchorStillMatches(anchor, { appId: '123', type: 'app' }, 'app')).toBe(false);
     expect(anchorStillMatches(anchor, { appId: '456', type: 'sub' }, 'sub')).toBe(false);
-
-    globalThis.document = previousDocument;
   });
 });
