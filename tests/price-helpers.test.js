@@ -2,7 +2,27 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { setWorkstationPrice } from '../content/price-helpers.js';
+import { _getBadgePrice, setWorkstationPrice } from '../content/price-helpers.js';
+
+describe('_getBadgePrice', () => {
+  it('selects and converts the lower keyshop price to cents when keyshopsEnabled is true', () => {
+    const priceData = {
+      prices: { currentRetail: 1500, currentKeyshops: 800, currency: 'EUR' },
+    };
+    const settings = { keyshopsEnabled: true };
+
+    expect(_getBadgePrice(priceData, settings)).toBe(800);
+  });
+
+  it('selects the retail price when keyshopsEnabled is false', () => {
+    const priceData = {
+      prices: { currentRetail: 1500, currentKeyshops: 800, currency: 'EUR' },
+    };
+    const settings = { keyshopsEnabled: false };
+
+    expect(_getBadgePrice(priceData, settings)).toBe(1500);
+  });
+});
 
 describe('setWorkstationPrice', () => {
   let priceMap;
