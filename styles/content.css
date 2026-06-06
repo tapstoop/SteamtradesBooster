@@ -589,6 +589,19 @@
 .stpt-ws-section-title.tradables { color: #10b981; }
 .stpt-ws-section-title.in-trade { color: #f59e0b; }
 
+.stpt-ws-all-count {
+  margin-left: auto;
+  min-width: 1.75rem;
+  padding: 1px 6px;
+  border: 1px solid rgba(102, 192, 244, 0.35);
+  border-radius: 6px;
+  color: #66c0f4;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  white-space: nowrap;
+}
+
 /* Section header with manage button */
 .stpt-ws-section-header {
   display: flex;
