@@ -7,9 +7,11 @@ import {
   SidebarWorkstation, updateSidebarRow, syncSidebarHeights, updateFetchButton, setSkeletonLoading
 } from './ui.js';
 import { applyResolvedRow } from './resolution-helpers.js';
+import { handleManualResolution, handleRuntimeMessage } from './content-handlers.js';
 
 let rowData = []; // Store row data for callback access
 let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTINGS_UPDATED listeners
+const settingsRef = { current: null }; // Mutable reference for runtime handler
 
 (async function main() {
   let settings;
@@ -20,6 +22,7 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
     return;
   }
   currentSettings = settings; // Store for PRICE_UPDATED / SETTINGS_UPDATED listeners
+  settingsRef.current = settings; // Sync mutable ref for handler
   sendMessage('REPORT_PAGE_DIAGNOSTICS', { url: location.href }).catch(() => {});
   if (!settings.showSidebar && !settings.apiKey) return;
 
@@ -513,88 +516,20 @@ function setupIntersectionObserver(rows, settings) {
 }
 
 // Listen for re-resolve events (user picked candidate)
-document.addEventListener('stpt-resolve', async e => {
-  try {
-    const { appId, title, cacheKey } = e.detail;
-    const type = e.detail.type ?? 'app';
-    const rowEl = e.target;
-    // Sync DOM attribute to resolved title
-    rowEl.dataset.stptTitle = stripParentheses(title);
-    // Also sync the checkbox data-stpt-title so getSelectedTitles() stays correct
-    const cb = rowEl.previousElementSibling?.classList?.contains('stpt-game-checkbox')
-      ? rowEl.previousElementSibling
-      : rowEl.parentNode.querySelector('.stpt-game-checkbox');
-    if (cb) cb.dataset.stptTitle = rowEl.dataset.stptTitle;
-    const settings = await sendMessage('GET_SETTINGS');
-
-    // Sync canonical row state (both paths need it for later events)
-    const row = applyResolvedRow(rowData, rowEl, {
-      appId,
-      type,
-      title: rowEl.dataset.stptTitle,
-      cacheKey,
-    });
-
-    if (!settings.apiKey) {
-      console.warn('[STPT] No API key, cannot fetch price for', title);
-      const gameInfo = {
-        appId, type, title, el: rowEl,
-        tier: row?.tier ?? 4,
-        cacheKey: cacheKey ?? row?.cacheKey,
-        settings,
-        inBundle: type === 'bundle',
-        acqPrice: row?.acqPrice ?? null,
-        resolution: { status: 'resolved', appId, type },
-      };
-      replaceBadge(rowEl, null, gameInfo);
-      if (window.__stpt_workstation) {
-        window.__stpt_workstation.updateResolvedPageGame(rowEl.dataset.stptId, { title, appId, type, price: null });
-      }
-      return;
-    }
-
-    const [bundles, prices] = await Promise.all([
-      sendMessage('GET_BUNDLES', { appIds: [appId] }),
-      sendMessage('GET_PRICES', { items: [{ id: appId, type }], regions: settings.regions })
-    ]);
-
-    // Persist inBundle on rowData so later handlers have it
-    if (row) {
-      row.inBundle = type === 'bundle' || !!(bundles[appId]?.length);
-    }
-
-    const region = getDisplayRegion(settings);
-    const priceData = readPriceRegion(prices, appId, type, region) ?? null;
-    const gameInfo = {
-      appId,
-      type,
-      title,
-      el: rowEl,
-      tier: row?.tier ?? 4,
-      cacheKey: cacheKey ?? row?.cacheKey,
-      settings,
-      acqPrice: row?.acqPrice ?? null,
-      inBundle: type === 'bundle' || row?.inBundle,
-      resolution: { status: 'resolved', appId, type },
-    };
-    replaceBadge(rowEl, priceData, gameInfo);
-    updateSidebarRow(rowEl.dataset.stptId, gameInfo);
-    if (window.__stpt_workstation) {
-      const price = priceData ? _getBadgePrice(priceData, settings) : null;
-      const resolvedUpdate = { title, appId, type, price };
-      if (priceData) {
-        resolvedUpdate.currency = priceData.prices?.currency ?? getDisplayRegion(settings);
-      }
-      window.__stpt_workstation.updateResolvedPageGame(rowEl.dataset.stptId, resolvedUpdate);
-    }
-    if (priceData && window.__stpt_workstation) {
-      const priceMap = {};
-      setWorkstationPrice(priceMap, appId, type, priceData, settings);
-      if (Object.keys(priceMap).length > 0) window.__stpt_workstation.updateGamePrices(priceMap);
-    }
-  } catch (err) {
-    console.error('[STPT] stpt-resolve error:', err);
-  }
+document.addEventListener('stpt-resolve', e => {
+  handleManualResolution(e, {
+    rowData,
+    workstation: window.__stpt_workstation,
+    sendMessage,
+    replaceBadge,
+    updateSidebarRow,
+    applyResolvedRow,
+    stripParentheses,
+    getDisplayRegion,
+    readPriceRegion,
+    _getBadgePrice,
+    setWorkstationPrice,
+  }).catch(err => console.error('[STPT] stpt-resolve error:', err));
 });
 
 // Listen for recheck events (user clicked dismissed badge)
@@ -687,64 +622,24 @@ document.addEventListener('stpt-recheck', async e => {
   }
 });
 
-// Listen for SETTINGS_UPDATED — re-render badges with updated currency/regions
+// Listen for SETTINGS_UPDATED and PRICE_UPDATED — handled by testable module
 chrome.runtime.onMessage.addListener((message) => {
-  if (message.type === 'SETTINGS_UPDATED') {
-    const oldRegion = currentSettings ? getDisplayRegion(currentSettings) : null;
-    currentSettings = message.settings;
-    const newRegion = getDisplayRegion(message.settings);
-    const regionChanged = oldRegion !== newRegion;
-
-    // Re-render all badges with updated currency/regions
-    rowData.forEach(row => {
-      if (!row.appId) return;
-      const newSettings = message.settings;
-
-      if (regionChanged) {
-        // Region changed — cached prices may not have data for the new region.
-        // Fetch fresh prices from the API.
-        sendMessage('GET_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(prices => {
-          const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
-          if (priceData) {
-            const gameInfo = { ...row, settings: newSettings };
-            replaceBadge(row.el, priceData, gameInfo);
-            updateSidebarRow(row.el.dataset.stptId, gameInfo);
-          } else {
-            // No data for new region — show skeleton while fetching
-            injectSkeleton(row.el, true);
-          }
-        }).catch(() => {
-          injectSkeleton(row.el, true);
-        });
-      } else {
-        // Same region — just re-render with cached prices (currency-only change)
-        sendMessage('GET_CACHED_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(prices => {
-          const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
-          if (priceData) {
-            const gameInfo = { ...row, settings: newSettings };
-            replaceBadge(row.el, priceData, gameInfo);
-            updateSidebarRow(row.el.dataset.stptId, gameInfo);
-          }
-        });
-      }
-    });
+  const handled = handleRuntimeMessage(message, {
+    rowData,
+    settingsRef,
+    sendMessage,
+    replaceBadge,
+    updateSidebarRow,
+    injectSkeleton,
+    getDisplayRegion,
+    readPriceRegion,
+    priceItem,
+    normalizeSteamType,
+  });
+  if (handled) {
+    // Sync currentSettings back from the mutable ref
+    currentSettings = settingsRef.current;
     return;
-  }
-
-  // Listen for PRICE_UPDATED — dynamically update badges when prices refresh from any source
-  if (message.type === 'PRICE_UPDATED') {
-    const { itemId, appId, itemType, priceData } = message;
-    const id = String(itemId ?? appId ?? '');
-    const rows = itemType
-      ? rowData.filter(r => String(r.appId) === id && normalizeSteamType(r.type) === normalizeSteamType(itemType))
-      : rowData.filter(r => String(r.appId) === id);
-    if (rows.length === 0 || !priceData) return;
-    for (const row of rows) {
-      const settings = currentSettings ?? row.settings;
-      const gameInfo = { ...row, settings };
-      replaceBadge(row.el, priceData, gameInfo);
-      updateSidebarRow(row.el.dataset.stptId, gameInfo);
-    }
   }
 });
 
@@ -771,7 +666,7 @@ function setWorkstationPrice(priceMap, appId, type, priceData, settings) {
   const price = _getBadgePrice(priceData, settings);
   if (price == null) return;
   const key = typedPriceKey(appId, type);
-  const payload = { price, currency: priceData.prices?.currency ?? 'EUR' };
+  const payload = { price, currency: (priceData.prices?.currency) ?? (settings?.currency) ?? 'EUR' };
   priceMap[key] = payload;
   if (normalizeSteamType(type) === 'app') {
     priceMap[String(appId)] = payload;

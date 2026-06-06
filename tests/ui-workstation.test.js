@@ -136,4 +136,55 @@ describe('SidebarWorkstation all games count', () => {
     expect(row.querySelector('.stpt-game-title').textContent).toBe('Renamed');
     expect(row.querySelector('.stpt-game-price').textContent).toBe('€5.00');
   });
+
+  it('updates all three collections (pageGames, inTrade.mine, inTrade.trader) and renders trade sections', () => {
+    workstation.setPageGames([
+      { stptId: 'g1', title: 'Game 1', section: 'have', appId: '10', type: 'app', price: 1000, currency: 'EUR' },
+    ]);
+    vi.runAllTimers();
+
+    const game = workstation.pageGames.find(g => g.stptId === 'g1');
+
+    // Add same-stptId copies to both trade sides
+    workstation.inTrade.mine = [{ ...game }];
+    workstation.inTrade.trader = [{ ...game }];
+
+    // Also add game 1 to the virtual trade list via public API
+    // (addTraderGame creates a proper entry; we re-add for the DL count)
+    workstation.inTrade.trader = [];
+    workstation.addTraderGame(workstation.pageGames[0]);
+    workstation._addToMyGamesCore(workstation.pageGames[0]);
+    vi.runAllTimers();
+
+    // Now update all fields
+    workstation.updateResolvedPageGame('g1', {
+      title: 'Updated Game',
+      appId: '20',
+      type: 'sub',
+      price: 2000,
+      currency: 'USD',
+    });
+    vi.runAllTimers();
+
+    function assertFields(obj) {
+      expect(obj.title).toBe('Updated Game');
+      expect(obj.appId).toBe('20');
+      expect(obj.type).toBe('sub');
+      expect(obj.price).toBe(2000);
+      expect(obj.currency).toBe('USD');
+    }
+
+    assertFields(workstation.pageGames.find(g => g.stptId === 'g1'));
+    assertFields(workstation.inTrade.mine.find(g => g.stptId === 'g1'));
+    assertFields(workstation.inTrade.trader.find(g => g.stptId === 'g1'));
+
+    // Rendered in-trade list shows updated title/price
+    const inTradeList = document.getElementById('stpt-in-trade-list');
+    expect(inTradeList.textContent).toContain('Updated Game');
+    expect(inTradeList.textContent).toContain('$20.00');
+
+    // Simulator totals reflect update
+    const diffEl = document.getElementById('stpt-sim-diff');
+    expect(diffEl.textContent).toContain('0.00'); // trader === mine value
+  });
 });
