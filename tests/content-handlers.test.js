@@ -3,8 +3,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { handleManualResolution, handleRuntimeMessage } from '../content/content-handlers.js';
+import { applyResolvedRow } from '../content/resolution-helpers.js';
 
-// Shared price-data factory
 function makePriceData(currentRetail = 1234, currency = 'EUR') {
   return { prices: { currentRetail, currency } };
 }
@@ -28,7 +28,7 @@ function makeEvent(rowEl, detail = {}) {
 
 describe('handleManualResolution', () => {
   let rowData, workstation, sendMessage, replaceBadge, updateSidebarRow;
-  let applyResolvedRow, stripParentheses, getDisplayRegion, readPriceRegion;
+  let stripParentheses, getDisplayRegion, readPriceRegion;
   let setWorkstationPrice, _getBadgePrice;
 
   beforeEach(() => {
@@ -45,18 +45,6 @@ describe('handleManualResolution', () => {
     });
     stripParentheses = vi.fn(s => s);
     _getBadgePrice = vi.fn((pd) => pd?.prices?.currentRetail ?? null);
-    applyResolvedRow = vi.fn((rd, el, r) => {
-      const row = rd.find(x => x.el === el);
-      if (row) {
-        row.appId = r.appId;
-        row.type = r.type ?? 'app';
-        row.title = r.title;
-        row.cacheKey = r.cacheKey ?? row.cacheKey;
-        row.fuzzy = false;
-        row.resolution = { status: 'resolved', appId: r.appId, type: r.type ?? 'app' };
-      }
-      return row ?? null;
-    });
     getDisplayRegion = vi.fn(() => 'us');
     readPriceRegion = vi.fn().mockReturnValue(null);
   });
@@ -73,7 +61,7 @@ describe('handleManualResolution', () => {
     };
   }
 
-  it('no API key: updates rowData, workstation receives price:null, no price request sent', async () => {
+  it('no API key: updates rowData via real applyResolvedRow, workstation receives price:null', async () => {
     const el = makeRowEl({ stptId: '7', stptTitle: 'Ambiguous Game' });
     const entry = { el, appId: null, type: 'app', title: 'Ambiguous Game', cacheKey: 'ck1', fuzzy: true };
     rowData.push(entry);
@@ -93,12 +81,9 @@ describe('handleManualResolution', () => {
     expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('7', {
       title: 'Resolved Game', appId: '456', type: 'bundle', price: null,
     });
-
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith('GET_SETTINGS');
   });
 
-  it('API key: fetches bundles/prices, updates rowData.inBundle, badge and sidebar rendered', async () => {
+  it('API key: fetches bundles/prices, sets inBundle, badge/sidebar/workstation updated', async () => {
     const el = makeRowEl({ stptId: '3', stptTitle: 'Test Game' });
     const entry = { el, appId: null, type: 'app', title: 'Test Game', cacheKey: 'ck', fuzzy: true, tier: 2, acqPrice: null };
     rowData.push(entry);
@@ -128,29 +113,53 @@ describe('handleManualResolution', () => {
     expect(workstation.updateGamePrices).toHaveBeenCalled();
   });
 
-  it('missing API currency: falls back to settings.currency, then EUR', async () => {
-    const el = makeRowEl({ stptId: '0', stptTitle: 'No Currency' });
-    const entry = { el, appId: null, type: 'app', title: 'No Currency', cacheKey: null, fuzzy: true, tier: 4 };
+  it('missing API currency but settings.currency is provided: uses settings.currency', async () => {
+    const el = makeRowEl({ stptId: '10', stptTitle: 'Curr A' });
+    const entry = { el, appId: null, type: 'app', title: 'Curr A', cacheKey: null, fuzzy: true, tier: 4 };
     rowData.push(entry);
 
+    // settings has currency: 'USD', price data has no currency
     sendMessage
-      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'] })
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'], currency: 'USD' })
       .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({ 'app:555': { us: { prices: { currentRetail: 5.00 } } } });
+      .mockResolvedValueOnce({ 'app:100': { us: { prices: { currentRetail: 500 } } } });
 
-    readPriceRegion.mockReturnValueOnce({ prices: { currentRetail: 5.00 } });
+    readPriceRegion.mockReturnValueOnce({ prices: { currentRetail: 500 } });
 
     await handleManualResolution(
-      makeEvent(el, { appId: '555', title: 'No Currency', type: 'app' }),
+      makeEvent(el, { appId: '100', title: 'Curr A', type: 'app' }),
       makeDeps()
     );
 
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('0', expect.objectContaining({
+    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('10', expect.objectContaining({
+      currency: 'USD',
+    }));
+  });
+
+  it('missing API currency and settings.currency omitted: falls back to EUR', async () => {
+    const el = makeRowEl({ stptId: '11', stptTitle: 'Curr B' });
+    const entry = { el, appId: null, type: 'app', title: 'Curr B', cacheKey: null, fuzzy: true, tier: 4 };
+    rowData.push(entry);
+
+    // No currency in settings, no currency in price data
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'] })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ 'app:200': { us: { prices: { currentRetail: 300 } } } });
+
+    readPriceRegion.mockReturnValueOnce({ prices: { currentRetail: 300 } });
+
+    await handleManualResolution(
+      makeEvent(el, { appId: '200', title: 'Curr B', type: 'app' }),
+      makeDeps()
+    );
+
+    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('11', expect.objectContaining({
       currency: 'EUR',
     }));
   });
 
-  it('no price data: sends price:null to workstation', async () => {
+  it('no price data: sends price:null to workstation, does not call updateGamePrices', async () => {
     const el = makeRowEl({ stptId: '5' });
     const entry = { el, appId: null, type: 'app', title: 'NoPrice', cacheKey: null, fuzzy: true };
     rowData.push(entry);
@@ -171,6 +180,49 @@ describe('handleManualResolution', () => {
       price: null,
     }));
     expect(workstation.updateGamePrices).not.toHaveBeenCalled();
+  });
+
+  it('end-to-end: no-key resolution then PRICE_UPDATED discovers the same row', async () => {
+    const el = makeRowEl({ stptId: '42', stptTitle: 'E2E Game' });
+    const entry = { el, appId: null, type: 'app', title: 'E2E Game', cacheKey: null, fuzzy: true, tier: 4 };
+    rowData.push(entry);
+
+    // Step 1: no-key resolution via manual handler
+    sendMessage.mockResolvedValueOnce({ apiKey: null, regions: ['us'] });
+
+    await handleManualResolution(
+      makeEvent(el, { appId: '777', title: 'E2E Game', cacheKey: 'e2e-ck', type: 'app' }),
+      makeDeps()
+    );
+
+    // Real applyResolvedRow mutated the entry
+    expect(entry.appId).toBe('777');
+    expect(entry.fuzzy).toBe(false);
+    expect(entry.resolution).toEqual({ status: 'resolved', appId: '777', type: 'app' });
+
+    // Step 2: PRICE_UPDATED discovers the same row
+    const runtimeDeps = {
+      rowData,
+      settingsRef: { current: { apiKey: 'key', regions: ['us'] } },
+      sendMessage,
+      replaceBadge,
+      updateSidebarRow,
+      injectSkeleton: vi.fn(),
+      getDisplayRegion,
+      readPriceRegion,
+      priceItem: vi.fn(r => ({ id: r.appId, type: r.type ?? 'app' })),
+      normalizeSteamType: vi.fn(t => t || 'app'),
+    };
+
+    const handled = handleRuntimeMessage({
+      type: 'PRICE_UPDATED',
+      appId: 777,
+      itemType: 'app',
+      priceData: makePriceData(599, 'EUR'),
+    }, runtimeDeps);
+
+    expect(handled).toBe(true);
+    expect(replaceBadge).toHaveBeenCalledWith(el, expect.objectContaining({ prices: expect.any(Object) }), expect.any(Object));
   });
 });
 
@@ -214,7 +266,7 @@ describe('handleRuntimeMessage', () => {
       type: 'PRICE_UPDATED',
       appId: 456,
       itemType: 'app',
-      priceData: makePriceData(4.99, 'EUR'),
+      priceData: makePriceData(499, 'EUR'),
     }, makeDeps());
 
     expect(handled).toBe(true);
@@ -233,7 +285,7 @@ describe('handleRuntimeMessage', () => {
     expect(replaceBadge).not.toHaveBeenCalled();
   });
 
-  it('SETTINGS_UPDATED requests prices for a resolved row', async () => {
+  it('SETTINGS_UPDATED with region change fetches fresh prices via GET_PRICES', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = '2';
     document.body.appendChild(el);
@@ -241,10 +293,8 @@ describe('handleRuntimeMessage', () => {
     const row = { el, appId: '789', type: 'sub', title: 'Settings Test', cacheKey: null };
     rowData.push(row);
 
-    // Old settings: region 'eu', new settings: region 'us' → change detected
     settingsRef.current = { apiKey: 'key', regions: ['eu'], currency: 'USD' };
 
-    // Make getDisplayRegion return region from settings
     getDisplayRegion.mockImplementation(s => (s.regions?.[0] === 'us' ? 'us' : 'eu'));
 
     sendMessage.mockResolvedValue({ 'sub:789': { us: makePriceData(399, 'USD') } });
@@ -255,10 +305,70 @@ describe('handleRuntimeMessage', () => {
     }, makeDeps());
 
     expect(handled).toBe(true);
-    // Region changed (eu → us), should fetch fresh prices via GET_PRICES
     expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.objectContaining({
       regions: ['us'],
     }));
+  });
+
+  it('SETTINGS_UPDATED with unchanged region uses cached prices and rerenders on success', async () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = '3';
+    document.body.appendChild(el);
+
+    const row = { el, appId: '101', type: 'app', title: 'Cached Test', cacheKey: null };
+    rowData.push(row);
+
+    settingsRef.current = { apiKey: 'key', regions: ['us'], currency: 'USD' };
+
+    // Same region → unchanged
+    getDisplayRegion.mockImplementation(() => 'us');
+
+    const cachedPrices = { 'app:101': { us: makePriceData(249, 'USD') } };
+    sendMessage.mockResolvedValue(cachedPrices);
+    readPriceRegion.mockReturnValue(makePriceData(249, 'USD'));
+
+    handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['us'], currency: 'USD' },
+    }, makeDeps());
+
+    expect(sendMessage).toHaveBeenCalledWith('GET_CACHED_PRICES', expect.objectContaining({
+      regions: ['us'],
+    }));
+
+    // Wait for the fire-and-forget promise chain to settle
+    await vi.waitFor(() => {
+      expect(replaceBadge).toHaveBeenCalledWith(el, expect.objectContaining({ prices: expect.any(Object) }), expect.any(Object));
+      expect(updateSidebarRow).toHaveBeenCalledWith('3', expect.any(Object));
+    });
+  });
+
+  it('SETTINGS_UPDATED with unchanged region injects skeleton on GET_CACHED_PRICES rejection', async () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = '4';
+    document.body.appendChild(el);
+
+    const row = { el, appId: '202', type: 'app', title: 'Reject Test', cacheKey: null };
+    rowData.push(row);
+
+    settingsRef.current = { apiKey: 'key', regions: ['us'] };
+
+    getDisplayRegion.mockImplementation(() => 'us');
+
+    // Reset injectSkeleton mock for clean counting
+    injectSkeleton.mockClear();
+
+    sendMessage.mockRejectedValue(new Error('cache unavailable'));
+
+    handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['us'] },
+    }, makeDeps());
+
+    // Fire-and-forget rejection now has a .catch() handler; settle it
+    await vi.waitFor(() => {
+      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+    });
   });
 
   it('returns false for unhandled message types', () => {

@@ -126,6 +126,8 @@ export function handleRuntimeMessage(message, deps) {
             replaceBadge(row.el, priceData, gameInfo);
             updateSidebarRow(row.el.dataset.stptId, gameInfo);
           }
+        }).catch(() => {
+          injectSkeleton(row.el, true);
         });
       }
     });
