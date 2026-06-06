@@ -6,6 +6,7 @@ import {
   injectSkeleton, replaceBadge, injectQuestionBadge, injectFuzzyBadge, injectNotFoundBadge, injectDismissedBadge, injectDelistedBadge,
   SidebarWorkstation, updateSidebarRow, syncSidebarHeights, updateFetchButton, setSkeletonLoading
 } from './ui.js';
+import { applyResolvedRow } from './resolution-helpers.js';
 
 let rowData = []; // Store row data for callback access
 let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTINGS_UPDATED listeners
@@ -526,12 +527,28 @@ document.addEventListener('stpt-resolve', async e => {
     if (cb) cb.dataset.stptTitle = rowEl.dataset.stptTitle;
     const settings = await sendMessage('GET_SETTINGS');
 
+    // Sync canonical row state (both paths need it for later events)
+    const row = applyResolvedRow(rowData, rowEl, {
+      appId,
+      type,
+      title: rowEl.dataset.stptTitle,
+      cacheKey,
+    });
+
     if (!settings.apiKey) {
       console.warn('[STPT] No API key, cannot fetch price for', title);
-      const gameInfo = { appId, type, title, el: rowEl, tier: 4, cacheKey, settings, inBundle: type === 'bundle', acqPrice: null, resolution: { status: 'resolved', appId, type } };
+      const gameInfo = {
+        appId, type, title, el: rowEl,
+        tier: row?.tier ?? 4,
+        cacheKey: cacheKey ?? row?.cacheKey,
+        settings,
+        inBundle: type === 'bundle',
+        acqPrice: row?.acqPrice ?? null,
+        resolution: { status: 'resolved', appId, type },
+      };
       replaceBadge(rowEl, null, gameInfo);
       if (window.__stpt_workstation) {
-        window.__stpt_workstation.updateResolvedPageGame(rowEl.dataset.stptId, { title, appId, type });
+        window.__stpt_workstation.updateResolvedPageGame(rowEl.dataset.stptId, { title, appId, type, price: null });
       }
       return;
     }
@@ -541,16 +558,8 @@ document.addEventListener('stpt-resolve', async e => {
       sendMessage('GET_PRICES', { items: [{ id: appId, type }], regions: settings.regions })
     ]);
 
-    // Find and update the row data
-    const row = rowData.find(r => r.el === rowEl);
+    // Persist inBundle on rowData so later handlers have it
     if (row) {
-      row.appId = appId;
-      row.type = type;
-      row.title = rowEl.dataset.stptTitle; // keep in sync with DOM
-      row.cacheKey = cacheKey ?? row.cacheKey;
-      row.fuzzy = false;
-      row.resolution = { status: 'resolved', appId, type };
-      // Persist inBundle on rowData so later handlers have it
       row.inBundle = type === 'bundle' || !!(bundles[appId]?.length);
     }
 
@@ -571,9 +580,9 @@ document.addEventListener('stpt-resolve', async e => {
     replaceBadge(rowEl, priceData, gameInfo);
     updateSidebarRow(rowEl.dataset.stptId, gameInfo);
     if (window.__stpt_workstation) {
-      const resolvedUpdate = { title, appId, type };
+      const price = priceData ? _getBadgePrice(priceData, settings) : null;
+      const resolvedUpdate = { title, appId, type, price };
       if (priceData) {
-        resolvedUpdate.price = _getBadgePrice(priceData, settings);
         resolvedUpdate.currency = priceData.prices?.currency ?? getDisplayRegion(settings);
       }
       window.__stpt_workstation.updateResolvedPageGame(rowEl.dataset.stptId, resolvedUpdate);

@@ -71,4 +71,69 @@ describe('SidebarWorkstation all games count', () => {
     expect(row.querySelector('.stpt-game-title').textContent).toBe('Resolved Game');
     expect(row.querySelector('.stpt-game-price').textContent).toBe('€12.34');
   });
+
+  it('clears price when update explicitly passes null, and recalculates simulator totals', () => {
+    workstation.setPageGames([
+      { stptId: 'a', title: 'Game A', section: 'have', appId: '1', type: 'app', price: 1234, currency: 'EUR' },
+      { stptId: 'b', title: 'Game B', section: 'have', appId: '2', type: 'app', price: 5678, currency: 'EUR' },
+    ]);
+    vi.runAllTimers();
+
+    // Add game A to inTrade so we can assert it gets cleared there too
+    workstation.addTraderGame(workstation.pageGames.find(g => g.stptId === 'a'));
+
+    // Game B gets added to mine side
+    workstation._addToMyGamesCore(workstation.pageGames.find(g => g.stptId === 'b'));
+
+    // Simulator should reflect both prices
+    const diffElBefore = document.getElementById('stpt-sim-diff');
+    expect(diffElBefore.textContent).not.toBe('€0.00');
+
+    workstation.updateResolvedPageGame('b', { price: null });
+    vi.runAllTimers();
+
+    // Page game price cleared
+    const pgB = workstation.pageGames.find(g => g.stptId === 'b');
+    expect(pgB.price).toBeNull();
+
+    // In-trade copy cleared
+    const tradeB = workstation.inTrade.mine.find(g => g.stptId === 'b');
+    expect(tradeB.price).toBeNull();
+
+    // Game A price preserved (not targeted by update)
+    const pgA = workstation.pageGames.find(g => g.stptId === 'a');
+    expect(pgA.price).toBe(1234);
+
+    // Rendered row for B has no price span
+    const rows = workstation.el.querySelectorAll('.stpt-game-row');
+    const rowB = Array.from(rows).find(r => r.querySelector('.stpt-game-title')?.textContent === 'Game B');
+    expect(rowB.querySelector('.stpt-game-price')).toBeNull();
+
+    // Game A row still shows price
+    const rowA = Array.from(rows).find(r => r.querySelector('.stpt-game-title')?.textContent === 'Game A');
+    expect(rowA.querySelector('.stpt-game-price')).not.toBeNull();
+    expect(rowA.querySelector('.stpt-game-price').textContent).toBe('€12.34');
+
+    // Simulator totals recalculated without stale price
+    const diffElAfter = document.getElementById('stpt-sim-diff');
+    expect(diffElAfter.textContent).toBe('-€12.34');
+  });
+
+  it('preserves the current price when the update omits the price property', () => {
+    workstation.setPageGames([
+      { stptId: 'x', title: 'Keep Price', section: 'have', appId: '99', type: 'app', price: 500, currency: 'EUR' },
+    ]);
+    vi.runAllTimers();
+
+    workstation.updateResolvedPageGame('x', { title: 'Renamed', appId: '100' });
+    vi.runAllTimers();
+
+    const pg = workstation.pageGames.find(g => g.stptId === 'x');
+    expect(pg.price).toBe(500);
+    expect(pg.currency).toBe('EUR');
+
+    const row = workstation.el.querySelector('.stpt-game-row');
+    expect(row.querySelector('.stpt-game-title').textContent).toBe('Renamed');
+    expect(row.querySelector('.stpt-game-price').textContent).toBe('€5.00');
+  });
 });

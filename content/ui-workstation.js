@@ -666,8 +666,8 @@ export class SidebarWorkstation {
         name: update.name ?? update.title ?? game.name,
         appId: update.appId ?? game.appId,
         type: update.type ?? game.type,
-        price: update.price ?? game.price ?? null,
-        currency: update.currency ?? game.currency ?? 'EUR',
+        price: ('price' in update) ? update.price : (game.price ?? null),
+        currency: ('currency' in update) ? update.currency : (game.currency ?? 'EUR'),
       };
     };
     this.pageGames = this.pageGames.map(apply);
