@@ -2,7 +2,7 @@
 
 Date: 2026-06-04
 
-This note consolidates the follow-ups from the Firefox MV3 packaging pass and records their current status. The original detailed notes remain available in this directory.
+This note consolidates the follow-ups from the Firefox MV3 packaging pass and records their current status.
 
 ## Worktree Lifecycle
 
@@ -140,7 +140,10 @@ Follow-up checks:
 
 ### Current status
 
-`npm audit --omit=optional` reported vulnerabilities in development/test tooling, including Vitest/Vite-related transitive dependencies.
+The June 4 baseline from `npm audit --omit=optional` reported six development/test-tooling vulnerabilities:
+
+- 1 critical: `vitest <4.1.0`.
+- 5 moderate: transitive `vite`, `vite-node`, `@vitest/mocker`, Vite's nested `esbuild`, and `postcss`.
 
 These dependencies are not shipped in the packaged extension runtime. The practical risk is local development exposure, especially if Vitest UI or Vite development servers are exposed beyond localhost or used on untrusted networks.
 
