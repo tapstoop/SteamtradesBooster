@@ -655,6 +655,31 @@ export class SidebarWorkstation {
     this._updateSimStats();
   }
 
+  updateResolvedPageGame(stptId, update) {
+    if (stptId == null) return;
+    const id = String(stptId);
+    const apply = game => {
+      if (String(game.stptId ?? '') !== id) return game;
+      return {
+        ...game,
+        title: update.title ?? game.title,
+        name: update.name ?? update.title ?? game.name,
+        appId: update.appId ?? game.appId,
+        type: update.type ?? game.type,
+        price: update.price ?? game.price ?? null,
+        currency: update.currency ?? game.currency ?? 'EUR',
+      };
+    };
+    this.pageGames = this.pageGames.map(apply);
+    this.inTrade.mine = this.inTrade.mine.map(apply);
+    this.inTrade.trader = this.inTrade.trader.map(apply);
+    this._renderDataList();
+    this._renderWishlistSection();
+    this._renderTradablesSection();
+    this._renderInTrade();
+    this._updateSimStats();
+  }
+
   setWishlistGames(games) {
     this.wishlistGames = games || [];
     this._renderDataList();

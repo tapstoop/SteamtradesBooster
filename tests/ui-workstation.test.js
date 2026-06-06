@@ -50,4 +50,25 @@ describe('SidebarWorkstation all games count', () => {
 
     expect(workstation.el.querySelector('.stpt-ws-all-count').textContent).toBe('1');
   });
+
+  it('updates a page game by stptId after manual resolution', () => {
+    workstation.setPageGames([
+      { stptId: '7', title: 'Ambiguous Name', section: 'have', appId: null, type: 'app', price: null },
+    ]);
+    vi.runAllTimers(); // flush RAF for virtual list render
+
+    workstation.updateResolvedPageGame('7', {
+      title: 'Resolved Game',
+      appId: '456',
+      type: 'app',
+      price: 1234,
+      currency: 'EUR',
+    });
+    vi.runAllTimers(); // flush RAF for re-render
+
+    const row = workstation.el.querySelector('.stpt-game-row');
+    expect(row).not.toBeNull();
+    expect(row.querySelector('.stpt-game-title').textContent).toBe('Resolved Game');
+    expect(row.querySelector('.stpt-game-price').textContent).toBe('€12.34');
+  });
 });
