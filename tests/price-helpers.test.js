@@ -22,6 +22,42 @@ describe('_getBadgePrice', () => {
 
     expect(_getBadgePrice(priceData, settings)).toBe(1500);
   });
+
+  it('handles values above 100,000 cents without thousands-separator ambiguity', () => {
+    const priceData = {
+      prices: { currentRetail: 125000, currency: 'EUR' },
+    };
+    const settings = {};
+
+    expect(_getBadgePrice(priceData, settings)).toBe(125000);
+  });
+
+  it('returns retail price when only retail is available', () => {
+    const priceData = {
+      prices: { currentRetail: 2999, currency: 'USD' },
+    };
+    const settings = { keyshopsEnabled: true };
+
+    expect(_getBadgePrice(priceData, settings)).toBe(2999);
+  });
+
+  it('returns keyshop price when only keyshop is available (keyshops enabled)', () => {
+    const priceData = {
+      prices: { currentKeyshops: 1999, currency: 'GBP' },
+    };
+    const settings = { keyshopsEnabled: true };
+
+    expect(_getBadgePrice(priceData, settings)).toBe(1999);
+  });
+
+  it('returns null when neither retail nor keyshop price is present', () => {
+    const priceData = {
+      prices: { currency: 'EUR' },
+    };
+    const settings = { keyshopsEnabled: true };
+
+    expect(_getBadgePrice(priceData, settings)).toBeNull();
+  });
 });
 
 describe('setWorkstationPrice', () => {

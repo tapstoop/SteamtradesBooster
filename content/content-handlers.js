@@ -20,9 +20,8 @@ export async function handleManualResolution(e, deps) {
     : rowEl.parentNode.querySelector('.stpt-game-checkbox');
   if (cb) cb.dataset.stptTitle = rowEl.dataset.stptTitle;
 
-  const settings = await sendMessage('GET_SETTINGS');
-
-  // Sync canonical row state (both paths need it for later events)
+  // Apply the confirmed resolution before any async request — ensures rowData
+  // is up to date even if subsequent requests fail.
   const row = applyResolvedRow(rowData, rowEl, {
     appId,
     type,
@@ -30,32 +29,35 @@ export async function handleManualResolution(e, deps) {
     cacheKey,
   });
 
-  if (!settings.apiKey) {
-    console.warn('[STPT] No API key, cannot fetch price for', title);
-    const gameInfo = {
-      appId, type, title, el: rowEl,
-      tier: row?.tier ?? 4,
-      cacheKey: cacheKey ?? row?.cacheKey,
-      settings,
-      inBundle: type === 'bundle',
-      acqPrice: row?.acqPrice ?? null,
-      resolution: { status: 'resolved', appId, type },
-    };
-    replaceBadge(rowEl, null, gameInfo);
-    if (workstation) {
-      workstation.updateResolvedPageGame(rowEl.dataset.stptId, { title, appId, type, price: null });
-    }
-    return;
+  // Fetch settings, bundles, and prices with individual recovery
+  let settings;
+  try {
+    settings = await sendMessage('GET_SETTINGS');
+  } catch {
+    console.warn('[STPT] GET_SETTINGS failed during manual resolution — using empty settings');
+    settings = {};
   }
 
-  const [bundles, prices] = await Promise.all([
-    sendMessage('GET_BUNDLES', { appIds: [appId] }),
-    sendMessage('GET_PRICES', { items: [{ id: appId, type }], regions: settings.regions })
-  ]);
+  let bundles = {};
+  let prices = {};
 
-  // Persist inBundle on rowData so later handlers have it
+  if (settings.apiKey) {
+    try {
+      bundles = await sendMessage('GET_BUNDLES', { appIds: [appId] });
+    } catch {
+      console.warn('[STPT] GET_BUNDLES failed during manual resolution — using empty bundles');
+    }
+
+    try {
+      prices = await sendMessage('GET_PRICES', { items: [{ id: appId, type }], regions: settings.regions ?? [] });
+    } catch {
+      console.warn('[STPT] GET_PRICES failed during manual resolution — using empty prices');
+    }
+  }
+
+  // Persist inBundle on rowData
   if (row) {
-    row.inBundle = type === 'bundle' || !!(bundles[appId]?.length);
+    row.inBundle = type === 'bundle' || !!(bundles?.[appId]?.length);
   }
 
   const region = getDisplayRegion(settings);
@@ -93,7 +95,8 @@ export async function handleManualResolution(e, deps) {
 
 export function handleRuntimeMessage(message, deps) {
   const { rowData, settingsRef, sendMessage, replaceBadge, updateSidebarRow,
-    injectSkeleton, getDisplayRegion, readPriceRegion, priceItem } = deps;
+    injectSkeleton, getDisplayRegion, readPriceRegion, priceItem,
+    workstation, _getBadgePrice, setWorkstationPrice } = deps;
 
   if (message.type === 'SETTINGS_UPDATED') {
     const oldRegion = settingsRef.current ? getDisplayRegion(settingsRef.current) : null;
@@ -105,14 +108,29 @@ export function handleRuntimeMessage(message, deps) {
       if (!row.appId) return;
       const newSettings = message.settings;
 
+      function applyPrice(priceData) {
+        if (priceData) {
+          const gameInfo = { ...row, settings: newSettings };
+          replaceBadge(row.el, priceData, gameInfo);
+          updateSidebarRow(row.el.dataset.stptId, gameInfo);
+          if (workstation) {
+            const price = _getBadgePrice(priceData, newSettings);
+            const update = {};
+            setWorkstationPrice(update, row.appId, row.type, priceData, newSettings);
+            if (price != null) {
+              workstation.updateResolvedPageGame(row.el.dataset.stptId, { price, currency: priceData.prices?.currency ?? newSettings.currency ?? 'EUR' });
+              if (Object.keys(update).length > 0) workstation.updateGamePrices(update);
+            }
+          }
+          return true;
+        }
+        return false;
+      }
+
       if (regionChanged) {
         sendMessage('GET_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(prices => {
           const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
-          if (priceData) {
-            const gameInfo = { ...row, settings: newSettings };
-            replaceBadge(row.el, priceData, gameInfo);
-            updateSidebarRow(row.el.dataset.stptId, gameInfo);
-          } else {
+          if (!applyPrice(priceData)) {
             injectSkeleton(row.el, true);
           }
         }).catch(() => {
@@ -121,11 +139,14 @@ export function handleRuntimeMessage(message, deps) {
       } else {
         sendMessage('GET_CACHED_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(prices => {
           const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
-          if (priceData) {
-            const gameInfo = { ...row, settings: newSettings };
-            replaceBadge(row.el, priceData, gameInfo);
-            updateSidebarRow(row.el.dataset.stptId, gameInfo);
-          }
+          if (applyPrice(priceData)) return;
+          // Cache miss — fall back to GET_PRICES
+          return sendMessage('GET_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(freshPrices => {
+            const freshData = readPriceRegion(freshPrices, row.appId, row.type, newRegion);
+            if (!applyPrice(freshData)) {
+              injectSkeleton(row.el, true);
+            }
+          });
         }).catch(() => {
           injectSkeleton(row.el, true);
         });
@@ -147,6 +168,15 @@ export function handleRuntimeMessage(message, deps) {
       const gameInfo = { ...row, settings };
       replaceBadge(row.el, priceData, gameInfo);
       updateSidebarRow(row.el.dataset.stptId, gameInfo);
+      if (workstation) {
+        const price = _getBadgePrice(priceData, settings);
+        if (price != null) {
+          workstation.updateResolvedPageGame(row.el.dataset.stptId, { price, currency: priceData.prices?.currency ?? settings.currency ?? 'EUR' });
+        }
+        const priceMap = {};
+        setWorkstationPrice(priceMap, row.appId, row.type, priceData, settings);
+        if (Object.keys(priceMap).length > 0) workstation.updateGamePrices(priceMap);
+      }
     }
     return true;
   }

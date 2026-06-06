@@ -1,14 +1,13 @@
 // content/price-helpers.js
 import { normalizeSteamType, typedPriceKey } from '../utils/similarity.js';
-import { resolveBadgeType } from './ui.js';
 
 export function _getBadgePrice(priceData, settings) {
-  const fakeGameInfo = { settings, tier: 4 };
-  const { priceText } = resolveBadgeType(priceData, fakeGameInfo);
-  if (!priceText || priceText === 'N/A') return null;
-  const match = priceText.match(/([\d,.]+)/);
-  if (!match) return null;
-  return parseFloat(match[1].replace(',', '.')) * 100;
+  const prices = priceData?.prices ?? {};
+  let price = prices.currentRetail ?? null;
+  if (settings?.keyshopsEnabled && prices.currentKeyshops != null) {
+    if (price == null || prices.currentKeyshops < price) price = prices.currentKeyshops;
+  }
+  return price;
 }
 
 export function setWorkstationPrice(priceMap, appId, type, priceData, settings) {

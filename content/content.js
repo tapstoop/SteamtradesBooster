@@ -636,6 +636,9 @@ chrome.runtime.onMessage.addListener((message) => {
     readPriceRegion,
     priceItem,
     normalizeSteamType,
+    workstation: window.__stpt_workstation,
+    _getBadgePrice,
+    setWorkstationPrice,
   });
   if (handled) {
     // Sync currentSettings back from the mutable ref
