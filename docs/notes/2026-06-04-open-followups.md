@@ -170,3 +170,9 @@ Results:
 ### Publication impact
 
 The completed tooling remediation does not block Firefox packaging or publication.
+
+Audit status after remediation:
+
+- `npm audit --omit=optional`: found 0 vulnerabilities.
+- Runtime extension impact: none identified; affected packages were development/test tooling.
+- Follow-up required before publication: none.
