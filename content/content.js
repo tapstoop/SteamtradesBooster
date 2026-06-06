@@ -133,6 +133,7 @@ let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTI
   // so all updateGamePrices() calls operate on populated pageGames
   // Tier 1 = wishlist, Tier 2 = tradables (already calculated by prioritize())
   workstation.setPageGames(rowData.map(r => ({
+    stptId: r.el.dataset.stptId,
     appId: r.appId,
     type: r.type,
     title: r.title,
@@ -529,6 +530,9 @@ document.addEventListener('stpt-resolve', async e => {
       console.warn('[STPT] No API key, cannot fetch price for', title);
       const gameInfo = { appId, type, title, el: rowEl, tier: 4, cacheKey, settings, inBundle: type === 'bundle', acqPrice: null, resolution: { status: 'resolved', appId, type } };
       replaceBadge(rowEl, null, gameInfo);
+      if (window.__stpt_workstation) {
+        window.__stpt_workstation.updateResolvedPageGame(rowEl.dataset.stptId, { title, appId, type });
+      }
       return;
     }
 
@@ -566,6 +570,14 @@ document.addEventListener('stpt-resolve', async e => {
     };
     replaceBadge(rowEl, priceData, gameInfo);
     updateSidebarRow(rowEl.dataset.stptId, gameInfo);
+    if (window.__stpt_workstation) {
+      const resolvedUpdate = { title, appId, type };
+      if (priceData) {
+        resolvedUpdate.price = _getBadgePrice(priceData, settings);
+        resolvedUpdate.currency = priceData.prices?.currency ?? getDisplayRegion(settings);
+      }
+      window.__stpt_workstation.updateResolvedPageGame(rowEl.dataset.stptId, resolvedUpdate);
+    }
     if (priceData && window.__stpt_workstation) {
       const priceMap = {};
       setWorkstationPrice(priceMap, appId, type, priceData, settings);
