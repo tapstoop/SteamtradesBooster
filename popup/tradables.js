@@ -141,15 +141,28 @@ function normalizeStoredAppId(appId) {
   return /^\d+$/.test(value) ? value : null;
 }
 
+export function parseTradablesQuantity(value) {
+  const trimmed = String(value ?? '').trim();
+  if (!/^\d+$/.test(trimmed)) return 1;
+  const num = parseInt(trimmed, 10);
+  return Math.max(1, Math.min(999, num));
+}
+
+export function parseTradablesAcqPrice(value) {
+  if (value == null || value === '') return null;
+  const trimmed = String(value).trim();
+  if (trimmed === '') return null;
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(trimmed)) return null;
+  const num = Number(trimmed);
+  return Number.isFinite(num) && num >= 0 ? num : null;
+}
+
 function normalizeQuantity(qty) {
-  const value = parseInt(qty, 10) || 1;
-  return Math.max(1, Math.min(999, value));
+  return parseTradablesQuantity(qty);
 }
 
 function normalizeAcqPrice(price) {
-  if (price == null || price === '') return null;
-  const value = Number(price);
-  return Number.isFinite(value) ? value : null;
+  return parseTradablesAcqPrice(price);
 }
 
 function typedPriceKey(id, type = 'app') {
@@ -852,9 +865,7 @@ export async function initTradables(container) {
         const origIdx = parseInt(input.dataset.origIndex);
         const item = tradablesList[origIdx];
         if (item) {
-          const raw = input.value.trim();
-          const num = raw === '' ? null : Number(raw);
-          item.acqPrice = Number.isFinite(num) ? num : null;
+          item.acqPrice = parseTradablesAcqPrice(input.value);
           await save();
           render();
           updateStats();
@@ -885,9 +896,7 @@ export async function initTradables(container) {
         const origIdx = parseInt(input.dataset.origIndex);
         const item = tradablesList[origIdx];
         if (!item) return;
-        let qty = parseInt(input.value) || 1;
-        if (qty < 1) qty = 1;
-        if (qty > 999) qty = 999;
+        const qty = parseTradablesQuantity(input.value);
         input.value = qty;
         item.qty = qty;
         debouncedSave();

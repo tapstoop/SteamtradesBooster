@@ -22,6 +22,8 @@ const {
   bindTradablesRuntimeStateForInit,
   createTradablesInitGuard,
   normalizeTradableItem,
+  parseTradablesAcqPrice,
+  parseTradablesQuantity,
   populateTradablesShellState,
   renderTradablesSearchStatus,
 } = await import('../popup/tradables.js');
@@ -377,7 +379,7 @@ describe('tradables list rendering', () => {
     expect(item).toMatchObject({
       appId: null,
       type: 'app',
-      qty: 2,
+      qty: 1,
       acqPrice: null,
     });
     expect(element.querySelector('img')).toBeNull();
@@ -396,23 +398,89 @@ describe('tradables list rendering', () => {
       qty: 1,
       acqPrice: null,
     });
-    expect(normalizeTradableItem({ name: 'Empty qty', qty: undefined })).toMatchObject({
-      qty: 1,
-    });
-    expect(normalizeTradableItem({ name: 'Invalid qty', qty: 'abc' })).toMatchObject({
-      qty: 1,
-    });
+    expect(normalizeTradableItem({ name: 'Empty qty', qty: undefined })).toMatchObject({ qty: 1 });
+    expect(normalizeTradableItem({ name: 'Partial qty', qty: '12abc' })).toMatchObject({ qty: 1 });
   });
 
   it('rejects partial and non-finite acquisition prices', () => {
-    expect(normalizeTradableItem({ name: 'Partial', qty: 1, acqPrice: '12abc' })).toMatchObject({
-      acqPrice: null,
-    });
-    expect(normalizeTradableItem({ name: 'Blank', qty: 1, acqPrice: '' })).toMatchObject({
-      acqPrice: null,
-    });
-    expect(normalizeTradableItem({ name: 'Float', qty: 1, acqPrice: '12.34' })).toMatchObject({
-      acqPrice: 12.34,
-    });
+    expect(normalizeTradableItem({ name: 'Partial', qty: 1, acqPrice: '12abc' })).toMatchObject({ acqPrice: null });
+    expect(normalizeTradableItem({ name: 'Scientific', qty: 1, acqPrice: '1e3' })).toMatchObject({ acqPrice: null });
+    expect(normalizeTradableItem({ name: 'Hex', qty: 1, acqPrice: '0x10' })).toMatchObject({ acqPrice: null });
+    expect(normalizeTradableItem({ name: 'NaN', qty: 1, acqPrice: NaN })).toMatchObject({ acqPrice: null });
+    expect(normalizeTradableItem({ name: 'Float', qty: 1, acqPrice: '12.34' })).toMatchObject({ acqPrice: 12.34 });
+    expect(normalizeTradableItem({ name: 'Dot prefix', qty: 1, acqPrice: '.50' })).toMatchObject({ acqPrice: 0.5 });
+    expect(normalizeTradableItem({ name: 'Dot suffix', qty: 1, acqPrice: '12.' })).toMatchObject({ acqPrice: 12 });
+  });
+});
+
+describe('parseTradablesQuantity', () => {
+  it('accepts valid integer strings', () => {
+    expect(parseTradablesQuantity('10')).toBe(10);
+    expect(parseTradablesQuantity('1')).toBe(1);
+    expect(parseTradablesQuantity('999')).toBe(999);
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(parseTradablesQuantity('  42  ')).toBe(42);
+  });
+
+  it('clamps below-minimum values to 1', () => {
+    expect(parseTradablesQuantity('0')).toBe(1);
+    expect(parseTradablesQuantity('-5')).toBe(1);
+  });
+
+  it('clamps above-maximum values to 999', () => {
+    expect(parseTradablesQuantity('1000')).toBe(999);
+    expect(parseTradablesQuantity('9999')).toBe(999);
+  });
+
+  it('returns 1 for blank, null, or undefined input', () => {
+    expect(parseTradablesQuantity('')).toBe(1);
+    expect(parseTradablesQuantity(null)).toBe(1);
+    expect(parseTradablesQuantity(undefined)).toBe(1);
+  });
+
+  it('rejects mixed text, scientific notation, hex, and decimals', () => {
+    expect(parseTradablesQuantity('12abc')).toBe(1);
+    expect(parseTradablesQuantity('1e3')).toBe(1);
+    expect(parseTradablesQuantity('0x10')).toBe(1);
+    expect(parseTradablesQuantity('1.5')).toBe(1);
+    expect(parseTradablesQuantity('abc')).toBe(1);
+  });
+});
+
+describe('parseTradablesAcqPrice', () => {
+  it('accepts valid decimal strings', () => {
+    expect(parseTradablesAcqPrice('12')).toBe(12);
+    expect(parseTradablesAcqPrice('12.34')).toBe(12.34);
+    expect(parseTradablesAcqPrice('.50')).toBe(0.5);
+    expect(parseTradablesAcqPrice('12.')).toBe(12);
+    expect(parseTradablesAcqPrice('0')).toBe(0);
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(parseTradablesAcqPrice('  5.5  ')).toBe(5.5);
+  });
+
+  it('returns null for blank, null, undefined, or whitespace-only', () => {
+    expect(parseTradablesAcqPrice('')).toBeNull();
+    expect(parseTradablesAcqPrice(null)).toBeNull();
+    expect(parseTradablesAcqPrice(undefined)).toBeNull();
+    expect(parseTradablesAcqPrice('   ')).toBeNull();
+  });
+
+  it('rejects mixed text, scientific notation, hex, and signed values', () => {
+    expect(parseTradablesAcqPrice('12abc')).toBeNull();
+    expect(parseTradablesAcqPrice('1e3')).toBeNull();
+    expect(parseTradablesAcqPrice('0x10')).toBeNull();
+    expect(parseTradablesAcqPrice('-5')).toBeNull();
+    expect(parseTradablesAcqPrice('+5')).toBeNull();
+  });
+
+  it('rejects malformed decimals', () => {
+    expect(parseTradablesAcqPrice('.')).toBeNull();
+    expect(parseTradablesAcqPrice('1.2.3')).toBeNull();
+    expect(parseTradablesAcqPrice('Infinity')).toBeNull();
+    expect(parseTradablesAcqPrice('NaN')).toBeNull();
   });
 });
