@@ -9,7 +9,7 @@ import {
 const baseManifest = {
   manifest_version: 3,
   name: 'SteamTrades Booster',
-  version: '0.1.2',
+  version: '0.1.3',
   description: 'Enhance steamtrades.com with new UI features and price tracking',
   permissions: ['storage', 'alarms', 'unlimitedStorage'],
   host_permissions: ['https://www.steamtrades.com/*'],
@@ -56,13 +56,13 @@ describe('build manifest helpers', () => {
   });
 
   it('uses browser-specific output names', () => {
-    expect(getOutputNames('chrome', '0.1.2')).toEqual({
-      outDir: 'steamtrades_booster_chrome_v0.1.2',
-      packageName: 'steamtrades_booster_chrome_v0.1.2.zip'
+    expect(getOutputNames('chrome', '0.1.3')).toEqual({
+      outDir: 'steamtrades_booster_chrome_v0.1.3',
+      packageName: 'steamtrades_booster_chrome_v0.1.3.zip'
     });
-    expect(getOutputNames('firefox', '0.1.2')).toEqual({
-      outDir: 'steamtrades_booster_firefox_v0.1.2',
-      packageName: 'steamtrades_booster_firefox_v0.1.2.zip'
+    expect(getOutputNames('firefox', '0.1.3')).toEqual({
+      outDir: 'steamtrades_booster_firefox_v0.1.3',
+      packageName: 'steamtrades_booster_firefox_v0.1.3.zip'
     });
   });
 

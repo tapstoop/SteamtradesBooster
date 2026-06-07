@@ -26,7 +26,7 @@ describe('settings diagnostics panel', () => {
   it('renders generated logs expanded with refresh and copy actions enabled', () => {
     const html = buildDiagnosticsPanelHtml({
       expanded: true,
-      log: 'SteamTrades Booster v0.1.2',
+      log: 'SteamTrades Booster v0.1.3',
       generatedAt: new Date(2026, 4, 31, 7, 48).getTime(),
     });
 
@@ -34,7 +34,7 @@ describe('settings diagnostics panel', () => {
     expect(html).toContain('aria-expanded="true"');
     expect(html).not.toContain('class="diagnostics-body" hidden');
     expect(html).toContain('Refresh');
-    expect(html).toContain('SteamTrades Booster v0.1.2');
+    expect(html).toContain('SteamTrades Booster v0.1.3');
     expect(html).not.toContain('id="s-copy-log" type="button" disabled');
     expect(html).toMatch(/Generated 2026-05-31 \d{2}:48/);
   });
@@ -74,7 +74,7 @@ describe('settings diagnostics panel', () => {
   it('preserves expanded controls and generated diagnostics states', () => {
     const panel = buildDiagnosticsPanelElement({
       expanded: true,
-      log: 'SteamTrades Booster v0.1.2',
+      log: 'SteamTrades Booster v0.1.3',
       generatedAt: new Date(2026, 4, 31, 7, 48).getTime(),
     });
 
@@ -136,7 +136,7 @@ describe('settings diagnostics panel', () => {
     globalThis.chrome = {
       runtime: {
         sendMessage,
-        getManifest: vi.fn(() => ({ version: '0.1.2' })),
+        getManifest: vi.fn(() => ({ version: '0.1.3' })),
       },
       storage: {
         local: {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SteamTrades Booster",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Enhance steamtrades.com with new UI features and price tracking",
   "permissions": ["storage", "alarms", "unlimitedStorage"],
   "host_permissions": [

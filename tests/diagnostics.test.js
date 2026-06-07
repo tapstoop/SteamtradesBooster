@@ -141,7 +141,7 @@ describe('classifyQuotaWindow', () => {
 describe('diagnostic log rendering', () => {
   it('renders redacted support log sections and retention policy', () => {
     const log = buildDiagnosticLog({
-      manifestVersion: '0.1.2',
+      manifestVersion: '0.1.3',
       userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/148.0.0.0',
       activeUrl: 'https://www.steamtrades.com/trade/abc/test?secret=1#reply',
       generatedAt: Date.UTC(2026, 4, 31, 7, 48),
