@@ -7,7 +7,7 @@ import {
   SidebarWorkstation, updateSidebarRow, syncSidebarHeights, updateFetchButton, setSkeletonLoading
 } from './ui.js';
 import { applyResolvedRow } from './resolution-helpers.js';
-import { handleManualResolution, handleRuntimeMessage } from './content-handlers.js';
+import { handleManualResolution, handleRuntimeMessage, bindManualResolutionListener } from './content-handlers.js';
 import { _getBadgePrice, setWorkstationPrice } from './price-helpers.js';
 
 let rowData = []; // Store row data for callback access
@@ -516,22 +516,20 @@ function setupIntersectionObserver(rows, settings) {
   rows.forEach(r => observer.observe(r.el));
 }
 
-// Listen for re-resolve events (user picked candidate)
-document.addEventListener('stpt-resolve', e => {
-  handleManualResolution(e, {
+bindManualResolutionListener(document, {
     rowData,
     workstation: window.__stpt_workstation,
     sendMessage,
     replaceBadge,
     updateSidebarRow,
+    injectSkeleton,
     applyResolvedRow,
     stripParentheses,
     getDisplayRegion,
     readPriceRegion,
     _getBadgePrice,
     setWorkstationPrice,
-  }).catch(err => console.error('[STPT] stpt-resolve error:', err));
-});
+  });
 
 // Listen for recheck events (user clicked dismissed badge)
 document.addEventListener('stpt-recheck', async e => {

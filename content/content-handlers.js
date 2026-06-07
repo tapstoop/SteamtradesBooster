@@ -4,7 +4,7 @@
 
 export async function handleManualResolution(e, deps) {
   const { rowData, workstation, sendMessage, replaceBadge, updateSidebarRow,
-    applyResolvedRow, stripParentheses, getDisplayRegion, readPriceRegion,
+    injectSkeleton, applyResolvedRow, stripParentheses, getDisplayRegion, readPriceRegion,
     _getBadgePrice, setWorkstationPrice } = deps;
 
   const { appId, title, cacheKey } = e.detail;
@@ -29,6 +29,16 @@ export async function handleManualResolution(e, deps) {
     title,
     cacheKey,
   });
+
+  // Immediately remove any ambiguous/not-found badge and inject a loading skeleton
+  rowEl.querySelectorAll('.stpt-badge, .stpt-skeleton').forEach(el => el.remove());
+  injectSkeleton(rowEl, false);
+
+  // Update workstation identity before awaiting settings/prices (omit price so
+  // explicit-null semantics remain intact until pricing completes)
+  if (workstation) {
+    workstation.updateResolvedPageGame(rowEl.dataset.stptId, { title, appId, type });
+  }
 
   // Fetch settings, bundles, and prices with individual recovery
   let settings;
@@ -209,4 +219,12 @@ export function handleRuntimeMessage(message, deps) {
   }
 
   return false;
+}
+
+export function bindManualResolutionListener(doc, deps) {
+  const handler = (e) => {
+    handleManualResolution(e, deps).catch(err => console.error('[STPT] stpt-resolve error:', err));
+  };
+  doc.addEventListener('stpt-resolve', handler);
+  return handler;
 }

@@ -116,10 +116,10 @@ export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
       name: c.name,
       meta: `${formatPickerItemType(c.type)} ${c.id}`,
     });
-    item.addEventListener('click', async () => {
+    item.addEventListener('click', () => {
       picker.remove();
-      await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: c.id, title: c.name, type: c.type ?? 'app' });
       rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: c.id, title: c.name, cacheKey, type: c.type ?? 'app' } }));
+      sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: c.id, title: c.name, type: c.type ?? 'app' }).catch(err => console.error('[STPT] CONFIRM_RESOLUTION failed:', err));
     });
     picker.appendChild(item);
   });
@@ -238,10 +238,10 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
           name: item.name,
           meta: `${formatPickerItemType(type)} ${String(item.id)}`,
         });
-        resultItem.addEventListener('click', async () => {
+        resultItem.addEventListener('click', () => {
           picker.remove();
-          await sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: String(item.id), title: item.name, type });
           rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: String(item.id), title: item.name, cacheKey, type } }));
+          sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: String(item.id), title: item.name, type }).catch(err => console.error('[STPT] CONFIRM_RESOLUTION failed:', err));
         });
         return resultItem;
       });

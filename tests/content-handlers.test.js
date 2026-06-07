@@ -28,7 +28,7 @@ function makeEvent(rowEl, detail = {}) {
 
 describe('handleManualResolution', () => {
   let rowData, workstation, sendMessage, replaceBadge, updateSidebarRow;
-  let stripParentheses, getDisplayRegion, readPriceRegion;
+  let injectSkeleton, stripParentheses, getDisplayRegion, readPriceRegion;
   let setWorkstationPrice, _getBadgePrice;
 
   beforeEach(() => {
@@ -40,6 +40,7 @@ describe('handleManualResolution', () => {
     sendMessage = vi.fn();
     replaceBadge = vi.fn();
     updateSidebarRow = vi.fn();
+    injectSkeleton = vi.fn();
     setWorkstationPrice = vi.fn((priceMap, appId, type, priceData) => {
       priceMap[appId] = { price: priceData?.prices?.currentRetail ?? null, currency: 'EUR' };
     });
@@ -56,7 +57,7 @@ describe('handleManualResolution', () => {
   function makeDeps() {
     return {
       rowData, workstation, sendMessage, replaceBadge, updateSidebarRow,
-      applyResolvedRow, stripParentheses, getDisplayRegion, readPriceRegion,
+      injectSkeleton, applyResolvedRow, stripParentheses, getDisplayRegion, readPriceRegion,
       _getBadgePrice, setWorkstationPrice,
     };
   }
@@ -78,7 +79,14 @@ describe('handleManualResolution', () => {
     expect(entry.fuzzy).toBe(false);
     expect(entry.resolution).toEqual({ status: 'resolved', appId: '456', type: 'bundle' });
 
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('7', {
+    // Immediate synchronous updates before any await
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '7', {
+      title: 'Resolved Game', appId: '456', type: 'bundle',
+    });
+
+    // Final async update with price:null
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '7', {
       title: 'Resolved Game', appId: '456', type: 'bundle', price: null,
     });
   });
@@ -103,10 +111,17 @@ describe('handleManualResolution', () => {
     );
 
     expect(entry.inBundle).toBe(true);
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
     expect(replaceBadge).toHaveBeenCalled();
     expect(updateSidebarRow).toHaveBeenCalled();
 
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('3', expect.objectContaining({
+    // Immediate identity update before async
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '3', {
+      title: 'Resolved', appId: '123', type: 'app',
+    });
+
+    // Async update with price
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '3', expect.objectContaining({
       title: 'Resolved', appId: '123', type: 'app', price: 999, currency: 'USD',
     }));
 
@@ -131,7 +146,9 @@ describe('handleManualResolution', () => {
       makeDeps()
     );
 
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('10', expect.objectContaining({
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '10', { title: 'Curr A', appId: '100', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '10', expect.objectContaining({
       currency: 'USD',
     }));
   });
@@ -154,7 +171,9 @@ describe('handleManualResolution', () => {
       makeDeps()
     );
 
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('11', expect.objectContaining({
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '11', { title: 'Curr B', appId: '200', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '11', expect.objectContaining({
       currency: 'EUR',
     }));
   });
@@ -176,7 +195,9 @@ describe('handleManualResolution', () => {
       makeDeps()
     );
 
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('5', expect.objectContaining({
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '5', { title: 'NoPrice', appId: '999', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '5', expect.objectContaining({
       price: null,
     }));
     expect(workstation.updateGamePrices).not.toHaveBeenCalled();
@@ -199,6 +220,8 @@ describe('handleManualResolution', () => {
     expect(entry.appId).toBe('777');
     expect(entry.fuzzy).toBe(false);
     expect(entry.resolution).toEqual({ status: 'resolved', appId: '777', type: 'app' });
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '42', { title: 'E2E Game', appId: '777', type: 'app' });
 
     // Step 2: PRICE_UPDATED discovers the same row
     const runtimeDeps = {
@@ -242,8 +265,10 @@ describe('handleManualResolution', () => {
 
     expect(entry.appId).toBe('555');
     expect(entry.fuzzy).toBe(false);
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '20', { title: 'Settings Fail', appId: '555', type: 'app' });
     expect(replaceBadge).toHaveBeenCalled();
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('20', expect.objectContaining({
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '20', expect.objectContaining({
       title: 'Settings Fail', appId: '555', type: 'app', price: null,
     }));
   });
@@ -269,12 +294,15 @@ describe('handleManualResolution', () => {
     expect(cb.dataset.stptTitle).toBe('Prey');
     // rowData title is the full Steam title
     expect(entry.title).toBe('Prey (2017)');
+    // Immediate skeleton and identity update
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '30', { title: 'Prey (2017)', appId: '999', type: 'app' });
     // Sidebar receives full title via gameInfo
     expect(updateSidebarRow).toHaveBeenCalledWith('30', expect.objectContaining({
       title: 'Prey (2017)',
     }));
-    // Workstation receives full title
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('30', expect.objectContaining({
+    // Workstation final update receives full title
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '30', expect.objectContaining({
       title: 'Prey (2017)',
     }));
   });
@@ -299,7 +327,9 @@ describe('handleManualResolution', () => {
     );
 
     expect(entry.appId).toBe('555');
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('21', expect.objectContaining({
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '21', { title: 'Bundle Fail', appId: '555', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '21', expect.objectContaining({
       price: 1111,
     }));
   });
@@ -322,10 +352,269 @@ describe('handleManualResolution', () => {
     );
 
     expect(entry.appId).toBe('555');
-    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('22', expect.objectContaining({
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '22', { title: 'Price Fail', appId: '555', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '22', expect.objectContaining({
       price: null,
     }));
     expect(workstation.updateGamePrices).not.toHaveBeenCalled();
+  });
+});
+
+describe('bindManualResolutionListener', () => {
+  let rowData, workstation, sendMessage, replaceBadge, updateSidebarRow;
+  let injectSkeleton, stripParentheses, getDisplayRegion, readPriceRegion;
+  let setWorkstationPrice, _getBadgePrice;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    rowData = [];
+    workstation = {
+      updateResolvedPageGame: vi.fn(),
+      updateGamePrices: vi.fn(),
+    };
+    sendMessage = vi.fn();
+    replaceBadge = vi.fn();
+    updateSidebarRow = vi.fn();
+    injectSkeleton = vi.fn();
+    setWorkstationPrice = vi.fn((priceMap, appId, type, priceData) => {
+      priceMap[appId] = { price: priceData?.prices?.currentRetail ?? null, currency: 'EUR' };
+    });
+    stripParentheses = vi.fn(s => s);
+    _getBadgePrice = vi.fn((pd) => pd?.prices?.currentRetail ?? null);
+    getDisplayRegion = vi.fn(() => 'us');
+    readPriceRegion = vi.fn().mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function makeDeps() {
+    return {
+      rowData, workstation, sendMessage, replaceBadge, updateSidebarRow,
+      injectSkeleton, applyResolvedRow, stripParentheses, getDisplayRegion, readPriceRegion,
+      _getBadgePrice, setWorkstationPrice,
+    };
+  }
+
+  function makeRowEl(dataset = {}) {
+    const el = document.createElement('span');
+    Object.entries(dataset).forEach(([k, v]) => { el.dataset[k] = v; });
+    el.dataset.stptTitle = dataset.stptTitle ?? 'Test Game';
+    const parent = document.createElement('div');
+    const cb = document.createElement('input');
+    cb.className = 'stpt-game-checkbox';
+    cb.dataset.stptTitle = el.dataset.stptTitle;
+    parent.appendChild(cb);
+    parent.appendChild(el);
+    return el;
+  }
+
+  // ── Integration: ambiguous candidate click ───────────────────────────
+
+  it('ambiguous candidate click: badge removed, skeleton injected, rowData updated, price replaces skeleton', async () => {
+    const el = makeRowEl({ stptId: 'amb-1', stptTitle: 'Ambiguous Game' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+    const entry = { el, appId: null, type: 'app', title: 'Ambiguous Game', cacheKey: 'amb-ck', fuzzy: true, tier: 4 };
+    rowData.push(entry);
+
+    // Attach an ambiguous badge (simulating current DOM state)
+    const ambBadge = document.createElement('span');
+    ambBadge.className = 'stpt-badge';
+    ambBadge.dataset.type = '?';
+    el.appendChild(ambBadge);
+
+    const priceData = makePriceData(1499, 'EUR');
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'], currency: 'EUR' })
+      .mockResolvedValueOnce({ '456': [] })
+      .mockResolvedValueOnce({ 'app:456': { us: priceData } });
+    readPriceRegion.mockReturnValueOnce(priceData);
+
+    const deps = makeDeps();
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, deps);
+
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '456', title: 'Resolved Title', cacheKey: 'new-ck', type: 'app' } }));
+
+    // Synchronous effects must be visible immediately (before any await)
+    expect(el.querySelector('.stpt-badge')).toBeNull();
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(entry.appId).toBe('456');
+    expect(entry.fuzzy).toBe(false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'amb-1', {
+      title: 'Resolved Title', appId: '456', type: 'app',
+    });
+
+    // Wait for async pricing to settle
+    await vi.waitFor(() => {
+      expect(replaceBadge).toHaveBeenCalledWith(el, expect.objectContaining({ prices: expect.any(Object) }), expect.any(Object));
+      expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'amb-1', expect.objectContaining({
+        title: 'Resolved Title', appId: '456', type: 'app', price: 1499, currency: 'EUR',
+      }));
+      expect(workstation.updateGamePrices).toHaveBeenCalled();
+    });
+  });
+
+  it('ambiguous candidate click: no API key still updates rowData and injects skeleton', async () => {
+    const el = makeRowEl({ stptId: 'amb-2', stptTitle: 'No Key Game' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+    rowData.push({ el, appId: null, type: 'app', title: 'No Key Game', cacheKey: null, fuzzy: true });
+
+    sendMessage.mockResolvedValueOnce({ apiKey: null, regions: ['us'] });
+
+    const deps = makeDeps();
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, deps);
+
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '888', title: 'Found Game', type: 'app' } }));
+
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'amb-2', {
+      title: 'Found Game', appId: '888', type: 'app',
+    });
+
+    await vi.waitFor(() => {
+      expect(replaceBadge).toHaveBeenCalledWith(el, null, expect.any(Object));
+      expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'amb-2', expect.objectContaining({
+        price: null,
+      }));
+      expect(workstation.updateGamePrices).not.toHaveBeenCalled();
+    });
+  });
+
+  it('handles bundle type with typed price key', async () => {
+    const el = makeRowEl({ stptId: 'bnd-1', stptTitle: 'Bundle Game' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+    rowData.push({ el, appId: null, type: 'app', title: 'Bundle Game', cacheKey: null, fuzzy: true });
+
+    const priceData = makePriceData(2999, 'USD');
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'], currency: 'USD' })
+      .mockResolvedValueOnce({ '999': ['Some Bundle'] })
+      .mockResolvedValueOnce({ 'bundle:999': { us: priceData } });
+    readPriceRegion.mockReturnValueOnce(priceData);
+
+    const deps = makeDeps();
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, deps);
+
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '999', title: 'A Bundle', type: 'bundle' } }));
+
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'bnd-1', {
+      title: 'A Bundle', appId: '999', type: 'bundle',
+    });
+
+    await vi.waitFor(() => {
+      expect(setWorkstationPrice).toHaveBeenCalledWith(expect.any(Object), '999', 'bundle', expect.any(Object), expect.any(Object));
+      expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'bnd-1', expect.objectContaining({
+        type: 'bundle', price: 2999,
+      }));
+    });
+  });
+
+  it('handles sub type with typed price key', async () => {
+    const el = makeRowEl({ stptId: 'sub-1', stptTitle: 'Sub Game' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+    rowData.push({ el, appId: null, type: 'app', title: 'Sub Game', cacheKey: null, fuzzy: true });
+
+    const priceData = makePriceData(899, 'EUR');
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'], currency: 'EUR' })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ 'sub:777': { us: priceData } });
+    readPriceRegion.mockReturnValueOnce(priceData);
+
+    const deps = makeDeps();
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, deps);
+
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '777', title: 'A Sub', type: 'sub' } }));
+
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'sub-1', {
+      title: 'A Sub', appId: '777', type: 'sub',
+    });
+
+    await vi.waitFor(() => {
+      expect(setWorkstationPrice).toHaveBeenCalledWith(expect.any(Object), '777', 'sub', expect.any(Object), expect.any(Object));
+      expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'sub-1', expect.objectContaining({
+        type: 'sub', price: 899,
+      }));
+    });
+  });
+
+  it('missing price produces resolved N/A state, not ambiguous picker', async () => {
+    const el = makeRowEl({ stptId: 'na-1', stptTitle: 'N/A Game' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+    rowData.push({ el, appId: null, type: 'app', title: 'N/A Game', cacheKey: null, fuzzy: true });
+
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'] })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({});
+    readPriceRegion.mockReturnValueOnce(null);
+
+    const deps = makeDeps();
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, deps);
+
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '111', title: 'No Price Game', type: 'app' } }));
+
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'na-1', {
+      title: 'No Price Game', appId: '111', type: 'app',
+    });
+
+    await vi.waitFor(() => {
+      // replaceBadge called with null priceData → renders N/A badge
+      expect(replaceBadge).toHaveBeenCalledWith(el, null, expect.any(Object));
+      expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'na-1', expect.objectContaining({
+        price: null,
+      }));
+      // updateGamePrices NOT called for null price
+      expect(workstation.updateGamePrices).not.toHaveBeenCalled();
+    });
+  });
+
+  it('event listener error does not produce unhandled rejection', async () => {
+    const el = makeRowEl({ stptId: 'err-1', stptTitle: 'Error Game' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+    rowData.push({ el, appId: null, type: 'app', title: 'Error Game', cacheKey: null, fuzzy: true });
+
+    const deps = makeDeps();
+    // Force a synchronous throw inside handleManualResolution
+    stripParentheses = vi.fn(() => { throw new Error('boom'); });
+
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, deps);
+
+    // This must not throw or produce an unhandled rejection
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '1', title: 'Test', type: 'app' } }));
   });
 });
 
