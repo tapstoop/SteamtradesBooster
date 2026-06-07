@@ -96,6 +96,68 @@ describe('build manifest helpers', () => {
     });
   });
 
+  it('keeps top-level and action icons in firefox manifest output', () => {
+    const manifestWithIcons = {
+      ...baseManifest,
+      action: {
+        default_popup: 'popup/popup.html',
+        default_title: 'SteamTrades Booster',
+        default_icon: {
+          16: 'icons/icon16.png',
+          48: 'icons/icon48.png',
+          128: 'icons/icon128.png'
+        }
+      }
+    };
+
+    const output = createPackagedManifest(manifestWithIcons, {
+      target: 'firefox',
+      includeIcons: true
+    });
+
+    expect(output.icons).toEqual({
+      16: 'icons/icon16.png',
+      48: 'icons/icon48.png',
+      128: 'icons/icon128.png'
+    });
+    expect(output.action.default_icon).toEqual({
+      16: 'icons/icon16.png',
+      48: 'icons/icon48.png',
+      128: 'icons/icon128.png'
+    });
+  });
+
+  it('keeps top-level and action icons in chrome manifest output', () => {
+    const manifestWithIcons = {
+      ...baseManifest,
+      action: {
+        default_popup: 'popup/popup.html',
+        default_title: 'SteamTrades Booster',
+        default_icon: {
+          16: 'icons/icon16.png',
+          48: 'icons/icon48.png',
+          128: 'icons/icon128.png'
+        }
+      }
+    };
+
+    const output = createPackagedManifest(manifestWithIcons, {
+      target: 'chrome',
+      includeIcons: true
+    });
+
+    expect(output.icons).toEqual({
+      16: 'icons/icon16.png',
+      48: 'icons/icon48.png',
+      128: 'icons/icon128.png'
+    });
+    expect(output.action.default_icon).toEqual({
+      16: 'icons/icon16.png',
+      48: 'icons/icon48.png',
+      128: 'icons/icon128.png'
+    });
+  });
+
   it('omits icons when the package has no icon directory', () => {
     const packaged = createPackagedManifest(baseManifest, {
       target: 'chrome',
