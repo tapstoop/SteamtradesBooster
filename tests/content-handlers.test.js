@@ -721,13 +721,19 @@ describe('handleRuntimeMessage', () => {
     });
   });
 
-  it('SETTINGS_UPDATED fresh-price rejection removes stale badge and clears workstation', async () => {
+  it('SETTINGS_UPDATED fresh-price rejection removes stale badges and clears workstation', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = 's1';
-    // Attach a stale badge that should be removed
-    const oldBadge = document.createElement('span');
-    oldBadge.className = 'stpt-badge';
-    el.appendChild(oldBadge);
+    // Attach multiple badges that should all be removed
+    const primaryBadge = document.createElement('span');
+    primaryBadge.className = 'stpt-badge';
+    const secondaryBadge = document.createElement('span');
+    secondaryBadge.className = 'stpt-badge';
+    const skeleton = document.createElement('span');
+    skeleton.className = 'stpt-skeleton';
+    el.appendChild(primaryBadge);
+    el.appendChild(secondaryBadge);
+    el.appendChild(skeleton);
     document.body.appendChild(el);
 
     rowData.push({ el, appId: '701', type: 'app', title: 'Stale Row', cacheKey: null });
@@ -742,7 +748,7 @@ describe('handleRuntimeMessage', () => {
     }, makeDeps());
 
     await vi.waitFor(() => {
-      expect(el.querySelector('.stpt-badge')).toBeNull();
+      expect(el.querySelectorAll('.stpt-badge, .stpt-skeleton')).toHaveLength(0);
       expect(injectSkeleton).toHaveBeenCalledWith(el, true);
       expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('s1', { price: null });
     });

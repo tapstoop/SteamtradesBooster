@@ -137,8 +137,7 @@ export function handleRuntimeMessage(message, deps) {
       function clearRowStalePrices() {
         // Stale guard — newer update may have already rendered valid state
         if (settingsRef.revision !== myRev || getDisplayRegion(settingsRef.current) !== newRegion) return;
-        const existing = row.el.querySelector('.stpt-badge, .stpt-skeleton');
-        if (existing) existing.remove();
+        row.el.querySelectorAll('.stpt-badge, .stpt-skeleton').forEach(el => el.remove());
         if (workstation) {
           workstation.updateResolvedPageGame(row.el.dataset.stptId, { price: null });
         }
