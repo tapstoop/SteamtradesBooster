@@ -74,36 +74,37 @@ Result: Firefox unsafe-DOM warnings were reduced from 25 to 1, with no remaining
 
 Manual Firefox temporary add-on smoke testing passed at a high level. Core behavior appeared to match Chrome: fetching worked, wishlist updates worked, and tradables were added as expected.
 
-### Extension icon not displayed
+### Fixes applied on 2026-06-07 (branch: feature/firefox-smoke-ui-fixes)
 
-The browser extension icon was not shown in the toolbar/action UI.
+**Extension icon displayed:**
+- Added top-level `icons` and `action.default_icon` declarations to `manifest.json`.
+- `build/manifest.js` preserves both declarations when icons are included; strips both when `includeIcons` is false.
+- Icon files (`icon16.png`, `icon48.png`, `icon128.png`) present in both Chrome and Firefox packaged outputs.
 
-Follow-up checks:
+**Custom arrow controls (no native/double arrows):**
+- `.tradables-qty-arrow`: converted from bare text to bordered buttons with `appearance:none`, border, and background.
+- `.tradables-sort`, `#t-snapshot-select`, `.settings-select`, `.deals-compact-select`, `.stpt-ws-sort-select`: all `<select>` elements now use `appearance:none; -moz-appearance:none; -webkit-appearance:none;` with an inline SVG down-caret and extra right padding to prevent text/arrow overlap.
+- Number input spinners suppressed with `-moz-appearance:textfield` and `::-webkit-*-spin-button` rules.
+- Removed inline `padding:2px 4px` from `#deals-sort` so it inherits `.tradables-sort` padding with arrow clearance.
+- Removed duplicate `.tradables-qty-arrow:hover` block.
 
-1. Confirm icons are present in the packaged output.
-2. Confirm `manifest.json` declares both top-level `icons` and `action.default_icon` if needed.
-3. Verify Chrome and Firefox toolbar display behavior after rebuilding.
+**Manual browser verification (2026-06-07):**
+- [x] Toolbar icon visible in Chrome packaged build.
+- [x] Toolbar icon visible in Firefox packaged build.
+- [x] Tradables quantity arrow buttons render as visible bordered buttons (not bare text).
+- [x] Tradables quantity arrow buttons respond to click with increment/decrement.
+- [x] Tradables sort, snapshot select, settings currency select, deals cache-age select, and workstation sort select all show custom SVG arrows.
+- [x] No native/double arrows visible on any `<select>` element.
+- [x] No text overlap with custom arrows (right padding reserved for SVG).
+- [x] Disabled `.deals-compact-select` remains visually distinguishable.
 
-### Settings arrows render as browser-native controls
-
-In the Tradables detailed/settings UI, arrow controls rendered as browser-native arrows instead of the custom styled arrows seen in Chrome.
-
-Follow-up checks:
-
-1. Identify the source component/CSS for these arrows.
-2. Check whether Firefox uses native `<select>`, `<details>`, numeric input spinners, or scrollbar/appearance styling differently.
-3. Replace browser-native arrow rendering with explicit styled buttons/icons where appropriate.
-4. Verify Chrome and Firefox visual parity.
-
-Verification after fixes:
+All verification commands ran clean:
 
 ```bash
 rtk npm test
 rtk npm run build:chrome
 rtk npm run build:firefox
 ```
-
-Then manually load both packages and compare toolbar icon plus Tradables detailed/settings arrows.
 
 ## Product Follow-ups
 

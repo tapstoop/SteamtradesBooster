@@ -330,7 +330,7 @@ export async function initDeals(container) {
       <div id="deals-tools">
         <div id="deals-free-section"></div>
         <div class="deals-sort-row">
-          <select id="deals-sort" class="tradables-sort" title="Sort by" style="font-size:10px; padding:2px 4px;">
+          <select id="deals-sort" class="tradables-sort" title="Sort by" style="font-size:10px;">
             <option value="best-deal">Best Deal</option>
             <option value="name-asc">Name A→Z</option>
             <option value="name-desc">Name Z→A</option>

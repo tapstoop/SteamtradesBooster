@@ -36,6 +36,8 @@ function createBackground(target) {
 }
 
 export function createPackagedManifest(manifest, { target, includeIcons }) {
+  const action = { ...manifest.action };
+
   const packagedManifest = {
     manifest_version: manifest.manifest_version,
     name: manifest.name,
@@ -45,11 +47,18 @@ export function createPackagedManifest(manifest, { target, includeIcons }) {
     host_permissions: manifest.host_permissions,
     background: createBackground(target),
     content_scripts: manifest.content_scripts,
-    action: manifest.action
+    action
   };
 
-  if (includeIcons && manifest.icons) {
-    packagedManifest.icons = manifest.icons;
+  if (includeIcons) {
+    if (manifest.icons) {
+      packagedManifest.icons = manifest.icons;
+    }
+  } else {
+    if ('icons' in manifest || (manifest.action && manifest.action.default_icon)) {
+      delete packagedManifest.icons;
+      delete packagedManifest.action.default_icon;
+    }
   }
 
   if (target === 'firefox') {

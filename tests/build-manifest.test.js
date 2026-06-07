@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { describe, expect, it } from 'vitest';
 import {
   createPackagedManifest,
@@ -34,6 +35,8 @@ const baseManifest = {
     128: 'icons/icon128.png'
   }
 };
+
+const repoManifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
 
 describe('build manifest helpers', () => {
   it('defaults to chrome when no target is provided', () => {
@@ -96,7 +99,28 @@ describe('build manifest helpers', () => {
     });
   });
 
-  it('keeps top-level and action icons in firefox manifest output', () => {
+  it('preserves top-level and action icons from the real manifest for both targets', () => {
+    const expectedIcons = {
+      16: 'icons/icon16.png',
+      48: 'icons/icon48.png',
+      128: 'icons/icon128.png'
+    };
+
+    for (const target of ['chrome', 'firefox']) {
+      const output = createPackagedManifest(repoManifest, {
+        target,
+        includeIcons: true
+      });
+
+      expect(output.icons).toEqual(expectedIcons);
+      expect(output.action).toHaveProperty('default_icon');
+      expect(output.action.default_icon).toEqual(expectedIcons);
+      expect(output.action).toHaveProperty('default_popup', repoManifest.action.default_popup);
+      expect(output.action).toHaveProperty('default_title', repoManifest.action.default_title);
+    }
+  });
+
+  it('omits both icons and action.default_icon when the package has no icon directory', () => {
     const manifestWithIcons = {
       ...baseManifest,
       action: {
@@ -110,60 +134,34 @@ describe('build manifest helpers', () => {
       }
     };
 
-    const output = createPackagedManifest(manifestWithIcons, {
-      target: 'firefox',
-      includeIcons: true
-    });
-
-    expect(output.icons).toEqual({
-      16: 'icons/icon16.png',
-      48: 'icons/icon48.png',
-      128: 'icons/icon128.png'
-    });
-    expect(output.action.default_icon).toEqual({
-      16: 'icons/icon16.png',
-      48: 'icons/icon48.png',
-      128: 'icons/icon128.png'
-    });
-  });
-
-  it('keeps top-level and action icons in chrome manifest output', () => {
-    const manifestWithIcons = {
-      ...baseManifest,
-      action: {
-        default_popup: 'popup/popup.html',
-        default_title: 'SteamTrades Booster',
-        default_icon: {
-          16: 'icons/icon16.png',
-          48: 'icons/icon48.png',
-          128: 'icons/icon128.png'
-        }
-      }
-    };
-
-    const output = createPackagedManifest(manifestWithIcons, {
-      target: 'chrome',
-      includeIcons: true
-    });
-
-    expect(output.icons).toEqual({
-      16: 'icons/icon16.png',
-      48: 'icons/icon48.png',
-      128: 'icons/icon128.png'
-    });
-    expect(output.action.default_icon).toEqual({
-      16: 'icons/icon16.png',
-      48: 'icons/icon48.png',
-      128: 'icons/icon128.png'
-    });
-  });
-
-  it('omits icons when the package has no icon directory', () => {
-    const packaged = createPackagedManifest(baseManifest, {
+    const packaged = createPackagedManifest(manifestWithIcons, {
       target: 'chrome',
       includeIcons: false
     });
 
     expect(packaged.icons).toBeUndefined();
+    expect(packaged.action).not.toHaveProperty('default_icon');
+  });
+
+  it('does not mutate the input manifest during transformation', () => {
+    const manifestWithIcons = {
+      ...baseManifest,
+      action: {
+        default_popup: 'popup/popup.html',
+        default_title: 'SteamTrades Booster',
+        default_icon: {
+          16: 'icons/icon16.png',
+          48: 'icons/icon48.png',
+          128: 'icons/icon128.png'
+        }
+      }
+    };
+    const snapshot = JSON.stringify(manifestWithIcons);
+
+    createPackagedManifest(manifestWithIcons, { target: 'chrome', includeIcons: false });
+    expect(JSON.stringify(manifestWithIcons)).toBe(snapshot);
+
+    createPackagedManifest(manifestWithIcons, { target: 'firefox', includeIcons: true });
+    expect(JSON.stringify(manifestWithIcons)).toBe(snapshot);
   });
 });
