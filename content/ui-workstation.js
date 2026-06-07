@@ -500,7 +500,7 @@ export class SidebarWorkstation {
     const filtered = this._filterGames(haveGames, this.searchQuery);
     const sorted = this._sortGames(filtered);
     if (this._allGamesCountEl) {
-      this._allGamesCountEl.textContent = String(filtered.length);
+      this._allGamesCountEl.textContent = `Total: ${filtered.length}`;
       this._allGamesCountEl.title = this.searchQuery
         ? `${filtered.length} matching games`
         : `${filtered.length} games`;

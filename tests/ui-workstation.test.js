@@ -41,14 +41,14 @@ describe('SidebarWorkstation all games count', () => {
       { title: 'Wanted', section: 'want', appId: '3', type: 'app' },
     ]);
 
-    expect(workstation.el.querySelector('.stpt-ws-all-count').textContent).toBe('2');
+    expect(workstation.el.querySelector('.stpt-ws-all-count').textContent).toBe('Total: 2');
 
     const search = workstation.el.querySelector('.stpt-ws-data .stpt-ws-search input');
     search.value = 'alp';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     vi.advanceTimersByTime(250);
 
-    expect(workstation.el.querySelector('.stpt-ws-all-count').textContent).toBe('1');
+    expect(workstation.el.querySelector('.stpt-ws-all-count').textContent).toBe('Total: 1');
   });
 
   it('updates a page game by stptId after manual resolution', () => {
