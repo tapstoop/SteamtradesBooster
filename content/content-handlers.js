@@ -22,11 +22,14 @@ export async function handleManualResolution(e, deps) {
 
   // Apply the confirmed resolution before any async request — ensures rowData
   // is up to date even if subsequent requests fail.
+  // Capture the current title as originalTitle before mutation.
   // Pass the full Steam title (not the stripped DOM version) for canonical storage.
+  const currentTitle = (rowData.find(r => r.el === rowEl))?.title ?? rowEl.dataset.stptTitle;
   const row = applyResolvedRow(rowData, rowEl, {
     appId,
     type,
     title,
+    originalTitle: currentTitle,
     cacheKey,
   });
 
@@ -37,7 +40,7 @@ export async function handleManualResolution(e, deps) {
   // Update workstation identity before awaiting settings/prices (omit price so
   // explicit-null semantics remain intact until pricing completes)
   if (workstation) {
-    workstation.updateResolvedPageGame(rowEl.dataset.stptId, { title, appId, type });
+    workstation.updateResolvedPageGame(rowEl.dataset.stptId, { title, appId, type, originalTitle: currentTitle, manuallyResolved: true });
   }
 
   // Fetch settings, bundles, and prices with individual recovery
@@ -90,7 +93,7 @@ export async function handleManualResolution(e, deps) {
 
   if (workstation) {
     const price = priceData ? _getBadgePrice(priceData, settings) : null;
-    const resolvedUpdate = { title, appId, type, price };
+    const resolvedUpdate = { title, appId, type, price, originalTitle: row?.originalTitle ?? currentTitle, manuallyResolved: true };
     if (priceData) {
       resolvedUpdate.currency = priceData.prices?.currency ?? settings.currency ?? 'EUR';
     }

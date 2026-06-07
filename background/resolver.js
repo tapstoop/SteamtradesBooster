@@ -108,7 +108,7 @@ export async function resolveTitle(title) {
     const confirmed = await cacheGet(`${key}:confirmed`);
     if (confirmed?.value) {
       const confirmedTitle = await cacheGet(`${key}:confirmed:title`);
-      return resultFromCache(confirmed.value, 'delisted', key, { title: confirmedTitle?.value });
+      return resultFromCache(confirmed.value, 'delisted', key, { title: confirmedTitle?.value, confirmed: true });
     }
     const cached = await cacheGet(key);
     if (cached?.value) {
@@ -121,7 +121,7 @@ export async function resolveTitle(title) {
   const confirmed = await cacheGet(`${key}:confirmed`);
   if (confirmed?.value) {
     const confirmedTitle = await cacheGet(`${key}:confirmed:title`);
-    return resultFromCache(confirmed.value, 'hit', key, { title: confirmedTitle?.value });
+    return resultFromCache(confirmed.value, 'hit', key, { title: confirmedTitle?.value, confirmed: true });
   }
 
   // Check resolved cache

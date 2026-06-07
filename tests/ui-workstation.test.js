@@ -187,4 +187,122 @@ describe('SidebarWorkstation all games count', () => {
     const diffEl = document.getElementById('stpt-sim-diff');
     expect(diffEl.textContent).toContain('0.00'); // trader === mine value
   });
+
+  // ── Dual-title rendering ────────────────────────────────────────────
+
+  it('renders original title as secondary line when manuallyResolved and titles differ', () => {
+    workstation.setPageGames([
+      { stptId: 'dt1', title: 'Resolved Steam Title', originalTitle: 'Original Page Name', manuallyResolved: true, section: 'have', appId: '1', type: 'app', price: 500, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const row = workstation.el.querySelector('.stpt-game-row');
+    expect(row.classList.contains('has-original-title')).toBe(true);
+    const primaryTitle = row.querySelector('.stpt-game-title');
+    expect(primaryTitle.textContent).toBe('Resolved Steam Title');
+    const originalTitle = row.querySelector('.stpt-game-original-title');
+    expect(originalTitle).not.toBeNull();
+    expect(originalTitle.textContent).toBe('→ Original Page Name');
+  });
+
+  it('does not render original title when titles are equal', () => {
+    workstation.setPageGames([
+      { stptId: 'dt2', title: 'Same Name', originalTitle: 'Same Name', manuallyResolved: true, section: 'have', appId: '2', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const row = workstation.el.querySelector('.stpt-game-row');
+    expect(row.classList.contains('has-original-title')).toBe(false);
+    expect(row.querySelector('.stpt-game-original-title')).toBeNull();
+  });
+
+  it('does not render original title for auto-resolved (non-manual) games', () => {
+    workstation.setPageGames([
+      { stptId: 'dt3', title: 'Auto Resolved', originalTitle: 'Auto Resolved', manuallyResolved: false, section: 'have', appId: '3', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const row = workstation.el.querySelector('.stpt-game-row');
+    expect(row.classList.contains('has-original-title')).toBe(false);
+    expect(row.querySelector('.stpt-game-original-title')).toBeNull();
+  });
+
+  it('does not render original title when showOriginalTitle is toggled off', () => {
+    workstation.showOriginalTitle = false;
+    workstation.setPageGames([
+      { stptId: 'dt4', title: 'Resolved Steam Title', originalTitle: 'Original Page Name', manuallyResolved: true, section: 'have', appId: '4', type: 'app', price: 500, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const row = workstation.el.querySelector('.stpt-game-row');
+    expect(row.querySelector('.stpt-game-original-title')).toBeNull();
+  });
+
+  // ── Have-only: want-section games are excluded from All Page Games ───
+
+  it('only shows have-section games in the data list', () => {
+    workstation.setPageGames([
+      { stptId: 'h1', title: 'Have Game 1', section: 'have', appId: '1', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+      { stptId: 'h2', title: 'Have Game 2', section: 'have', appId: '2', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+      { stptId: 'w1', title: 'Want Game', section: 'want', appId: '3', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const rows = workstation.el.querySelectorAll('.stpt-game-row');
+    expect(rows.length).toBe(2);
+    const titles = Array.from(rows).map(r => r.querySelector('.stpt-game-title').textContent);
+    expect(titles).toEqual(['Have Game 1', 'Have Game 2']);
+  });
+
+  // ── Checkbox toggle ─────────────────────────────────────────────────
+
+  it('Show original names checkbox defaults to checked and toggles rendering', () => {
+    workstation.setPageGames([
+      { stptId: 'cb1', title: 'Resolved Steam Title', originalTitle: 'Original Page Name', manuallyResolved: true, section: 'have', appId: '1', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const cb = workstation.el.querySelector('.stpt-ws-orig-title-toggle input');
+    expect(cb).not.toBeNull();
+    expect(cb.checked).toBe(true);
+
+    // Toggle off
+    cb.checked = false;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    vi.runAllTimers();
+
+    const row = workstation.el.querySelector('.stpt-game-row');
+    expect(row.querySelector('.stpt-game-original-title')).toBeNull();
+
+    // Toggle back on
+    cb.checked = true;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    vi.runAllTimers();
+
+    const row2 = workstation.el.querySelector('.stpt-game-row');
+    expect(row2.querySelector('.stpt-game-original-title')).not.toBeNull();
+  });
+
+  // ── Virtual list height ─────────────────────────────────────────────
+
+  it('virtual list adjusts height when original titles toggle changes', () => {
+    workstation.setPageGames([
+      { stptId: 'vh1', title: 'Resolved Steam Title', originalTitle: 'Original Page Name', manuallyResolved: true, section: 'have', appId: '1', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    // With dual-title ON, row height should be 50px
+    const rowOn = workstation.el.querySelector('.stpt-game-row');
+    expect(rowOn.style.height).toBe('50px');
+
+    // Toggle off
+    const cb = workstation.el.querySelector('.stpt-ws-orig-title-toggle input');
+    cb.checked = false;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    vi.runAllTimers();
+
+    // With dual-title OFF, row height should be 36px
+    const rowOff = workstation.el.querySelector('.stpt-game-row');
+    expect(rowOff.style.height).toBe('36px');
+  });
 });

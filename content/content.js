@@ -61,6 +61,8 @@ const settingsRef = { current: null, revision: 0 }; // Mutable reference for run
   // Build resolution map
   rowData = prioritized.map((row, i) => {
     const res = resolutions[i];
+    // Save the original SteamTrades title before mutation
+    const originalTitle = row.title;
     // Include appId for resolved, hit, OR delisted (if user confirmed game before marking delisted)
     const appId = (res?.status === 'hit' || res?.status === 'resolved' || res?.status === 'delisted') ? res.appId : null;
     // Use confirmed title if available (from user selection or fuzzy match)
@@ -70,6 +72,8 @@ const settingsRef = { current: null, revision: 0 }; // Mutable reference for run
     return {
       ...row,
       title: displayTitle, // Update title to confirmed title
+      originalTitle, // Preserve the parsed SteamTrades title
+      manuallyResolved: !!(res?.confirmed), // True only for :confirmed cache hits
       resolution: res,
       appId,
       type: res?.type ?? 'app',
@@ -142,6 +146,8 @@ const settingsRef = { current: null, revision: 0 }; // Mutable reference for run
     appId: r.appId,
     type: r.type,
     title: r.title,
+    originalTitle: r.originalTitle ?? null,
+    manuallyResolved: r.manuallyResolved ?? false,
     price: r.price,
     tier: r.tier,
     el: r.el,

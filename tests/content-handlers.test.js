@@ -81,14 +81,14 @@ describe('handleManualResolution', () => {
 
     // Immediate synchronous updates before any await
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '7', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '7', expect.objectContaining({
       title: 'Resolved Game', appId: '456', type: 'bundle',
-    });
+    }));
 
     // Final async update with price:null
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '7', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '7', expect.objectContaining({
       title: 'Resolved Game', appId: '456', type: 'bundle', price: null,
-    });
+    }));
   });
 
   it('API key: fetches bundles/prices, sets inBundle, badge/sidebar/workstation updated', async () => {
@@ -116,9 +116,9 @@ describe('handleManualResolution', () => {
     expect(updateSidebarRow).toHaveBeenCalled();
 
     // Immediate identity update before async
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '3', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '3', expect.objectContaining({
       title: 'Resolved', appId: '123', type: 'app',
-    });
+    }));
 
     // Async update with price
     expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '3', expect.objectContaining({
@@ -147,7 +147,7 @@ describe('handleManualResolution', () => {
     );
 
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '10', { title: 'Curr A', appId: '100', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '10', expect.objectContaining({ title: 'Curr A', appId: '100', type: 'app' }));
     expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '10', expect.objectContaining({
       currency: 'USD',
     }));
@@ -172,7 +172,7 @@ describe('handleManualResolution', () => {
     );
 
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '11', { title: 'Curr B', appId: '200', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '11', expect.objectContaining({ title: 'Curr B', appId: '200', type: 'app' }));
     expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '11', expect.objectContaining({
       currency: 'EUR',
     }));
@@ -196,7 +196,7 @@ describe('handleManualResolution', () => {
     );
 
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '5', { title: 'NoPrice', appId: '999', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '5', expect.objectContaining({ title: 'NoPrice', appId: '999', type: 'app' }));
     expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '5', expect.objectContaining({
       price: null,
     }));
@@ -221,7 +221,7 @@ describe('handleManualResolution', () => {
     expect(entry.fuzzy).toBe(false);
     expect(entry.resolution).toEqual({ status: 'resolved', appId: '777', type: 'app' });
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '42', { title: 'E2E Game', appId: '777', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '42', expect.objectContaining({ title: 'E2E Game', appId: '777', type: 'app' }));
 
     // Step 2: PRICE_UPDATED discovers the same row
     const runtimeDeps = {
@@ -266,7 +266,7 @@ describe('handleManualResolution', () => {
     expect(entry.appId).toBe('555');
     expect(entry.fuzzy).toBe(false);
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '20', { title: 'Settings Fail', appId: '555', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '20', expect.objectContaining({ title: 'Settings Fail', appId: '555', type: 'app' }));
     expect(replaceBadge).toHaveBeenCalled();
     expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '20', expect.objectContaining({
       title: 'Settings Fail', appId: '555', type: 'app', price: null,
@@ -296,7 +296,7 @@ describe('handleManualResolution', () => {
     expect(entry.title).toBe('Prey (2017)');
     // Immediate skeleton and identity update
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '30', { title: 'Prey (2017)', appId: '999', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '30', expect.objectContaining({ title: 'Prey (2017)', appId: '999', type: 'app' }));
     // Sidebar receives full title via gameInfo
     expect(updateSidebarRow).toHaveBeenCalledWith('30', expect.objectContaining({
       title: 'Prey (2017)',
@@ -328,7 +328,7 @@ describe('handleManualResolution', () => {
 
     expect(entry.appId).toBe('555');
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '21', { title: 'Bundle Fail', appId: '555', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '21', expect.objectContaining({ title: 'Bundle Fail', appId: '555', type: 'app' }));
     expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '21', expect.objectContaining({
       price: 1111,
     }));
@@ -353,7 +353,7 @@ describe('handleManualResolution', () => {
 
     expect(entry.appId).toBe('555');
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '22', { title: 'Price Fail', appId: '555', type: 'app' });
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, '22', expect.objectContaining({ title: 'Price Fail', appId: '555', type: 'app' }));
     expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, '22', expect.objectContaining({
       price: null,
     }));
@@ -449,9 +449,9 @@ describe('bindManualResolutionListener', () => {
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
     expect(entry.appId).toBe('456');
     expect(entry.fuzzy).toBe(false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'amb-1', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'amb-1', expect.objectContaining({
       title: 'Resolved Title', appId: '456', type: 'app',
-    });
+    }));
 
     // Wait for async pricing to settle
     await vi.waitFor(() => {
@@ -481,9 +481,9 @@ describe('bindManualResolutionListener', () => {
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '888', title: 'Found Game', type: 'app' } }));
 
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'amb-2', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'amb-2', expect.objectContaining({
       title: 'Found Game', appId: '888', type: 'app',
-    });
+    }));
 
     await vi.waitFor(() => {
       expect(replaceBadge).toHaveBeenCalledWith(el, null, expect.any(Object));
@@ -516,9 +516,9 @@ describe('bindManualResolutionListener', () => {
 
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '999', title: 'A Bundle', type: 'bundle' } }));
 
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'bnd-1', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'bnd-1', expect.objectContaining({
       title: 'A Bundle', appId: '999', type: 'bundle',
-    });
+    }));
 
     await vi.waitFor(() => {
       expect(setWorkstationPrice).toHaveBeenCalledWith(expect.any(Object), '999', 'bundle', expect.any(Object), expect.any(Object));
@@ -550,9 +550,9 @@ describe('bindManualResolutionListener', () => {
 
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '777', title: 'A Sub', type: 'sub' } }));
 
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'sub-1', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'sub-1', expect.objectContaining({
       title: 'A Sub', appId: '777', type: 'sub',
-    });
+    }));
 
     await vi.waitFor(() => {
       expect(setWorkstationPrice).toHaveBeenCalledWith(expect.any(Object), '777', 'sub', expect.any(Object), expect.any(Object));
@@ -584,9 +584,9 @@ describe('bindManualResolutionListener', () => {
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '111', title: 'No Price Game', type: 'app' } }));
 
     expect(injectSkeleton).toHaveBeenCalledWith(el, false);
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'na-1', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'na-1', expect.objectContaining({
       title: 'No Price Game', appId: '111', type: 'app',
-    });
+    }));
 
     await vi.waitFor(() => {
       // replaceBadge called with null priceData → renders N/A badge
@@ -640,9 +640,9 @@ describe('bindManualResolutionListener', () => {
     expect(entry.title).toBe('Resolved Steam Title');
 
     // Immediate workstation identity update (no price yet)
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'prod-1', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'prod-1', expect.objectContaining({
       title: 'Resolved Steam Title', appId: '500', type: 'app',
-    });
+    }));
 
     await vi.waitFor(() => {
       expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'prod-1', expect.objectContaining({
@@ -743,9 +743,9 @@ describe('bindManualResolutionListener', () => {
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '700', title: 'Actual Name', type: 'app' } }));
 
     // Updated by stptId, not by matching the old title
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'mismatch-1', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'mismatch-1', expect.objectContaining({
       title: 'Actual Name', appId: '700', type: 'app',
-    });
+    }));
 
     const entry = rowData.find(r => r.el === el);
     expect(entry.title).toBe('Actual Name');
@@ -823,9 +823,9 @@ describe('bindManualResolutionListener', () => {
     expect(entry.appId).toBe('800');
     expect(entry.fuzzy).toBe(false);
 
-    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'nas-1', {
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'nas-1', expect.objectContaining({
       title: 'Found via Search', appId: '800', type: 'app',
-    });
+    }));
 
     await vi.waitFor(() => {
       expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'nas-1', expect.objectContaining({

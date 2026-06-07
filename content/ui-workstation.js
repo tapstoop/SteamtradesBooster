@@ -31,6 +31,7 @@ export class SidebarWorkstation {
     this.tradableSortDir = 'asc';
     this.searchQuery = '';
     this.tradableSearchQuery = '';
+    this.showOriginalTitle = true;
     this.onGamesUpdated = null;
     this._init();
   }
@@ -95,6 +96,46 @@ export class SidebarWorkstation {
 
     document.body.appendChild(this.el);
     this._restoreCollapsedState();
+    this._restoreShowOriginalTitle();
+    this._setupOriginalTitleToggle();
+  }
+
+  _restoreShowOriginalTitle() {
+    try {
+      const saved = localStorage.getItem('stpt-ws-show-original-title');
+      if (saved !== null) {
+        this.showOriginalTitle = saved !== 'false';
+      }
+      this._origTitleCheckboxEl = null;
+    } catch {
+      // Ignore localStorage errors
+    }
+  }
+
+  _setupOriginalTitleToggle() {
+    const header = this.el.querySelector('.stpt-ws-data .stpt-ws-col-header');
+    if (!header) return;
+    const label = document.createElement('label');
+    label.className = 'stpt-ws-orig-title-toggle';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = this.showOriginalTitle;
+    this._origTitleCheckboxEl = cb;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode('Show original names'));
+    header.appendChild(label);
+    cb.addEventListener('change', () => {
+      this.showOriginalTitle = cb.checked;
+      try {
+        localStorage.setItem('stpt-ws-show-original-title', String(cb.checked));
+      } catch {
+        // Ignore
+      }
+      if (this._virtualList && this._virtualList.setItemHeight) {
+        this._virtualList.setItemHeight(this.showOriginalTitle ? 50 : 36);
+      }
+      this._renderDataList();
+    });
   }
 
   _setupResizeHandlers() {
@@ -237,7 +278,7 @@ export class SidebarWorkstation {
     searchContainer.appendChild(sortSelect);
 
     this._virtualList = createVirtualList({
-      itemHeight: 36,
+      itemHeight: this.showOriginalTitle ? 50 : 36,
       renderItem: (game, index) => this._renderDataRow(game, index)
     });
     this._dataList.appendChild(this._virtualList.container);
@@ -251,6 +292,7 @@ export class SidebarWorkstation {
       isInWishlist: game.inWishlist,
       isInTradables: game.inTradables,
       isInTrade,
+      showOriginalTitle: this.showOriginalTitle,
       onAction: () => this._addToMyGames(game)
     });
   }
@@ -666,6 +708,8 @@ export class SidebarWorkstation {
         name: update.name ?? update.title ?? game.name,
         appId: update.appId ?? game.appId,
         type: update.type ?? game.type,
+        originalTitle: ('originalTitle' in update) ? update.originalTitle : game.originalTitle,
+        manuallyResolved: ('manuallyResolved' in update) ? update.manuallyResolved : game.manuallyResolved,
         price: ('price' in update) ? update.price : (game.price ?? null),
         currency: ('currency' in update) ? update.currency : (game.currency ?? 'EUR'),
       };

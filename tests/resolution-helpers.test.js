@@ -70,4 +70,26 @@ describe('applyResolvedRow', () => {
     expect(found.title).toBe('New');
     expect(found.type).toBe('sub');
   });
+
+  it('sets manuallyResolved: true and preserves originalTitle when provided', () => {
+    const el = makeRowEl();
+    const rowData = [{ el, appId: null, type: 'app', title: 'Old Title', cacheKey: 'ck' }];
+
+    applyResolvedRow(rowData, el, { appId: '123', type: 'app', title: 'New Steam Title', originalTitle: 'Old Title' });
+
+    expect(rowData[0].manuallyResolved).toBe(true);
+    expect(rowData[0].originalTitle).toBe('Old Title');
+    expect(rowData[0].title).toBe('New Steam Title');
+  });
+
+  it('uses current row.title as originalTitle when not explicitly provided', () => {
+    const el = makeRowEl();
+    const rowData = [{ el, appId: null, type: 'app', title: 'Fallback Title' }];
+
+    applyResolvedRow(rowData, el, { appId: '456', type: 'app', title: 'Resolved' });
+
+    expect(rowData[0].manuallyResolved).toBe(true);
+    expect(rowData[0].originalTitle).toBe('Fallback Title');
+    expect(rowData[0].title).toBe('Resolved');
+  });
 });

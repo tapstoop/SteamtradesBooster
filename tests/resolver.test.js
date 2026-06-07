@@ -255,4 +255,47 @@ describe('resolveTitle', () => {
     const result = await resolveTitle('Nonexistent Game XYZ');
     expect(result).toMatchObject({ status: 'not-found' });
   });
+
+  it('confirmed cache hit exposes confirmed: true and the chosen title', async () => {
+    await confirmResolution('resolve:my test game', '456', 'My Test Game', 'bundle');
+    const result = await resolveTitle('My Test Game');
+    expect(result).toMatchObject({
+      appId: '456',
+      type: 'bundle',
+      status: 'hit',
+      confirmed: true,
+      title: 'My Test Game',
+    });
+  });
+
+  it('delisted game with confirmed appId exposes confirmed: true', async () => {
+    await confirmResolution('resolve:delisted test', '789', 'Delisted Test', 'app');
+    // Mark as delisted
+    await global.chrome.storage.local.set({ 'resolve:delisted test:delisted': { value: '1' } });
+    const result = await resolveTitle('Delisted Test');
+    expect(result).toMatchObject({
+      appId: '789',
+      type: 'app',
+      status: 'delisted',
+      confirmed: true,
+      title: 'Delisted Test',
+    });
+  });
+
+  it('automatic resolution does not expose confirmed', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: '999', name: 'Auto Game', type: 'app' }] }),
+    });
+    const result = await resolveTitle('Auto Game');
+    expect(result).toMatchObject({ appId: '999', status: 'resolved' });
+    expect(result.confirmed).toBeUndefined();
+  });
+
+  it('plain cache hit does not expose confirmed', async () => {
+    store['resolve:cache test'] = { value: '555', expiresAt: 0 };
+    const result = await resolveTitle('Cache Test');
+    expect(result).toMatchObject({ appId: '555', status: 'hit' });
+    expect(result.confirmed).toBeUndefined();
+  });
 });

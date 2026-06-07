@@ -6,7 +6,7 @@ export function formatPrice(amount, currency = 'EUR') {
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);
 }
 
-export function createGameRow({ game, isSelected, isInWishlist, isInTradables, isHighlighted, isInTrade, onAction, onRemove }) {
+export function createGameRow({ game, isSelected, isInWishlist, isInTradables, isHighlighted, isInTrade, showOriginalTitle, onAction, onRemove }) {
   const row = document.createElement('div');
   row.className = 'stpt-game-row';
   if (isSelected) row.classList.add('selected');
@@ -15,11 +15,25 @@ export function createGameRow({ game, isSelected, isInWishlist, isInTradables, i
   if (isHighlighted) row.classList.add('highlight');
   if (isInTrade) row.classList.add('in-trade-used');
 
+  const titleContainer = document.createElement('div');
+  titleContainer.className = 'stpt-game-title-container';
+
   const title = document.createElement('span');
   title.className = 'stpt-game-title';
   title.textContent = game.title || game.name || 'Unknown';
   title.title = game.title || game.name || 'Unknown';
-  row.appendChild(title);
+  titleContainer.appendChild(title);
+
+  if (showOriginalTitle && game.manuallyResolved && game.originalTitle && game.originalTitle !== game.title) {
+    const original = document.createElement('span');
+    original.className = 'stpt-game-original-title';
+    original.textContent = '→ ' + game.originalTitle;
+    original.title = 'Original SteamTrades name: ' + game.originalTitle;
+    titleContainer.appendChild(original);
+    row.classList.add('has-original-title');
+  }
+
+  row.appendChild(titleContainer);
 
   const badge = document.createElement('span');
   badge.className = 'stpt-game-badge';
@@ -143,24 +157,26 @@ export function createVirtualList({ itemHeight, renderItem, getItems }) {
   let items = [];
   let scrollTop = 0;
   let containerHeight = 200;
+  let _itemHeight = itemHeight;
 
   function calculate() {
     const h = container.clientHeight;
     if (h > 0) containerHeight = h;
 
-    const totalHeight = items.length * itemHeight;
+    const totalHeight = items.length * _itemHeight;
     inner.style.height = `${totalHeight}px`;
 
-    const startIndex = Math.floor(scrollTop / itemHeight);
-    const endIndex = Math.min(items.length - 1, Math.ceil((scrollTop + containerHeight) / itemHeight));
+    const startIndex = Math.floor(scrollTop / _itemHeight);
+    const endIndex = Math.min(items.length - 1, Math.ceil((scrollTop + containerHeight) / _itemHeight));
 
     inner.innerHTML = '';
     for (let i = startIndex; i <= endIndex && i < items.length; i++) {
       const el = renderItem(items[i], i);
       el.style.position = 'absolute';
-      el.style.top = `${i * itemHeight}px`;
+      el.style.top = `${i * _itemHeight}px`;
       el.style.left = '0';
       el.style.right = '0';
+      el.style.height = `${_itemHeight}px`;
       inner.appendChild(el);
     }
   }
@@ -177,16 +193,20 @@ export function createVirtualList({ itemHeight, renderItem, getItems }) {
     requestAnimationFrame(() => calculate());
   }
 
+  function setItemHeight(h) {
+    _itemHeight = h;
+    calculate();
+  }
+
   function refresh() {
     calculate();
   }
 
-  // Observe resize to recalculate when container size changes
   if (typeof ResizeObserver !== 'undefined') {
     new ResizeObserver(() => calculate()).observe(container);
   }
 
-  return { container, setItems, refresh, getItems: () => items };
+  return { container, setItems, setItemHeight, refresh, getItems: () => items };
 }
 
 export function createEmptyState({ message }) {
