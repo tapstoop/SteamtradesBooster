@@ -51,6 +51,7 @@ export class SidebarWorkstation {
             <span class="stpt-ws-section-title">All Page Games</span>
             <span class="stpt-ws-all-count" title="Visible all-games count">0</span>
           </div>
+          <div class="stpt-ws-options"></div>
           <div class="stpt-ws-search"></div>
           <div class="stpt-ws-list"></div>
         </div>
@@ -75,6 +76,7 @@ export class SidebarWorkstation {
     this._inTradeSection = this.el.querySelector('.stpt-in-trade-section');
     this._allGamesCountEl = this.el.querySelector('.stpt-ws-all-count');
 
+    this._restoreShowOriginalTitle();
     this._setupDataColumn();
     this._setupSimBox();
     this._setupInTradeSection();
@@ -96,7 +98,6 @@ export class SidebarWorkstation {
 
     document.body.appendChild(this.el);
     this._restoreCollapsedState();
-    this._restoreShowOriginalTitle();
     this._setupOriginalTitleToggle();
   }
 
@@ -106,15 +107,14 @@ export class SidebarWorkstation {
       if (saved !== null) {
         this.showOriginalTitle = saved !== 'false';
       }
-      this._origTitleCheckboxEl = null;
     } catch {
       // Ignore localStorage errors
     }
   }
 
   _setupOriginalTitleToggle() {
-    const header = this.el.querySelector('.stpt-ws-data .stpt-ws-col-header');
-    if (!header) return;
+    const optionsRow = this.el.querySelector('.stpt-ws-data .stpt-ws-options');
+    if (!optionsRow) return;
     const label = document.createElement('label');
     label.className = 'stpt-ws-orig-title-toggle';
     const cb = document.createElement('input');
@@ -122,17 +122,14 @@ export class SidebarWorkstation {
     cb.checked = this.showOriginalTitle;
     this._origTitleCheckboxEl = cb;
     label.appendChild(cb);
-    label.appendChild(document.createTextNode('Show original names'));
-    header.appendChild(label);
+    label.appendChild(document.createTextNode('Original names'));
+    optionsRow.appendChild(label);
     cb.addEventListener('change', () => {
       this.showOriginalTitle = cb.checked;
       try {
         localStorage.setItem('stpt-ws-show-original-title', String(cb.checked));
       } catch {
         // Ignore
-      }
-      if (this._virtualList && this._virtualList.setItemHeight) {
-        this._virtualList.setItemHeight(this.showOriginalTitle ? 50 : 36);
       }
       this._renderDataList();
     });
@@ -278,7 +275,7 @@ export class SidebarWorkstation {
     searchContainer.appendChild(sortSelect);
 
     this._virtualList = createVirtualList({
-      itemHeight: this.showOriginalTitle ? 50 : 36,
+      itemHeight: this.showOriginalTitle ? 42 : 36,
       renderItem: (game, index) => this._renderDataRow(game, index)
     });
     this._dataList.appendChild(this._virtualList.container);
@@ -508,7 +505,18 @@ export class SidebarWorkstation {
         ? `${filtered.length} matching games`
         : `${filtered.length} games`;
     }
+    this._updateVirtualListHeight(sorted);
     this._virtualList.setItems(sorted);
+  }
+
+  _hasAnyDualTitle(games) {
+    if (!this.showOriginalTitle) return false;
+    return games.some(g => g.manuallyResolved && g.originalTitle && g.title && g.originalTitle !== g.title);
+  }
+
+  _updateVirtualListHeight(games) {
+    if (!this._virtualList || !this._virtualList.setItemHeight) return;
+    this._virtualList.setItemHeight(this._hasAnyDualTitle(games) ? 42 : 36);
   }
 
   _renderWishlistSection() {

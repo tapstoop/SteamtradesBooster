@@ -30,7 +30,6 @@ export function createGameRow({ game, isSelected, isInWishlist, isInTradables, i
     original.textContent = '→ ' + game.originalTitle;
     original.title = 'Original SteamTrades name: ' + game.originalTitle;
     titleContainer.appendChild(original);
-    row.classList.add('has-original-title');
   }
 
   row.appendChild(titleContainer);

@@ -569,6 +569,14 @@
   background: #0f172a;
 }
 
+.stpt-ws-options {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  border-bottom: 1px solid #334155;
+  background: #0f172a;
+}
+
 .stpt-ws-section {
   padding: 12px;
   border-bottom: 1px solid #334155;
@@ -758,7 +766,6 @@
 }
 
 .stpt-game-row.has-original-title {
-  height: 50px;
 }
 
 .stpt-game-row .stpt-game-original-title {

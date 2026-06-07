@@ -197,7 +197,6 @@ describe('SidebarWorkstation all games count', () => {
     vi.runAllTimers();
 
     const row = workstation.el.querySelector('.stpt-game-row');
-    expect(row.classList.contains('has-original-title')).toBe(true);
     const primaryTitle = row.querySelector('.stpt-game-title');
     expect(primaryTitle.textContent).toBe('Resolved Steam Title');
     const originalTitle = row.querySelector('.stpt-game-original-title');
@@ -212,7 +211,6 @@ describe('SidebarWorkstation all games count', () => {
     vi.runAllTimers();
 
     const row = workstation.el.querySelector('.stpt-game-row');
-    expect(row.classList.contains('has-original-title')).toBe(false);
     expect(row.querySelector('.stpt-game-original-title')).toBeNull();
   });
 
@@ -223,7 +221,6 @@ describe('SidebarWorkstation all games count', () => {
     vi.runAllTimers();
 
     const row = workstation.el.querySelector('.stpt-game-row');
-    expect(row.classList.contains('has-original-title')).toBe(false);
     expect(row.querySelector('.stpt-game-original-title')).toBeNull();
   });
 
@@ -291,9 +288,9 @@ describe('SidebarWorkstation all games count', () => {
     ]);
     vi.runAllTimers();
 
-    // With dual-title ON, row height should be 50px
+    // With dual-title ON, row height should be 42px
     const rowOn = workstation.el.querySelector('.stpt-game-row');
-    expect(rowOn.style.height).toBe('50px');
+    expect(rowOn.style.height).toBe('42px');
 
     // Toggle off
     const cb = workstation.el.querySelector('.stpt-ws-orig-title-toggle input');
@@ -304,5 +301,33 @@ describe('SidebarWorkstation all games count', () => {
     // With dual-title OFF, row height should be 36px
     const rowOff = workstation.el.querySelector('.stpt-game-row');
     expect(rowOff.style.height).toBe('36px');
+  });
+
+  it('uses 36px height when no filtered games have dual titles, even with toggle on', () => {
+    workstation.setPageGames([
+      { stptId: 'no1', title: 'Auto Resolved', originalTitle: 'Auto Resolved', manuallyResolved: false, section: 'have', appId: '1', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const row = workstation.el.querySelector('.stpt-game-row');
+    expect(row.style.height).toBe('36px');
+  });
+
+  it('localStorage false before construction yields unchecked toggle and 36px rows', () => {
+    workstation.destroy();
+    localStorage.setItem('stpt-ws-show-original-title', 'false');
+    const ws2 = new SidebarWorkstation({ threshold: 0.1 });
+    ws2.setPageGames([
+      { stptId: 'ls1', title: 'Resolved', originalTitle: 'Original', manuallyResolved: true, section: 'have', appId: '1', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const cb = ws2.el.querySelector('.stpt-ws-orig-title-toggle input');
+    expect(cb.checked).toBe(false);
+    const row = ws2.el.querySelector('.stpt-game-row');
+    expect(row.style.height).toBe('36px');
+
+    ws2.destroy();
+    localStorage.removeItem('stpt-ws-show-original-title');
   });
 });
