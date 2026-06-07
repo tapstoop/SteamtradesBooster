@@ -12,7 +12,7 @@ import { _getBadgePrice, setWorkstationPrice } from './price-helpers.js';
 
 let rowData = []; // Store row data for callback access
 let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTINGS_UPDATED listeners
-const settingsRef = { current: null }; // Mutable reference for runtime handler
+const settingsRef = { current: null, revision: 0 }; // Mutable reference for runtime handler
 
 (async function main() {
   let settings;

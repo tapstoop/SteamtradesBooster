@@ -22,10 +22,11 @@ export async function handleManualResolution(e, deps) {
 
   // Apply the confirmed resolution before any async request — ensures rowData
   // is up to date even if subsequent requests fail.
+  // Pass the full Steam title (not the stripped DOM version) for canonical storage.
   const row = applyResolvedRow(rowData, rowEl, {
     appId,
     type,
-    title: rowEl.dataset.stptTitle,
+    title,
     cacheKey,
   });
 
@@ -101,54 +102,72 @@ export function handleRuntimeMessage(message, deps) {
   if (message.type === 'SETTINGS_UPDATED') {
     const oldRegion = settingsRef.current ? getDisplayRegion(settingsRef.current) : null;
     settingsRef.current = message.settings;
+    settingsRef.revision = (settingsRef.revision ?? 0) + 1;
+    const myRev = settingsRef.revision;
     const newRegion = getDisplayRegion(message.settings);
     const regionChanged = oldRegion !== newRegion;
 
     rowData.forEach(row => {
       if (!row.appId) return;
-      const newSettings = message.settings;
 
       function applyPrice(priceData) {
         if (priceData) {
-          const gameInfo = { ...row, settings: newSettings };
+          // Stale guard — newer settings update may have landed
+          if (settingsRef.revision !== myRev || getDisplayRegion(settingsRef.current) !== newRegion) return true;
+          const gameInfo = { ...row, settings: message.settings };
           replaceBadge(row.el, priceData, gameInfo);
           updateSidebarRow(row.el.dataset.stptId, gameInfo);
           if (workstation) {
-            const price = _getBadgePrice(priceData, newSettings);
-            const update = {};
-            setWorkstationPrice(update, row.appId, row.type, priceData, newSettings);
+            const price = _getBadgePrice(priceData, message.settings);
+            const resolvedUpdate = { price };
             if (price != null) {
-              workstation.updateResolvedPageGame(row.el.dataset.stptId, { price, currency: priceData.prices?.currency ?? newSettings.currency ?? 'EUR' });
-              if (Object.keys(update).length > 0) workstation.updateGamePrices(update);
+              resolvedUpdate.currency = priceData.prices?.currency ?? message.settings.currency ?? 'EUR';
             }
+            workstation.updateResolvedPageGame(row.el.dataset.stptId, resolvedUpdate);
+
+            const priceMap = {};
+            setWorkstationPrice(priceMap, row.appId, row.type, priceData, message.settings);
+            if (Object.keys(priceMap).length > 0) workstation.updateGamePrices(priceMap);
           }
           return true;
         }
         return false;
       }
 
-      if (regionChanged) {
-        sendMessage('GET_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(prices => {
+      function clearRowStalePrices() {
+        // Stale guard — newer update may have already rendered valid state
+        if (settingsRef.revision !== myRev || getDisplayRegion(settingsRef.current) !== newRegion) return;
+        const existing = row.el.querySelector('.stpt-badge, .stpt-skeleton');
+        if (existing) existing.remove();
+        if (workstation) {
+          workstation.updateResolvedPageGame(row.el.dataset.stptId, { price: null });
+        }
+        injectSkeleton(row.el, true);
+      }
+
+      function fetchFreshPrice() {
+        return sendMessage('GET_PRICES', { items: [priceItem(row)], regions: message.settings.regions }).then(prices => {
           const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
           if (!applyPrice(priceData)) {
-            injectSkeleton(row.el, true);
+            clearRowStalePrices();
           }
         }).catch(() => {
-          injectSkeleton(row.el, true);
+          clearRowStalePrices();
         });
+      }
+
+      if (regionChanged) {
+        fetchFreshPrice();
       } else {
-        sendMessage('GET_CACHED_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(prices => {
-          const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
-          if (applyPrice(priceData)) return;
-          // Cache miss — fall back to GET_PRICES
-          return sendMessage('GET_PRICES', { items: [priceItem(row)], regions: newSettings.regions }).then(freshPrices => {
-            const freshData = readPriceRegion(freshPrices, row.appId, row.type, newRegion);
-            if (!applyPrice(freshData)) {
-              injectSkeleton(row.el, true);
-            }
-          });
-        }).catch(() => {
-          injectSkeleton(row.el, true);
+        sendMessage('GET_CACHED_PRICES', { items: [priceItem(row)], regions: message.settings.regions }).then(
+          prices => {
+            const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
+            if (applyPrice(priceData)) return;
+            return fetchFreshPrice();
+          },
+          () => fetchFreshPrice()
+        ).catch(() => {
+          clearRowStalePrices();
         });
       }
     });
@@ -156,6 +175,12 @@ export function handleRuntimeMessage(message, deps) {
   }
 
   if (message.type === 'PRICE_UPDATED') {
+    // Ignore messages whose region differs from the current display region.
+    // Accept messages without a region field for backward compatibility.
+    if (message.region && settingsRef.current) {
+      if (message.region !== getDisplayRegion(settingsRef.current)) return true;
+    }
+
     const { itemId, appId, itemType, priceData } = message;
     const id = String(itemId ?? appId ?? '');
     const normalizeSteamType = deps.normalizeSteamType;
@@ -170,9 +195,12 @@ export function handleRuntimeMessage(message, deps) {
       updateSidebarRow(row.el.dataset.stptId, gameInfo);
       if (workstation) {
         const price = _getBadgePrice(priceData, settings);
+        const resolvedUpdate = { price };
         if (price != null) {
-          workstation.updateResolvedPageGame(row.el.dataset.stptId, { price, currency: priceData.prices?.currency ?? settings.currency ?? 'EUR' });
+          resolvedUpdate.currency = priceData.prices?.currency ?? settings?.currency ?? 'EUR';
         }
+        workstation.updateResolvedPageGame(row.el.dataset.stptId, resolvedUpdate);
+
         const priceMap = {};
         setWorkstationPrice(priceMap, row.appId, row.type, priceData, settings);
         if (Object.keys(priceMap).length > 0) workstation.updateGamePrices(priceMap);

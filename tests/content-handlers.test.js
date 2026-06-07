@@ -248,6 +248,37 @@ describe('handleManualResolution', () => {
     }));
   });
 
+  it('preserves full Steam title in rowData, sidebar, workstation while DOM/checkbox stays stripped', async () => {
+    const el = makeRowEl({ stptId: '30', stptTitle: 'Old Match' });
+    const entry = { el, appId: null, type: 'app', title: 'Old Match', cacheKey: null, fuzzy: true, tier: 4 };
+    rowData.push(entry);
+
+    stripParentheses = vi.fn(s => s.replace(/\s*\(.*?\)\s*/g, '').trim());
+
+    sendMessage.mockResolvedValueOnce({ apiKey: null, regions: ['us'] });
+
+    await handleManualResolution(
+      makeEvent(el, { appId: '999', title: 'Prey (2017)', type: 'app' }),
+      makeDeps()
+    );
+
+    // DOM dataset is stripped
+    expect(el.dataset.stptTitle).toBe('Prey');
+    // Checkbox title is also stripped
+    const cb = el.parentNode.querySelector('.stpt-game-checkbox');
+    expect(cb.dataset.stptTitle).toBe('Prey');
+    // rowData title is the full Steam title
+    expect(entry.title).toBe('Prey (2017)');
+    // Sidebar receives full title via gameInfo
+    expect(updateSidebarRow).toHaveBeenCalledWith('30', expect.objectContaining({
+      title: 'Prey (2017)',
+    }));
+    // Workstation receives full title
+    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('30', expect.objectContaining({
+      title: 'Prey (2017)',
+    }));
+  });
+
   it('GET_BUNDLES rejection: resolves rowData, renders with available price data, workstation updated', async () => {
     const el = makeRowEl({ stptId: '21', stptTitle: 'Bundle Fail' });
     const entry = { el, appId: null, type: 'app', title: 'Bundle Fail', cacheKey: null, fuzzy: true, tier: 4 };
@@ -306,7 +337,7 @@ describe('handleRuntimeMessage', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
     rowData = [];
-    settingsRef = { current: null };
+    settingsRef = { current: null, revision: 0 };
     sendMessage = vi.fn();
     replaceBadge = vi.fn();
     updateSidebarRow = vi.fn();
@@ -321,7 +352,9 @@ describe('handleRuntimeMessage', () => {
     };
     _getBadgePrice = vi.fn((pd) => pd?.prices?.currentRetail ?? null);
     setWorkstationPrice = vi.fn((priceMap, appId, type, priceData) => {
-      priceMap[appId] = { price: priceData?.prices?.currentRetail ?? null, currency: 'EUR' };
+      const price = priceData?.prices?.currentRetail ?? null;
+      if (price == null) return;
+      priceMap[appId] = { price, currency: 'EUR' };
     });
   });
 
@@ -369,6 +402,25 @@ describe('handleRuntimeMessage', () => {
 
     expect(handled).toBe(true);
     expect(replaceBadge).not.toHaveBeenCalled();
+  });
+
+  it('PRICE_UPDATED clears a stale workstation price when the new price is N/A', () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = '1b';
+    document.body.appendChild(el);
+
+    rowData.push({ el, appId: '457', type: 'app', title: 'No Price', cacheKey: null });
+    settingsRef.current = { apiKey: 'key', regions: ['us'], currency: 'USD' };
+
+    handleRuntimeMessage({
+      type: 'PRICE_UPDATED',
+      appId: 457,
+      itemType: 'app',
+      priceData: makePriceData(null, 'USD'),
+    }, makeDeps());
+
+    expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('1b', { price: null });
+    expect(workstation.updateGamePrices).not.toHaveBeenCalled();
   });
 
   it('SETTINGS_UPDATED with region change fetches fresh prices and rerenders on success', async () => {
@@ -467,7 +519,7 @@ describe('handleRuntimeMessage', () => {
     });
   });
 
-  it('SETTINGS_UPDATED with unchanged region injects skeleton on GET_CACHED_PRICES rejection', async () => {
+  it('SETTINGS_UPDATED with unchanged region falls back to fresh prices when cache lookup rejects', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = '4';
     document.body.appendChild(el);
@@ -479,20 +531,24 @@ describe('handleRuntimeMessage', () => {
 
     getDisplayRegion.mockImplementation(() => 'us');
 
-    // Reset injectSkeleton mock for clean counting
-    injectSkeleton.mockClear();
-
-    sendMessage.mockRejectedValue(new Error('cache unavailable'));
+    const freshData = makePriceData(549, 'EUR');
+    sendMessage
+      .mockRejectedValueOnce(new Error('cache unavailable'))
+      .mockResolvedValueOnce({ 'app:202': { us: freshData } });
+    readPriceRegion.mockReturnValueOnce(freshData);
 
     handleRuntimeMessage({
       type: 'SETTINGS_UPDATED',
       settings: { apiKey: 'key', regions: ['us'] },
     }, makeDeps());
 
-    // Fire-and-forget rejection now has a .catch() handler; settle it
     await vi.waitFor(() => {
-      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+      expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.any(Object));
+      expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('4', expect.objectContaining({
+        price: 549,
+      }));
     });
+    expect(injectSkeleton).not.toHaveBeenCalled();
   });
 
   it('SETTINGS_UPDATED with changed region updates workstation state after fresh pricing', async () => {
@@ -549,6 +605,30 @@ describe('handleRuntimeMessage', () => {
       }));
       expect(workstation.updateGamePrices).toHaveBeenCalled();
     });
+  });
+
+  it('SETTINGS_UPDATED clears a stale workstation price when cached price is N/A', async () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = 'r2b';
+    document.body.appendChild(el);
+
+    rowData.push({ el, appId: '302', type: 'app', title: 'Cached N/A', cacheKey: null });
+    settingsRef.current = { apiKey: 'key', regions: ['us'], currency: 'USD' };
+    getDisplayRegion.mockImplementation(() => 'us');
+
+    const priceData = makePriceData(null, 'USD');
+    sendMessage.mockResolvedValue({ 'app:302': { us: priceData } });
+    readPriceRegion.mockReturnValue(priceData);
+
+    handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['us'], currency: 'USD' },
+    }, makeDeps());
+
+    await vi.waitFor(() => {
+      expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('r2b', { price: null });
+    });
+    expect(workstation.updateGamePrices).not.toHaveBeenCalled();
   });
 
   it('SETTINGS_UPDATED unchanged region cache miss falls back to GET_PRICES', async () => {
@@ -615,6 +695,254 @@ describe('handleRuntimeMessage', () => {
     await vi.waitFor(() => {
       expect(injectSkeleton).toHaveBeenCalledWith(el, true);
     });
+  });
+
+  it('SETTINGS_UPDATED cache rejection and fresh-price rejection injects skeleton', async () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = 'r5';
+    document.body.appendChild(el);
+
+    rowData.push({ el, appId: '602', type: 'app', title: 'Unavailable', cacheKey: null });
+    settingsRef.current = { apiKey: 'key', regions: ['us'] };
+    getDisplayRegion.mockImplementation(() => 'us');
+
+    sendMessage
+      .mockRejectedValueOnce(new Error('cache unavailable'))
+      .mockRejectedValueOnce(new Error('fresh fetch failed'));
+
+    handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['us'] },
+    }, makeDeps());
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.any(Object));
+      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+    });
+  });
+
+  it('SETTINGS_UPDATED fresh-price rejection removes stale badge and clears workstation', async () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = 's1';
+    // Attach a stale badge that should be removed
+    const oldBadge = document.createElement('span');
+    oldBadge.className = 'stpt-badge';
+    el.appendChild(oldBadge);
+    document.body.appendChild(el);
+
+    rowData.push({ el, appId: '701', type: 'app', title: 'Stale Row', cacheKey: null });
+    settingsRef.current = { apiKey: 'key', regions: ['eu'] };
+    getDisplayRegion.mockImplementation(s => (s.regions?.[0] === 'us' ? 'us' : 'eu'));
+
+    sendMessage.mockRejectedValue(new Error('fetch failed'));
+
+    handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['us'] },
+    }, makeDeps());
+
+    await vi.waitFor(() => {
+      expect(el.querySelector('.stpt-badge')).toBeNull();
+      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+      expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('s1', { price: null });
+    });
+    expect(workstation.updateGamePrices).not.toHaveBeenCalled();
+  });
+
+  it('SETTINGS_UPDATED fresh-price empty data removes stale badge and clears workstation', async () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = 's2';
+    const oldBadge = document.createElement('span');
+    oldBadge.className = 'stpt-badge';
+    el.appendChild(oldBadge);
+    document.body.appendChild(el);
+
+    rowData.push({ el, appId: '702', type: 'app', title: 'Empty Data', cacheKey: null });
+    settingsRef.current = { apiKey: 'key', regions: ['eu'] };
+    getDisplayRegion.mockImplementation(s => (s.regions?.[0] === 'us' ? 'us' : 'eu'));
+
+    sendMessage.mockResolvedValue({}); // no regional data
+    readPriceRegion.mockReturnValue(null);
+
+    handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['us'] },
+    }, makeDeps());
+
+    await vi.waitFor(() => {
+      expect(el.querySelector('.stpt-badge')).toBeNull();
+      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+      expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('s2', { price: null });
+    });
+    expect(workstation.updateGamePrices).not.toHaveBeenCalled();
+  });
+
+  it('stale request failure cannot clear state produced by a newer SETTINGS_UPDATED', async () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = 's3';
+    document.body.appendChild(el);
+
+    rowData.push({ el, appId: '703', type: 'app', title: 'Race Row', cacheKey: null });
+    settingsRef.current = { apiKey: 'key', regions: ['us'] };
+    getDisplayRegion.mockImplementation(s => s.regions?.[0] ?? 'us');
+
+    // Deferred promise so we control resolution order
+    let resolveStale;
+    const stalePromise = new Promise(r => { resolveStale = r; });
+
+    sendMessage.mockReturnValueOnce(stalePromise);
+
+    // Dispatch SETTINGS_UPDATED #1 (region changes, revision = 1)
+    const handled1 = handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['eu'] },
+    }, makeDeps());
+
+    expect(handled1).toBe(true);
+    expect(settingsRef.revision).toBe(1);
+
+    // Simulate a newer settings update arriving before #1's GET_PRICES resolves
+    settingsRef.revision = 2;
+    settingsRef.current = { apiKey: 'key', regions: ['uk'] };
+
+    // Resolve the stale promise (returns valid-looking data)
+    resolveStale({ 'app:703': { eu: makePriceData(199, 'EUR') } });
+    readPriceRegion.mockReturnValue(makePriceData(199, 'EUR'));
+
+    // Wait for the stale chain to settle
+    await vi.waitFor(() => {
+      // Stale guard prevents UI mutation: no replaceBadge, no injectSkeleton
+      expect(replaceBadge).not.toHaveBeenCalled();
+    });
+
+    // The stale callback may have called readPriceRegion (sync, before guard),
+    // but must not have called injectSkeleton or cleared the workstation
+    expect(injectSkeleton).not.toHaveBeenCalled();
+    expect(workstation.updateResolvedPageGame).not.toHaveBeenCalledWith('s3', { price: null });
+  });
+
+  it('overlapping SETTINGS_UPDATED applies only newest response (same region)', async () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = 's4';
+    document.body.appendChild(el);
+
+    rowData.push({ el, appId: '704', type: 'app', title: 'Overlap Row', cacheKey: null });
+    settingsRef.current = { apiKey: 'key', regions: ['us'] };
+    getDisplayRegion.mockImplementation(() => 'us');
+
+    // Deferred promise for the first update's GET_CACHED_PRICES
+    let resolveOld;
+    const oldPromise = new Promise(r => { resolveOld = r; });
+
+    const newPriceData = makePriceData(777, 'EUR');
+    sendMessage
+      .mockReturnValueOnce(oldPromise)                                  // GET_CACHED_PRICES #1
+      .mockResolvedValueOnce({ 'app:704': { us: newPriceData } });      // GET_CACHED_PRICES #2
+
+    // Dispatch #1 (unchanged region, revision = 1, triggers GET_CACHED_PRICES)
+    handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['us'], currency: 'EUR' },
+    }, makeDeps());
+
+    expect(settingsRef.revision).toBe(1);
+
+    // Dispatch #2 before #1 resolves (unchanged region, revision = 2)
+    readPriceRegion.mockReturnValue(newPriceData);
+    handleRuntimeMessage({
+      type: 'SETTINGS_UPDATED',
+      settings: { apiKey: 'key', regions: ['us'], currency: 'EUR' },
+    }, makeDeps());
+
+    expect(settingsRef.revision).toBe(2);
+
+    // Wait for #2's GET_CACHED_PRICES to apply
+    await vi.waitFor(() => {
+      expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('s4', expect.objectContaining({
+        price: 777,
+      }));
+    });
+
+    // Clear mocks to capture only stale-pipeline activity
+    replaceBadge.mockClear();
+    updateSidebarRow.mockClear();
+    workstation.updateResolvedPageGame.mockClear();
+    workstation.updateGamePrices.mockClear();
+
+    // Resolve the stale promise
+    resolveOld({ 'app:704': { us: makePriceData(111, 'EUR') } });
+    readPriceRegion.mockReturnValue(makePriceData(111, 'EUR'));
+
+    // Stale guard prevents the old data from clobbering the newer state
+    await vi.waitFor(() => {
+      // Give microtasks time to settle — nothing should have been updated
+      expect(replaceBadge).not.toHaveBeenCalled();
+    });
+
+    expect(workstation.updateResolvedPageGame).not.toHaveBeenCalledWith('s4', expect.objectContaining({ price: 111 }));
+  });
+
+  it('PRICE_UPDATED message for another region is ignored', () => {
+    settingsRef.current = { apiKey: 'key', regions: ['us'] };
+    getDisplayRegion.mockReturnValue('us');
+
+    const el = document.createElement('span');
+    el.dataset.stptId = 'p1';
+    rowData.push({ el, appId: '801', type: 'app', title: 'Region Mismatch', cacheKey: null });
+
+    const handled = handleRuntimeMessage({
+      type: 'PRICE_UPDATED',
+      appId: 801,
+      itemType: 'app',
+      region: 'eu',
+      priceData: makePriceData(555, 'EUR'),
+    }, makeDeps());
+
+    expect(handled).toBe(true);
+    expect(replaceBadge).not.toHaveBeenCalled();
+    expect(workstation.updateGamePrices).not.toHaveBeenCalled();
+  });
+
+  it('PRICE_UPDATED message with matching region is applied', () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = 'p2';
+    document.body.appendChild(el);
+
+    rowData.push({ el, appId: '802', type: 'app', title: 'Region Match', cacheKey: null });
+    settingsRef.current = { apiKey: 'key', regions: ['us'] };
+    getDisplayRegion.mockReturnValue('us');
+
+    handleRuntimeMessage({
+      type: 'PRICE_UPDATED',
+      appId: 802,
+      itemType: 'app',
+      region: 'us',
+      priceData: makePriceData(444, 'EUR'),
+    }, makeDeps());
+
+    expect(replaceBadge).toHaveBeenCalled();
+    expect(workstation.updateGamePrices).toHaveBeenCalled();
+  });
+
+  it('PRICE_UPDATED message without region field remains compatible', () => {
+    const el = document.createElement('span');
+    el.dataset.stptId = 'p3';
+    document.body.appendChild(el);
+
+    rowData.push({ el, appId: '803', type: 'app', title: 'No Region', cacheKey: null });
+    settingsRef.current = { apiKey: 'key', regions: ['us'] };
+    getDisplayRegion.mockReturnValue('us');
+
+    handleRuntimeMessage({
+      type: 'PRICE_UPDATED',
+      appId: 803,
+      itemType: 'app',
+      // no region field
+      priceData: makePriceData(333, 'EUR'),
+    }, makeDeps());
+
+    expect(replaceBadge).toHaveBeenCalled();
+    expect(workstation.updateGamePrices).toHaveBeenCalled();
   });
 
   it('returns false for unhandled message types', () => {
