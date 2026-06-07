@@ -24,8 +24,9 @@ export async function handleManualResolution(e, deps) {
   // is up to date even if subsequent requests fail.
   // Capture the current title as originalTitle before mutation.
   // Pass the full Steam title (not the stripped DOM version) for canonical storage.
-  const currentTitle = (rowData.find(r => r.el === rowEl))?.title ?? rowEl.dataset.stptTitle;
-  const row = applyResolvedRow(rowData, rowEl, {
+  const row = rowData.find(r => r.el === rowEl);
+  const currentTitle = row?.title ?? rowEl.dataset.stptTitle;
+  applyResolvedRow(rowData, rowEl, {
     appId,
     type,
     title,
@@ -93,7 +94,7 @@ export async function handleManualResolution(e, deps) {
 
   if (workstation) {
     const price = priceData ? _getBadgePrice(priceData, settings) : null;
-    const resolvedUpdate = { title, appId, type, price, originalTitle: row?.originalTitle ?? currentTitle, manuallyResolved: true };
+    const resolvedUpdate = { title, appId, type, price, originalTitle: row?.originalTitle, manuallyResolved: true };
     if (priceData) {
       resolvedUpdate.currency = priceData.prices?.currency ?? settings.currency ?? 'EUR';
     }

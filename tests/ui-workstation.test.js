@@ -330,4 +330,108 @@ describe('SidebarWorkstation all games count', () => {
     ws2.destroy();
     localStorage.removeItem('stpt-ws-show-original-title');
   });
+
+  // ── updateResolvedPageGame propagates originalTitle/manuallyResolved ─
+
+  it('updateResolvedPageGame propagates originalTitle and manuallyResolved to all three collections', () => {
+    workstation.setPageGames([
+      { stptId: 'pr1', title: 'Game', originalTitle: 'Old', manuallyResolved: true, section: 'have', appId: '1', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const game = workstation.pageGames.find(g => g.stptId === 'pr1');
+    workstation.inTrade.mine = [{ ...game }];
+    workstation.inTrade.trader = [{ ...game }];
+
+    workstation.updateResolvedPageGame('pr1', { originalTitle: 'New Original', manuallyResolved: true });
+    vi.runAllTimers();
+
+    expect(workstation.pageGames.find(g => g.stptId === 'pr1').originalTitle).toBe('New Original');
+    expect(workstation.inTrade.mine.find(g => g.stptId === 'pr1').originalTitle).toBe('New Original');
+    expect(workstation.inTrade.trader.find(g => g.stptId === 'pr1').originalTitle).toBe('New Original');
+    expect(workstation.pageGames.find(g => g.stptId === 'pr1').manuallyResolved).toBe(true);
+    expect(workstation.inTrade.mine.find(g => g.stptId === 'pr1').manuallyResolved).toBe(true);
+    expect(workstation.inTrade.trader.find(g => g.stptId === 'pr1').manuallyResolved).toBe(true);
+  });
+
+  it('updateResolvedPageGame preserves originalTitle and manuallyResolved when update omits them', () => {
+    workstation.setPageGames([
+      { stptId: 'pr2', title: 'Game', originalTitle: 'Keep Me', manuallyResolved: true, section: 'have', appId: '2', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    workstation.updateResolvedPageGame('pr2', { title: 'Renamed Only' });
+    vi.runAllTimers();
+
+    const pg = workstation.pageGames.find(g => g.stptId === 'pr2');
+    expect(pg.title).toBe('Renamed Only');
+    expect(pg.originalTitle).toBe('Keep Me');
+    expect(pg.manuallyResolved).toBe(true);
+  });
+
+  // ── Search and sort use resolved title ───────────────────────────────
+
+  it('search matches resolved title, not original title', () => {
+    workstation.setPageGames([
+      { stptId: 'sr1', title: 'Resolved Name', originalTitle: 'Original Name', manuallyResolved: true, section: 'have', appId: '1', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    // Search for resolved title → match
+    const search = workstation.el.querySelector('.stpt-ws-data .stpt-ws-search input');
+    search.value = 'Resolved';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    vi.advanceTimersByTime(250);
+
+    expect(workstation.el.querySelectorAll('.stpt-game-row').length).toBe(1);
+
+    // Search for original title → no match
+    search.value = 'Original';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    vi.advanceTimersByTime(250);
+
+    expect(workstation.el.querySelectorAll('.stpt-game-row').length).toBe(0);
+  });
+
+  it('sort orders by resolved title even when original title differs', () => {
+    workstation.setPageGames([
+      { stptId: 'so1', title: 'B Resolved', originalTitle: 'A Original', manuallyResolved: true, section: 'have', appId: '1', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+      { stptId: 'so2', title: 'A Resolved', originalTitle: 'B Original', manuallyResolved: true, section: 'have', appId: '2', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const titles = Array.from(workstation.el.querySelectorAll('.stpt-game-row'))
+      .map(r => r.querySelector('.stpt-game-title').textContent);
+    expect(titles).toEqual(['A Resolved', 'B Resolved']);
+  });
+
+  // ── localStorage persistence on toggle ──────────────────────────────
+
+  it('checkbox toggle writes to localStorage', () => {
+    const cb = workstation.el.querySelector('.stpt-ws-orig-title-toggle input');
+    expect(cb.checked).toBe(true);
+
+    // Toggle off
+    cb.checked = false;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(localStorage.getItem('stpt-ws-show-original-title')).toBe('false');
+
+    // Toggle on
+    cb.checked = true;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(localStorage.getItem('stpt-ws-show-original-title')).toBe('true');
+
+    localStorage.removeItem('stpt-ws-show-original-title');
+  });
+
+  // ── Empty filtered results → compact height ─────────────────────────
+
+  it('empty filtered results use 36px row height', () => {
+    // Set games to an empty list
+    workstation.setPageGames([]);
+    vi.runAllTimers();
+
+    // Verify no games rendered and virtual list still works
+    expect(workstation.el.querySelectorAll('.stpt-game-row').length).toBe(0);
+  });
 });

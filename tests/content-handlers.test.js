@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { handleManualResolution, handleRuntimeMessage } from '../content/content-handlers.js';
+import { handleManualResolution, handleRuntimeMessage, bindManualResolutionListener } from '../content/content-handlers.js';
 import { applyResolvedRow } from '../content/resolution-helpers.js';
 
 function makePriceData(currentRetail = 1234, currency = 'EUR') {
@@ -26,28 +26,46 @@ function makeEvent(rowEl, detail = {}) {
   return { target: rowEl, detail };
 }
 
+function createSharedMocks() {
+  return {
+    rowData: [],
+    workstation: {
+      updateResolvedPageGame: vi.fn(),
+      updateGamePrices: vi.fn(),
+      pageGames: [],
+      setPageGames(games) { this.pageGames = games; },
+    },
+    sendMessage: vi.fn(),
+    replaceBadge: vi.fn(),
+    updateSidebarRow: vi.fn(),
+    injectSkeleton: vi.fn(),
+    getDisplayRegion: vi.fn(() => 'us'),
+    readPriceRegion: vi.fn().mockReturnValue(null),
+    _getBadgePrice: vi.fn((pd) => pd?.prices?.currentRetail ?? null),
+    setWorkstationPrice: vi.fn((priceMap, appId, type, priceData) => {
+      priceMap[appId] = { price: priceData?.prices?.currentRetail ?? null, currency: 'EUR' };
+    }),
+  };
+}
+
 describe('handleManualResolution', () => {
   let rowData, workstation, sendMessage, replaceBadge, updateSidebarRow;
   let injectSkeleton, stripParentheses, getDisplayRegion, readPriceRegion;
   let setWorkstationPrice, _getBadgePrice;
 
   beforeEach(() => {
-    rowData = [];
-    workstation = {
-      updateResolvedPageGame: vi.fn(),
-      updateGamePrices: vi.fn(),
-    };
-    sendMessage = vi.fn();
-    replaceBadge = vi.fn();
-    updateSidebarRow = vi.fn();
-    injectSkeleton = vi.fn();
-    setWorkstationPrice = vi.fn((priceMap, appId, type, priceData) => {
-      priceMap[appId] = { price: priceData?.prices?.currentRetail ?? null, currency: 'EUR' };
-    });
+    const shared = createSharedMocks();
+    rowData = shared.rowData;
+    workstation = shared.workstation;
+    sendMessage = shared.sendMessage;
+    replaceBadge = shared.replaceBadge;
+    updateSidebarRow = shared.updateSidebarRow;
+    injectSkeleton = shared.injectSkeleton;
+    getDisplayRegion = shared.getDisplayRegion;
+    readPriceRegion = shared.readPriceRegion;
+    _getBadgePrice = shared._getBadgePrice;
+    setWorkstationPrice = shared.setWorkstationPrice;
     stripParentheses = vi.fn(s => s);
-    _getBadgePrice = vi.fn((pd) => pd?.prices?.currentRetail ?? null);
-    getDisplayRegion = vi.fn(() => 'us');
-    readPriceRegion = vi.fn().mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -368,24 +386,18 @@ describe('bindManualResolutionListener', () => {
 
   beforeEach(() => {
     document.body.innerHTML = '';
-    rowData = [];
-    workstation = {
-      updateResolvedPageGame: vi.fn(),
-      updateGamePrices: vi.fn(),
-      pageGames: [],
-      setPageGames(games) { this.pageGames = games; },
-    };
-    sendMessage = vi.fn();
-    replaceBadge = vi.fn();
-    updateSidebarRow = vi.fn();
-    injectSkeleton = vi.fn();
-    setWorkstationPrice = vi.fn((priceMap, appId, type, priceData) => {
-      priceMap[appId] = { price: priceData?.prices?.currentRetail ?? null, currency: 'EUR' };
-    });
+    const shared = createSharedMocks();
+    rowData = shared.rowData;
+    workstation = shared.workstation;
+    sendMessage = shared.sendMessage;
+    replaceBadge = shared.replaceBadge;
+    updateSidebarRow = shared.updateSidebarRow;
+    injectSkeleton = shared.injectSkeleton;
+    getDisplayRegion = shared.getDisplayRegion;
+    readPriceRegion = shared.readPriceRegion;
+    _getBadgePrice = shared._getBadgePrice;
+    setWorkstationPrice = shared.setWorkstationPrice;
     stripParentheses = vi.fn(s => s);
-    _getBadgePrice = vi.fn((pd) => pd?.prices?.currentRetail ?? null);
-    getDisplayRegion = vi.fn(() => 'us');
-    readPriceRegion = vi.fn().mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -398,19 +410,6 @@ describe('bindManualResolutionListener', () => {
       injectSkeleton, applyResolvedRow, stripParentheses, getDisplayRegion, readPriceRegion,
       _getBadgePrice, setWorkstationPrice,
     };
-  }
-
-  function makeRowEl(dataset = {}) {
-    const el = document.createElement('span');
-    Object.entries(dataset).forEach(([k, v]) => { el.dataset[k] = v; });
-    el.dataset.stptTitle = dataset.stptTitle ?? 'Test Game';
-    const parent = document.createElement('div');
-    const cb = document.createElement('input');
-    cb.className = 'stpt-game-checkbox';
-    cb.dataset.stptTitle = el.dataset.stptTitle;
-    parent.appendChild(cb);
-    parent.appendChild(el);
-    return el;
   }
 
   // ── Integration: ambiguous candidate click ───────────────────────────
@@ -439,7 +438,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, deps);
 
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '456', title: 'Resolved Title', cacheKey: 'new-ck', type: 'app' } }));
@@ -475,7 +473,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, deps);
 
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '888', title: 'Found Game', type: 'app' } }));
@@ -511,7 +508,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, deps);
 
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '999', title: 'A Bundle', type: 'bundle' } }));
@@ -545,7 +541,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, deps);
 
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '777', title: 'A Sub', type: 'sub' } }));
@@ -578,7 +573,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, deps);
 
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '111', title: 'No Price Game', type: 'app' } }));
@@ -627,7 +621,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, makeDeps());
 
     // User selects a candidate → stpt-resolve fires
@@ -682,7 +675,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, deps);
 
     el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '600', title: 'Resolved Steam Title', cacheKey: 'ck-rws', type: 'app' } }));
@@ -736,7 +728,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, makeDeps());
 
     // The resolved title is different from the original
@@ -770,7 +761,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, makeDeps());
 
     const callsBefore = injectSkeleton.mock.calls.length;
@@ -807,7 +797,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, makeDeps());
 
     // Simulate a CONFIRM_RESOLUTION persistence failure (the picker
@@ -847,7 +836,6 @@ describe('bindManualResolutionListener', () => {
     const doc = document.createElement('div');
     doc.appendChild(container);
     document.body.appendChild(doc);
-    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
     bindManualResolutionListener(doc, deps);
 
     // This must not throw or produce an unhandled rejection
@@ -862,21 +850,21 @@ describe('handleRuntimeMessage', () => {
 
   beforeEach(() => {
     document.body.innerHTML = '';
-    rowData = [];
+    const shared = createSharedMocks();
+    rowData = shared.rowData;
+    workstation = shared.workstation;
+    sendMessage = shared.sendMessage;
+    replaceBadge = shared.replaceBadge;
+    updateSidebarRow = shared.updateSidebarRow;
+    injectSkeleton = shared.injectSkeleton;
+    getDisplayRegion = shared.getDisplayRegion;
+    readPriceRegion = shared.readPriceRegion;
+    _getBadgePrice = shared._getBadgePrice;
+    setWorkstationPrice = shared.setWorkstationPrice;
     settingsRef = { current: null, revision: 0 };
-    sendMessage = vi.fn();
-    replaceBadge = vi.fn();
-    updateSidebarRow = vi.fn();
-    injectSkeleton = vi.fn();
-    getDisplayRegion = vi.fn(() => 'us');
-    readPriceRegion = vi.fn().mockReturnValue(null);
     priceItem = vi.fn(r => ({ id: r.appId, type: r.type ?? 'app' }));
     normalizeSteamType = vi.fn(t => t || 'app');
-    workstation = {
-      updateResolvedPageGame: vi.fn(),
-      updateGamePrices: vi.fn(),
-    };
-    _getBadgePrice = vi.fn((pd) => pd?.prices?.currentRetail ?? null);
+    // Override: runtime message handler expects setWorkstationPrice to skip null prices
     setWorkstationPrice = vi.fn((priceMap, appId, type, priceData) => {
       const price = priceData?.prices?.currentRetail ?? null;
       if (price == null) return;
