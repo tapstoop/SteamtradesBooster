@@ -153,6 +153,23 @@ const settingsRef = { current: null, revision: 0 }; // Mutable reference for run
   workstation.setWishlistGames(profile.wishlist ?? []);
   workstation.setTradableGames(profile.tradables ?? []);
 
+  // Register the manual-resolution listener AFTER rowData and workstation
+  // are initialized so deps capture live references, not empty startup values.
+  bindManualResolutionListener(document, {
+    rowData,
+    workstation,
+    sendMessage,
+    replaceBadge,
+    updateSidebarRow,
+    injectSkeleton,
+    applyResolvedRow,
+    stripParentheses,
+    getDisplayRegion,
+    readPriceRegion,
+    _getBadgePrice,
+    setWorkstationPrice,
+  });
+
   // Resolve "other tradables" names → appIds and fetch their prices
   const tradableNames = (profile.tradables ?? []).filter(t => typeof t === 'string' || t?.name).map(t => typeof t === 'string' ? t : t.name);
   if (tradableNames.length > 0 && settings.apiKey) {
@@ -515,21 +532,6 @@ function setupIntersectionObserver(rows, settings) {
 
   rows.forEach(r => observer.observe(r.el));
 }
-
-bindManualResolutionListener(document, {
-    rowData,
-    workstation: window.__stpt_workstation,
-    sendMessage,
-    replaceBadge,
-    updateSidebarRow,
-    injectSkeleton,
-    applyResolvedRow,
-    stripParentheses,
-    getDisplayRegion,
-    readPriceRegion,
-    _getBadgePrice,
-    setWorkstationPrice,
-  });
 
 // Listen for recheck events (user clicked dismissed badge)
 document.addEventListener('stpt-recheck', async e => {

@@ -372,6 +372,8 @@ describe('bindManualResolutionListener', () => {
     workstation = {
       updateResolvedPageGame: vi.fn(),
       updateGamePrices: vi.fn(),
+      pageGames: [],
+      setPageGames(games) { this.pageGames = games; },
     };
     sendMessage = vi.fn();
     replaceBadge = vi.fn();
@@ -594,6 +596,241 @@ describe('bindManualResolutionListener', () => {
       }));
       // updateGamePrices NOT called for null price
       expect(workstation.updateGamePrices).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Production-order: listener bound AFTER init ─────────────────────
+
+  it('production-order: listener bound after rowData and workstation are initialized uses live references', async () => {
+    const el = makeRowEl({ stptId: 'prod-1', stptTitle: 'Page Game' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+
+    // Simulate the production flow: rowData populated by main()
+    rowData.push({ el, appId: null, type: 'app', title: 'Page Game', cacheKey: null, fuzzy: true, tier: 1 });
+
+    // Simulate: workstation pageGames populated by main()
+    workstation.setPageGames([{
+      stptId: 'prod-1', appId: null, type: 'app', title: 'Page Game',
+      price: null, tier: 1, el, section: 'have',
+      inWishlist: true, inTradables: false, currency: 'EUR',
+    }]);
+
+    const priceData = makePriceData(1999, 'EUR');
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'], currency: 'EUR' })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ 'app:500': { us: priceData } });
+    readPriceRegion.mockReturnValueOnce(priceData);
+
+    // Bind listener AFTER init — same order as production code
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, makeDeps());
+
+    // User selects a candidate → stpt-resolve fires
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '500', title: 'Resolved Steam Title', cacheKey: 'ck-prod', type: 'app' } }));
+
+    // rowData reference is live — entry mutated by applyResolvedRow
+    const entry = rowData.find(r => r.el === el);
+    expect(entry.appId).toBe('500');
+    expect(entry.fuzzy).toBe(false);
+    expect(entry.title).toBe('Resolved Steam Title');
+
+    // Immediate workstation identity update (no price yet)
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'prod-1', {
+      title: 'Resolved Steam Title', appId: '500', type: 'app',
+    });
+
+    await vi.waitFor(() => {
+      expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'prod-1', expect.objectContaining({
+        title: 'Resolved Steam Title', appId: '500', type: 'app', price: 1999, currency: 'EUR',
+      }));
+    });
+  });
+
+  // ── Real SidebarWorkstation integration ──────────────────────────────
+
+  it('real SidebarWorkstation: pageGames and DOM update after resolution with real render', async () => {
+    const { SidebarWorkstation } = await import('../content/ui-workstation.js');
+
+    vi.useFakeTimers();
+
+    const ws = new SidebarWorkstation({ threshold: 0.1 });
+    ws.setPageGames([
+      { stptId: 'rws-1', title: 'Original Title', section: 'have', appId: null, type: 'app', price: null, tier: 4, el: null, inWishlist: false, inTradables: false, currency: 'EUR' },
+    ]);
+    vi.runAllTimers();
+
+    workstation = ws;
+    const deps = makeDeps();
+
+    const el = makeRowEl({ stptId: 'rws-1', stptTitle: 'Original Title' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+    rowData.push({ el, appId: null, type: 'app', title: 'Original Title', cacheKey: null, fuzzy: true, tier: 4 });
+
+    const priceData = makePriceData(1299, 'EUR');
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'], currency: 'EUR' })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ 'app:600': { us: priceData } });
+    readPriceRegion.mockReturnValueOnce(priceData);
+
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, deps);
+
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '600', title: 'Resolved Steam Title', cacheKey: 'ck-rws', type: 'app' } }));
+
+    // Immediate identity update (synchronous, before any await)
+    vi.runAllTimers();
+    let pgEntry = ws.pageGames.find(g => g.stptId === 'rws-1');
+    expect(pgEntry.title).toBe('Resolved Steam Title');
+    expect(pgEntry.appId).toBe('600');
+    expect(pgEntry.price).toBeNull();
+
+    // Wait for the async pricing chain to complete
+    await vi.waitFor(() => {
+      const pg = ws.pageGames.find(g => g.stptId === 'rws-1');
+      if (pg?.price !== 1299) throw new Error('price not yet set');
+    }, { timeout: 5000, interval: 50 });
+
+    vi.runAllTimers();
+    pgEntry = ws.pageGames.find(g => g.stptId === 'rws-1');
+    expect(pgEntry.title).toBe('Resolved Steam Title');
+    expect(pgEntry.price).toBe(1299);
+    expect(pgEntry.currency).toBe('EUR');
+
+    ws.destroy();
+    vi.useRealTimers();
+  });
+
+  // ── Title mismatch: SteamTrades title ≠ selected Steam title ────────
+
+  it('stptId update works even when original SteamTrades title differs from resolved Steam title', async () => {
+    const el = makeRowEl({ stptId: 'mismatch-1', stptTitle: 'Weird Name' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+
+    // SteamTrades page listed this as "Weird Name", but user selected "Actual Name" from Steam
+    rowData.push({ el, appId: null, type: 'app', title: 'Weird Name', cacheKey: null, fuzzy: true, tier: 4 });
+
+    workstation.setPageGames([{
+      stptId: 'mismatch-1', appId: null, type: 'app', title: 'Weird Name',
+      price: null, tier: 4, el, section: 'have',
+      inWishlist: false, inTradables: false, currency: 'EUR',
+    }]);
+
+    const priceData = makePriceData(888, 'USD');
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'], currency: 'USD' })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ 'app:700': { us: priceData } });
+    readPriceRegion.mockReturnValueOnce(priceData);
+
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, makeDeps());
+
+    // The resolved title is different from the original
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '700', title: 'Actual Name', type: 'app' } }));
+
+    // Updated by stptId, not by matching the old title
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'mismatch-1', {
+      title: 'Actual Name', appId: '700', type: 'app',
+    });
+
+    const entry = rowData.find(r => r.el === el);
+    expect(entry.title).toBe('Actual Name');
+
+    await vi.waitFor(() => {
+      expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'mismatch-1', expect.objectContaining({
+        title: 'Actual Name', appId: '700', type: 'app', price: 888,
+      }));
+    });
+  });
+
+  // ── Single listener invocation ──────────────────────────────────────
+
+  it('only one listener is triggered per stpt-resolve dispatch', async () => {
+    const el = makeRowEl({ stptId: 'once-1', stptTitle: 'One Shot' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+    rowData.push({ el, appId: null, type: 'app', title: 'One Shot', cacheKey: null, fuzzy: true });
+
+    sendMessage.mockResolvedValueOnce({ apiKey: null, regions: ['us'] });
+
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, makeDeps());
+
+    const callsBefore = injectSkeleton.mock.calls.length;
+
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '900', title: 'Only Once', type: 'app' } }));
+
+    // injectSkeleton should be called exactly once more
+    expect(injectSkeleton).toHaveBeenCalledTimes(callsBefore + 1);
+    expect(workstation.updateResolvedPageGame).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Persistence-rejection coverage ──────────────────────────────────
+
+  it('N/A search result flow: badge removed, skeleton injected, rowData and identity updated even on persistence failure', async () => {
+    const el = makeRowEl({ stptId: 'nas-1', stptTitle: 'Not Found Game' });
+    const container = el.parentNode;
+    document.body.appendChild(container);
+
+    // Attach a not-found badge (simulating current DOM state)
+    const nfBadge = document.createElement('span');
+    nfBadge.className = 'stpt-badge';
+    nfBadge.dataset.type = 'NA';
+    el.appendChild(nfBadge);
+
+    rowData.push({ el, appId: null, type: 'app', title: 'Not Found Game', cacheKey: 'nf-ck', fuzzy: true, tier: 4 });
+
+    const priceData = makePriceData(1599, 'EUR');
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: 'key', regions: ['us'], currency: 'EUR' })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({ 'app:800': { us: priceData } });
+    readPriceRegion.mockReturnValueOnce(priceData);
+
+    const doc = document.createElement('div');
+    doc.appendChild(container);
+    document.body.appendChild(doc);
+    const { bindManualResolutionListener } = await import('../content/content-handlers.js');
+    bindManualResolutionListener(doc, makeDeps());
+
+    // Simulate a CONFIRM_RESOLUTION persistence failure (the picker
+    // dispatches stpt-resolve first then fires CONFIRM_RESOLUTION async;
+    // this test covers the case where stpt-resolve succeeds but persistence fails)
+    el.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: '800', title: 'Found via Search', cacheKey: 'nf-ck', type: 'app' } }));
+
+    // Badge removed, skeleton injected immediately
+    expect(el.querySelector('.stpt-badge')).toBeNull();
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
+
+    const entry = rowData.find(r => r.el === el);
+    expect(entry.appId).toBe('800');
+    expect(entry.fuzzy).toBe(false);
+
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(1, 'nas-1', {
+      title: 'Found via Search', appId: '800', type: 'app',
+    });
+
+    await vi.waitFor(() => {
+      expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'nas-1', expect.objectContaining({
+        price: 1599,
+      }));
     });
   });
 
