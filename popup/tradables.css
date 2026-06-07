@@ -123,13 +123,19 @@
   background: #0d1117;
   border: 1px solid #2a3f5f;
   border-radius: 3px;
-  padding: 5px 4px;
+  padding: 5px 18px 5px 4px;
   color: #c6d4df;
   font-size: 10px;
   font-family: inherit;
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
+  appearance: none;
+  -moz-appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%2366c0f4' d='M4 6L1 3h6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 4px center;
 }
 .tradables-sort:focus { outline: none; border-color: #66c0f4; }
 
@@ -213,15 +219,21 @@
 }
 
 .tradables-qty-arrow {
-  background: none;
-  border: none;
-  color: #4a6a8a;
+  appearance: none;
+  border: 1px solid #2d4f6c;
+  background: #102033;
+  color: #66c0f4;
   font-size: 7px;
   line-height: 1;
   padding: 1px 0;
   cursor: pointer;
   user-select: none;
-  transition: color 0.15s;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.tradables-qty-arrow:hover {
+  color: #66c0f4;
+  border-color: #3d7aaf;
+  background: #142840;
 }
 .tradables-qty-arrow:hover {
   color: #66c0f4;
@@ -600,7 +612,7 @@
 
 .tradables-footer .tradables-sort {
   font-size: 9px;
-  padding: 2px 4px;
+  padding: 2px 18px 2px 4px;
 }
 
 /* ── Snapshot UI ─────────────────────────────────────────────────── */
@@ -615,11 +627,17 @@
   background: #0d1117;
   border: 1px solid #2a3f5f;
   border-radius: 3px;
-  padding: 2px 4px;
+  padding: 2px 18px 2px 4px;
   color: #c6d4df;
   font-size: 9px;
   font-family: inherit;
   cursor: pointer;
+  appearance: none;
+  -moz-appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='%2366c0f4' d='M4 6L1 3h6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 4px center;
 }
 
 #t-snapshot-select:focus { outline: none; border-color: #66c0f4; }
