@@ -105,18 +105,20 @@ describe('buildTradablesListItemElement', () => {
     const qtyDown = element.querySelector('.tradables-qty-arrow.tradables-qty-down');
     const qtyInput = element.querySelector('.tradables-qty-input');
     expect(qtyUp.dataset.origIndex).toBe('7');
-    expect(qtyUp.getAttribute('aria-label')).toBe('Increase quantity');
-    expect(qtyUp.textContent).toBe('▲');
-    expect(qtyDown.dataset.origIndex).toBe('7');
-    expect(qtyDown.getAttribute('aria-label')).toBe('Decrease quantity');
-    expect(qtyDown.textContent).toBe('▼');
-    expect(qtyInput.dataset.origIndex).toBe('7');
-    expect(qtyInput.type).toBe('number');
-    expect(qtyInput.min).toBe('1');
-    expect(qtyInput.max).toBe('999');
-    expect(qtyInput.title).toBe('Quantity');
-    expect(qtyInput.value).toBe('2');
-    expect(element.querySelector('.tradables-acq-input').placeholder).toBe('Acq. €');
+  expect(qtyUp.getAttribute('aria-label')).toBe('Increase quantity');
+  expect(qtyUp.textContent).toBe('\u25B2');
+  expect(qtyDown.dataset.origIndex).toBe('7');
+  expect(qtyDown.getAttribute('aria-label')).toBe('Decrease quantity');
+  expect(qtyDown.textContent).toBe('\u25BC');
+  expect(qtyInput.dataset.origIndex).toBe('7');
+  expect(qtyInput.type).toBe('text');
+  expect(qtyInput.inputMode).toBe('numeric');
+  expect(qtyInput.pattern).toBe('[0-9]*');
+  expect(qtyInput.title).toBe('Quantity');
+  expect(qtyInput.value).toBe('2');
+  expect(element.querySelector('.tradables-acq-input').type).toBe('text');
+  expect(element.querySelector('.tradables-acq-input').inputMode).toBe('decimal');
+  expect(element.querySelector('.tradables-acq-input').placeholder).toBe('Acq. \u20AC');
     expect(element.querySelector('.tradables-remove').getAttribute('aria-label')).toBe(`Remove ${item.name}`);
   });
 
@@ -393,6 +395,24 @@ describe('tradables list rendering', () => {
     expect(normalizeTradableItem({ name: 'Low', qty: -10, acqPrice: Infinity })).toMatchObject({
       qty: 1,
       acqPrice: null,
+    });
+    expect(normalizeTradableItem({ name: 'Empty qty', qty: undefined })).toMatchObject({
+      qty: 1,
+    });
+    expect(normalizeTradableItem({ name: 'Invalid qty', qty: 'abc' })).toMatchObject({
+      qty: 1,
+    });
+  });
+
+  it('rejects partial and non-finite acquisition prices', () => {
+    expect(normalizeTradableItem({ name: 'Partial', qty: 1, acqPrice: '12abc' })).toMatchObject({
+      acqPrice: null,
+    });
+    expect(normalizeTradableItem({ name: 'Blank', qty: 1, acqPrice: '' })).toMatchObject({
+      acqPrice: null,
+    });
+    expect(normalizeTradableItem({ name: 'Float', qty: 1, acqPrice: '12.34' })).toMatchObject({
+      acqPrice: 12.34,
     });
   });
 });

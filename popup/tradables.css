@@ -238,9 +238,6 @@
 
 .tradables-qty-input {
   width: 24px;
-  -moz-appearance: textfield;
-  -webkit-appearance: none;
-  appearance: none;
   background: #0d1117;
   border: none;
   border-radius: 2px;
@@ -255,12 +252,6 @@
   outline: none;
   background: #1a2030;
 }
-.tradables-qty-input::-webkit-inner-spin-button,
-.tradables-qty-input::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
 .tradables-appid {
   font-size: 9px;
   color: #66c0f4;

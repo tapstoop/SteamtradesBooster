@@ -213,9 +213,9 @@ export function buildTradablesListItemElement(item, {
   qtyUp.textContent = '▲';
 
   const qtyInput = document.createElement('input');
-  qtyInput.type = 'number';
-  qtyInput.min = '1';
-  qtyInput.max = '999';
+  qtyInput.type = 'text';
+  qtyInput.inputMode = 'numeric';
+  qtyInput.pattern = '[0-9]*';
   qtyInput.className = 'tradables-qty-input';
   qtyInput.value = String(quantity);
   qtyInput.dataset.origIndex = origIndex;
@@ -260,10 +260,11 @@ export function buildTradablesListItemElement(item, {
   actions.className = 'tradables-item-actions';
 
   const acqInput = document.createElement('input');
-  acqInput.type = 'number';
+  acqInput.type = 'text';
+  acqInput.inputMode = 'decimal';
+  acqInput.pattern = '[0-9]*[.]?[0-9]*';
   acqInput.className = 'tradables-acq-input';
   acqInput.placeholder = `Acq. ${currencySymbol}`;
-  acqInput.step = '0.01';
   acqInput.value = acqPrice != null ? String(acqPrice) : '';
   acqInput.dataset.origIndex = origIndex;
   acqInput.title = 'Your acquisition price (optional)';
@@ -851,7 +852,9 @@ export async function initTradables(container) {
         const origIdx = parseInt(input.dataset.origIndex);
         const item = tradablesList[origIdx];
         if (item) {
-          item.acqPrice = input.value ? parseFloat(input.value) : null;
+          const raw = input.value.trim();
+          const num = raw === '' ? null : Number(raw);
+          item.acqPrice = Number.isFinite(num) ? num : null;
           await save();
           render();
           updateStats();

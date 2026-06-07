@@ -84,7 +84,9 @@ Manual Firefox temporary add-on smoke testing passed at a high level. Core behav
 **Custom arrow controls (no native/double arrows):**
 - `.tradables-qty-arrow`: converted from bare text to bordered buttons with `appearance:none`, border, and background.
 - `.tradables-sort`, `#t-snapshot-select`, `.settings-select`, `.deals-compact-select`, `.stpt-ws-sort-select`: all `<select>` elements now use `appearance:none; -moz-appearance:none; -webkit-appearance:none;` with an inline SVG down-caret and extra right padding to prevent text/arrow overlap.
-- Number input spinners suppressed with `-moz-appearance:textfield` and `::-webkit-*-spin-button` rules.
+- Quantity and acquisition-price `type="number"` inputs replaced with `type="text"` + `inputMode="numeric"`/`"decimal"` + `pattern` attributes. This eliminates native spinner arrows in both Chrome and Firefox while retaining custom ▲/▼ buttons and manual keyboard entry.
+- Number-input-specific `appearance` and `::-webkit-*-spin-button` CSS rules removed.
+- Acquisition-price handler uses strict `Number.isFinite()` normalization; partial values like "12abc" are rejected (saved as null).
 - Removed inline `padding:2px 4px` from `#deals-sort` so it inherits `.tradables-sort` padding with arrow clearance.
 - Removed duplicate `.tradables-qty-arrow:hover` block.
 
@@ -93,6 +95,11 @@ Manual Firefox temporary add-on smoke testing passed at a high level. Core behav
 - [x] Toolbar icon visible in Firefox packaged build.
 - [x] Tradables quantity arrow buttons render as visible bordered buttons (not bare text).
 - [x] Tradables quantity arrow buttons respond to click with increment/decrement.
+- [ ] Quantity shows only the custom ▲/▼ buttons — no native number steppers.
+- [ ] Acquisition price shows no arrows, including on hover/focus.
+- [ ] Quantity and acquisition values can still be typed manually.
+- [ ] Quantity buttons increment/decrement and remain centered.
+- [ ] No native steppers appear in Chrome or Firefox.
 - [x] Tradables sort, snapshot select, settings currency select, deals cache-age select, and workstation sort select all show custom SVG arrows.
 - [x] No native/double arrows visible on any `<select>` element.
 - [x] No text overlap with custom arrows (right padding reserved for SVG).
