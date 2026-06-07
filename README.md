@@ -93,15 +93,22 @@ npm ci
 ### Build
 
 ```bash
-npm run build
+npm run build          # Chrome package (default)
+npm run build:chrome   # Chrome package (explicit)
+npm run build:firefox  # Firefox package
 ```
 
-This produces a `steamtrades_booster_v<version>/` folder and a `steamtrades_booster_v<version>.zip` package in the project root.
+Each produces a `steamtrades_booster_<browser>_v<version>/` folder and `.zip` package in the project root.
 
 To test in Chrome:
 1. Open `chrome://extensions/`
 2. Enable **Developer mode** (top right)
-3. Click **Load unpacked** and select the `steamtrades_booster_v<version>/` folder
+3. Click **Load unpacked** and select the `steamtrades_booster_chrome_v<version>/` folder
+
+To test in Firefox:
+1. Open `about:debugging#/runtime/this-firefox`
+2. Click **Load Temporary Add-on**
+3. Select `steamtrades_booster_firefox_v<version>/manifest.json`
 
 ### Testing
 
