@@ -4,19 +4,18 @@
 [![Firefox Add-on](https://img.shields.io/badge/Firefox_Add--on-Install-FF7139?logo=firefox&logoColor=white)](https://addons.mozilla.org/fr/firefox/addon/steamtrades-booster/)
 [![GitHub Release](https://img.shields.io/github/v/release/tapstoop/SteamtradesBooster)](https://github.com/tapstoop/SteamtradesBooster/releases)
 
-The essential trading companion for SteamTrades. Make smarter trades in seconds.
+The essential trading companion for [steamtrades.com](https://www.steamtrades.com/). Easier trades in seconds.
 
 <img width="1280" height="320" alt="logo" src="https://github.com/user-attachments/assets/1425bb0e-6dd1-4eb2-9dc7-5011d3275894" />
 
 ## Why SteamTrades Booster?
 
-Trading on SteamTrades means juggling dozens of prices, spotting deals, and evaluating if a trade is actually worth your time. **SteamTrades Booster brings market intelligence directly into your workflow** — real-time pricing from GG.deals, visual deal labels, and a powerful trade simulator to validate exchanges before you commit.
+Trading on SteamTrades means juggling dozens of prices, spotting deals, and evaluating if a trade is actually worth your time. **SteamTrades Booster simplifies all of that**: real-time pricing from GG.deals, visual deal labels, and a powerful trade simulator to validate exchanges before you commit.
 
-Stop second-guessing trades. Start making confident offers.
-
-<img width="1280" height="800" alt="screenshotstore_1" src="https://github.com/user-attachments/assets/3e6c9784-5807-4656-ba61-9e078227bd92" />
-
-<img width="1153" height="601" alt="showcase" src="https://github.com/user-attachments/assets/247ca0dd-ffa0-4234-9e04-07c54f17de9e" />
+<img width="1078" height="633" alt="Capture d’écran du 2026-06-12 16-10-26" src="https://github.com/user-attachments/assets/741c716f-6d78-4237-a2f1-1c9c0f0aad29" />
+<img width="260" height="421" alt="Capture d’écran du 2026-06-12 16-07-22" src="https://github.com/user-attachments/assets/48a2527e-a1bb-4332-8b7d-56a3ced2dcab" />
+<img width="260" height="421" alt="Capture d’écran du 2026-06-12 16-06-54" src="https://github.com/user-attachments/assets/8038cc82-14f4-4c4f-945b-068892f3cb54" />
+<img width="260" height="421" alt="Capture d’écran du 2026-06-12 16-06-43" src="https://github.com/user-attachments/assets/e02cad89-a664-4939-a27f-e08d8b3a800e" />
 
 ---
 
