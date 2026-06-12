@@ -14,16 +14,12 @@ firefox-source.zip
 .playwright-cli/
 .playwright-mcp/
 .superpowers/
-.serena/
 
 # Docs and .md files not belonging in repo (except README)
 *.md
 !AGENTS.md
 !README.md
 docs/
-!docs/
-!docs/notes/
-!docs/notes/*.md
 
 # Test results
 test-results/

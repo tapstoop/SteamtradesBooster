@@ -1,6 +1,7 @@
 # SteamTrades Booster
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Install-4285F4?logo=google-chrome&logoColor=white)](https://chromewebstore.google.com/detail/steamtrades-booster/nonelebfpfibhlmajbejoilgiojalhba?authuser=0&hl=fr)
+[![Firefox Add-on](https://img.shields.io/badge/Firefox_Add--on-Install-FF7139?logo=firefox&logoColor=white)](https://addons.mozilla.org/fr/firefox/addon/steamtrades-booster/)
 [![GitHub Release](https://img.shields.io/github/v/release/tapstoop/SteamtradesBooster)](https://github.com/tapstoop/SteamtradesBooster/releases)
 
 The essential trading companion for SteamTrades. Make smarter trades in seconds.
@@ -21,33 +22,35 @@ Stop second-guessing trades. Start making confident offers.
 
 ## What You Get
 
-### 🎯 Smart Game Labeling
-Every game on a trade page is instantly categorized:
-- **WISH** — Games on your Steam wishlist  
-- **OWN (WIP)** — Games you already have (from your tradables list)  
-- **DEAL** — Games below historical average price  
-- **ATL** — All-Time Low prices  
-- **DELISTED (LIMITED ATM)** — Games no longer available on key shops  
-- **TRADE** — Games that you're ready to trade
+### Game Labels
+Every game on a trade page gets a clear label:
 
-Know at a glance which games matter to you and what the market is paying.
+- **WISH**: On your Steam wishlist.
+- **DEAL**: Priced below historical average.
+- **ATL**: At its all-time low price.
+- **DELISTED**: No longer sold on key shops, potentially scarce.
+- **TRADE**: In your tradables list, ready to offer.
 
-### 📊 Price Trends at Your Fingertips
-See current pricing, lowest recorded prices, and price history for every game. Understand price patterns without hunting across multiple sites.
+Instantly see which games matter to you.
 
-### ⚖️ Trade Simulator
-Build complete trades in a side panel workstation:
-- Add games to both sides of the exchange  
-- See total value and price composition instantly
-- Spot misaligned trades before offering  
-- Compare side-by-side with live GG.deals data
+### Live Pricing
+Current prices, all-time lows, and price history for every game. No more cross-referencing across multiple sites.
 
-### 📋 Your Trading Dashboard
-**Wishlist Tab:** All your wishlist games with current prices and deal ratings, sorted by best opportunity.
+### Trade Simulator
+A side panel workstation for evaluating trades:
 
-**Tradables Tab:** Manage your inventory — see every tradable game and add/remove items. Bulk import your Steam library in one click.
+- Add games to either side of the exchange.
+- See total value and price breakdown instantly.
+- Spot unbalanced trades before you commit.
+- Compare side by side with live GG.deals data.
 
-**Market Insights:** Track which games are priced lowest and highest across the market in real-time.
+### Trading Dashboard
+
+**Wishlist Tab**: Your wishlist games with current prices and deal ratings, so you know when to grab a deal.
+
+**Tradables Tab**: Manage your inventory. Add or remove items, or bulk import your Steam library in one click.
+
+**Price Trends**: Follow the price history of your tradable games in real time.
 
 ---
 
@@ -55,7 +58,7 @@ Build complete trades in a side panel workstation:
 
 1. Get a free API key at [https://gg.deals/api/](https://gg.deals/api/)
 2. Activate your account through the confirmation email
-3. [Install from the Chrome Web Store](https://chromewebstore.google.com/detail/steamtrades-booster/nonelebfpfibhlmajbejoilgiojalhba?authuser=0&hl=fr) (recommended) or download the latest package from the [releases page](https://github.com/tapstoop/SteamtradesBooster/releases) and install manually (see below)
+3. Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/steamtrades-booster/nonelebfpfibhlmajbejoilgiojalhba?authuser=0&hl=fr), [Firefox Add-ons](https://addons.mozilla.org/fr/firefox/addon/steamtrades-booster/), or download the latest package from the [releases page](https://github.com/tapstoop/SteamtradesBooster/releases) and install manually (see below)
 4. Open the popup → **Settings** → paste your API key and Steam profile URL
 5. Visit any trade page on [steamtrades.com](https://www.steamtrades.com) — overlays and sidebar activate automatically
 
@@ -66,10 +69,19 @@ Build complete trades in a side panel workstation:
 1. Go to the [releases page](https://github.com/tapstoop/SteamtradesBooster/releases)
 2. Download the `steamtrades_booster_v<version>.zip` file from the latest release
 3. Unzip it anywhere on your computer
-4. Open your Chromium-based browser (Chrome, Brave, Edge, Opera, etc.) and go to `chrome://extensions/`
+
+**Chromium browsers** (Chrome, Brave, Edge, Opera, etc.):
+
+4. Go to `chrome://extensions/`
 5. Enable **Developer mode** (toggle in the top-right corner)
 6. Click **Load unpacked** and select the unzipped folder
 7. Click the puzzle piece icon in the toolbar, find SteamTrades Booster, and click the pin icon to keep it visible
+
+**Firefox:**
+
+4. Go to `about:debugging#/runtime/this-firefox`
+5. Click **Load Temporary Add-on**
+6. Select `manifest.json` inside the unzipped folder
 
 ---
 
