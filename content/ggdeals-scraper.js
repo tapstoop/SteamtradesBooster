@@ -2,9 +2,18 @@
 // Scrapes "2nd best" historical price from GG.deals game pages
 // Used as fallback when historical low is "Free" (giveaway)
 
+import { runtimeSendMessage } from '../utils/chrome-api.js';
+
 (function() {
   const GAME_ID_MATCH = window.location.pathname.match(/\/game\/([^/]+)/);
   if (!GAME_ID_MATCH) return;
+
+  let isScrapeTab = false;
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === 'GGDEALS_SCRAPE_TAB') {
+      isScrapeTab = true;
+    }
+  });
 
   function parsePrice(priceStr) {
     if (!priceStr) return null;
@@ -71,6 +80,25 @@
 
   async function scrapeAndSend() {
     try {
+      // Wait for the SW's GGDEALS_SCRAPE_TAB ping (SW retries for ~6s after tab
+      // creation; this window must cover the delivery latency after our listener registers)
+      await new Promise(r => setTimeout(r, 1500));
+
+      if (isScrapeTab) {
+        // Extension scrape tab: always scroll + scrape + send (current behavior)
+      } else {
+        // User navigation: check the toggle
+        let settings;
+        try {
+          settings = await runtimeSendMessage('GET_SETTINGS');
+        } catch {
+          // Settings fetch failed → fall back to scroll (preserve scraping)
+        }
+        if (settings && settings.ggdealsAutoScroll === false) {
+          return; // No scroll, no scrape
+        }
+      }
+
       await new Promise(r => setTimeout(r, 2000));
 
       const priceHistoryEl = document.querySelector('#price-history');

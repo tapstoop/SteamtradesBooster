@@ -33,8 +33,8 @@ execSync(`${esbuild} background/service-worker.js --bundle --outfile=${OUTDIR}/d
 // Bundle popup script (eliminates module imports for Brave compatibility)
 execSync(`${esbuild} popup/popup.js --bundle --outfile=${OUTDIR}/dist/popup.js --format=iife`, { stdio: 'inherit' });
 
-// Copy standalone content script
-copyFileSync('content/ggdeals-scraper.js', `${OUTDIR}/dist/ggdeals-scraper.js`);
+// Bundle standalone content script
+execSync(`${esbuild} content/ggdeals-scraper.js --bundle --outfile=${OUTDIR}/dist/ggdeals-scraper.js --format=iife`, { stdio: 'inherit' });
 
 // Write packaged manifest (bundled version — no module type)
 const includeIcons = existsSync('icons');

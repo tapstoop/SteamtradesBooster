@@ -106,6 +106,34 @@
   content: '✕';
 }
 
+/* ── Exclusion Button ─────────────────────────── */
+#stpt-exclusion-btn {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  z-index: 99998;
+  background: #2a1a3e;
+  color: #a78bfa;
+  border: 1px solid #4a2a7e;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: 'Segoe UI', sans-serif;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  transition: all 0.2s ease;
+}
+#stpt-exclusion-btn:hover {
+  background: #3a2a5e;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+}
+#stpt-exclusion-btn.active {
+  background: #1a3a2e;
+  color: #4ade80;
+  border-color: #2a7a5e;
+}
+
 /* ── Skeleton ─────────────────────────────────── */
 .stpt-skeleton {
   display: inline-block;

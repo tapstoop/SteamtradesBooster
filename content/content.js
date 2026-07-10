@@ -9,12 +9,17 @@ import {
 import { applyResolvedRow } from './resolution-helpers.js';
 import { handleManualResolution, handleRuntimeMessage, bindManualResolutionListener } from './content-handlers.js';
 import { _getBadgePrice, setWorkstationPrice } from './price-helpers.js';
+import { isPageExcluded } from '../utils/excluded-pages.js';
 
 let rowData = []; // Store row data for callback access
 let currentSettings = null; // Module-level settings for PRICE_UPDATED and SETTINGS_UPDATED listeners
 const settingsRef = { current: null, revision: 0 }; // Mutable reference for runtime handler
 
 (async function main() {
+  // Inject exclusion button FIRST so it's always available even if SW is down
+  const { injectExclusionButton } = await import('./ui-exclusion.js');
+  injectExclusionButton();
+
   let settings;
   try {
     settings = await sendMessage('GET_SETTINGS');
@@ -24,6 +29,11 @@ const settingsRef = { current: null, revision: 0 }; // Mutable reference for run
   }
   currentSettings = settings; // Store for PRICE_UPDATED / SETTINGS_UPDATED listeners
   settingsRef.current = settings; // Sync mutable ref for handler
+
+  // Check page exclusion
+  const excluded = await sendMessage('GET_EXCLUDED_PAGES').catch(() => []);
+  if (isPageExcluded(location.href, excluded ?? [])) return;
+
   sendMessage('REPORT_PAGE_DIAGNOSTICS', { url: location.href }).catch(() => {});
   if (!settings.showSidebar && !settings.apiKey) return;
 

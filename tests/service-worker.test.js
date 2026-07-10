@@ -10,6 +10,14 @@ global.chrome = {
     create: vi.fn(),
     onAlarm: { addListener: vi.fn() },
   },
+  tabs: {
+    onRemoved: { addListener: vi.fn() },
+    query: vi.fn(),
+    sendMessage: vi.fn((tabId, message, optionsOrCallback) => {
+      const cb = typeof optionsOrCallback === 'function' ? optionsOrCallback : undefined;
+      cb?.();
+    }),
+  },
   storage: {
     local: {
       get: vi.fn((keys, cb) => cb({})),

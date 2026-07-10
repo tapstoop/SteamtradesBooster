@@ -1,5 +1,7 @@
 // popup/settings.js
 
+import { isSteamTradesUrl, normalizePageUrl } from '../utils/excluded-pages.js';
+
 const REGIONS = ['au','be','br','ca','ch','de','dk','es','eu','fi','fr','gb','ie','it','nl','no','pl','se','us'];
 const PLATFORMS = ['Steam','GOG','Epic','EA App','Ubisoft Connect','Battle.net'];
 const KEYSHOPS = ['driffle','eneba','g2a','g2play','gamivo','kinguin'];
@@ -13,7 +15,8 @@ function escapeHtml(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function pad(num) {
@@ -200,6 +203,10 @@ export async function initSettings(container) {
         <label>Show full timestamp in badges</label>
         <input type="checkbox" class="toggle" id="s-fullts" ${settings.showFullTimestamp ? 'checked' : ''}>
       </div>
+      <div class="toggle-row">
+        <label>Auto-scroll to price history on gg.deals pages</label>
+        <input type="checkbox" class="toggle" id="s-ggscroll" ${settings.ggdealsAutoScroll !== false ? 'checked' : ''}>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -222,6 +229,18 @@ export async function initSettings(container) {
       <div class="toggle-row">
         <label>DEAL badge threshold (%)</label>
         <input class="fee-input" id="s-dealthreshold" type="number" min="1" max="50" value="${settings.dealThresholdPct ?? 10}" style="width:50px">
+      </div>
+    </div>
+
+    <div class="settings-section">
+      <div class="settings-label">Personal Pages</div>
+      <div class="personal-pages-info" style="color:#8899aa;font-size:10px;margin-bottom:8px;">
+        Pages listed here won't show price badges or the sidebar. You can also mark a page directly from the trade thread.
+      </div>
+      <div id="s-excluded-pages-list"></div>
+      <div class="personal-pages-add" style="display:flex;gap:6px;margin-top:8px;">
+        <input class="settings-input" id="s-excluded-add-url" type="text" placeholder="Paste a steamtrades.com page URL" style="flex:1;">
+        <button class="btn-primary settings-copy" id="s-excluded-add-btn" type="button" style="white-space:nowrap;">Add Page</button>
       </div>
     </div>
 
@@ -337,6 +356,68 @@ export async function initSettings(container) {
     });
   }
 
+  // ── Excluded pages list ────────────────────────────────────────────────────
+
+  let lastRenderedList = [];
+
+  async function renderExcludedPages(list) {
+    const listEl = container.querySelector('#s-excluded-pages-list');
+    if (!listEl) return;
+    const pages = list !== undefined ? list : await msg('GET_EXCLUDED_PAGES');
+    lastRenderedList = Array.isArray(pages) ? pages : [];
+    if (pages.length === 0) {
+      listEl.innerHTML = '<div style="color:#555;font-size:10px;">No personal pages added yet.</div>';
+      return;
+    }
+    listEl.innerHTML = pages.map(p => {
+      const display = p.startsWith('trade:')
+        ? `steamtrades.com/trade/${p.slice(6)}`
+        : p;
+      return `<div class="excluded-page-row" style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #2a2a2a;">
+        <span style="color:#e2e8f0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;" title="${escapeHtml(p)}">${escapeHtml(display)}</span>
+        <button class="btn-danger excluded-page-delete" data-page="${escapeHtml(p)}" type="button" style="padding:2px 8px;font-size:10px;margin-left:8px;">Delete</button>
+      </div>`;
+    }).join('');
+
+    listEl.querySelectorAll('.excluded-page-delete').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await msg('REMOVE_EXCLUDED_PAGE', { page: btn.dataset.page });
+        renderExcludedPages();
+      });
+    });
+  }
+
+  await renderExcludedPages();
+
+  container.querySelector('#s-excluded-add-btn').addEventListener('click', async () => {
+    const input = container.querySelector('#s-excluded-add-url');
+    const url = input.value.trim();
+    if (!url) return;
+    const before = lastRenderedList;
+    const result = await msg('ADD_EXCLUDED_PAGE', { url });
+    input.value = '';
+    const pages = Array.isArray(result) ? result : undefined;
+    if (pages === undefined) { renderExcludedPages(); return; }
+    renderExcludedPages(pages);
+    const added = pages.length > before.length;
+    if (!added) {
+      const isValid = isSteamTradesUrl(url);
+      const isDuplicate = isValid && before.includes(normalizePageUrl(url));
+      const msgEl = document.createElement('div');
+      msgEl.className = 'add-error-msg';
+      msgEl.style.cssText = 'color:#ff6b6b;font-size:10px;margin-top:4px;';
+      msgEl.textContent = !isValid
+        ? 'URL must be a steamtrades.com page'
+        : isDuplicate
+          ? 'Already in your personal pages'
+          : 'Could not add this page';
+      const addContainer = input.parentElement;
+      addContainer.querySelector('.add-error-msg')?.remove();
+      addContainer.appendChild(msgEl);
+      setTimeout(() => msgEl.remove(), 2000);
+    }
+  });
+
   // ── Currency change ────────────────────────────────────────────────────────
   container.querySelector('#s-currency').addEventListener('change', async () => {
     settings.currency = container.querySelector('#s-currency').value;
@@ -391,6 +472,7 @@ export async function initSettings(container) {
       keyshopFees,
       showSidebar: container.querySelector('#s-sidebar').checked,
       showFullTimestamp: container.querySelector('#s-fullts').checked,
+      ggdealsAutoScroll: container.querySelector('#s-ggscroll').checked,
       selectiveFetch: container.querySelector('#s-selective').checked,
       dealThresholdPct: parseInt(container.querySelector('#s-dealthreshold').value) || 10,
     }});
