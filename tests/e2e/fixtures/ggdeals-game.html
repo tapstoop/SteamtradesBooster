@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GG.deals Game Page Fixture</title>
+</head>
+<body>
+  <div id="price-history">
+    <div class="game-lowest-price-row">
+      <span class="price-type">Historical low:</span>
+      <span class="price">€5.99</span>
+    </div>
+    <div class="game-lowest-price-row">
+      <span class="price-type">2nd best:</span>
+      <span class="price">€7.99</span>
+    </div>
+  </div>
+  <script>
+    // Track scrollIntoView calls for test assertions
+    window._scrollCalls = [];
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function(...args) {
+      window._scrollCalls.push({
+        elementId: this.id,
+        args: args,
+      });
+      return originalScrollIntoView.apply(this, args);
+    };
+  </script>
+</body>
+</html>

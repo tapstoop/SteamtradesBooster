@@ -17,9 +17,11 @@ export function getBuildTarget(rawTarget = 'chrome') {
 }
 
 export function getOutputNames(target, version) {
+  // Chrome requires dot-separated integers for directory naming too
+  const cleanVersion = version.replace(/-.+$/, '');
   return {
-    outDir: `steamtrades_booster_${target}_v${version}`,
-    packageName: `steamtrades_booster_${target}_v${version}.zip`
+    outDir: `steamtrades_booster_${target}_v${cleanVersion}`,
+    packageName: `steamtrades_booster_${target}_v${cleanVersion}.zip`
   };
 }
 
@@ -38,10 +40,14 @@ function createBackground(target) {
 export function createPackagedManifest(manifest, { target, includeIcons }) {
   const action = { ...manifest.action };
 
+  // Chrome requires strictly dot-separated integers for version (no pre-release tags).
+  // Strip semver suffixes like "-alpha.1" → "0.1.4-alpha.1" becomes "0.1.4"
+  const chromeVersion = manifest.version.replace(/-.+$/, '');
+
   const packagedManifest = {
     manifest_version: manifest.manifest_version,
     name: manifest.name,
-    version: manifest.version,
+    version: chromeVersion,
     description: manifest.description,
     permissions: manifest.permissions,
     host_permissions: manifest.host_permissions,

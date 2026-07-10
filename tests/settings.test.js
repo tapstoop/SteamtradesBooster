@@ -123,9 +123,15 @@ describe('settings diagnostics panel', () => {
             selectiveFetch: true,
             dealThresholdPct: 10,
           }
-        : message.type === 'GET_DIAGNOSTIC_LOG'
-          ? { log: diagnosticLog }
-          : {};
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? []
+          : message.type === 'ADD_EXCLUDED_PAGE'
+            ? [message.url]
+            : message.type === 'REMOVE_EXCLUDED_PAGE'
+              ? []
+              : message.type === 'GET_DIAGNOSTIC_LOG'
+                ? { log: diagnosticLog }
+                : {};
       callback?.(response);
       return Promise.resolve(response);
     });
@@ -198,6 +204,409 @@ describe('settings diagnostics panel', () => {
       } else {
         delete globalThis.navigator;
       }
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('calls GET_EXCLUDED_PAGES on init', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? {
+            apiKey: '',
+            steamId: '',
+            currency: 'EUR',
+            regions: ['eu'],
+            platforms: ['steam'],
+            keyshopsEnabled: false,
+            keyshops: [],
+            keyshopFees: {},
+            showSidebar: true,
+            showFullTimestamp: false,
+            selectiveFetch: true,
+            dealThresholdPct: 10,
+          }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? []
+          : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    const storageGet = vi.fn((key, callback) => callback({ [key]: false }));
+    const storageSet = vi.fn((value, callback) => callback?.());
+
+    globalThis.chrome = {
+      runtime: {
+        sendMessage,
+        getManifest: vi.fn(() => ({ version: '0.1.3' })),
+      },
+      storage: {
+        local: {
+          get: storageGet,
+          set: storageSet,
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'GET_EXCLUDED_PAGES' }),
+        expect.any(Function),
+      );
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('adds an excluded page when clicking the add button', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const addedPages = [];
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? {
+            apiKey: '',
+            steamId: '',
+            currency: 'EUR',
+            regions: ['eu'],
+            platforms: ['steam'],
+            keyshopsEnabled: false,
+            keyshops: [],
+            keyshopFees: {},
+            showSidebar: true,
+            showFullTimestamp: false,
+            selectiveFetch: true,
+            dealThresholdPct: 10,
+          }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? [...addedPages]
+          : message.type === 'ADD_EXCLUDED_PAGE'
+            ? (addedPages.push(message.url), [...addedPages])
+            : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    const storageGet = vi.fn((key, callback) => callback({ [key]: false }));
+    const storageSet = vi.fn((value, callback) => callback?.());
+
+    globalThis.chrome = {
+      runtime: {
+        sendMessage,
+        getManifest: vi.fn(() => ({ version: '0.1.3' })),
+      },
+      storage: {
+        local: {
+          get: storageGet,
+          set: storageSet,
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      const input = container.querySelector('#s-excluded-add-url');
+      const btn = container.querySelector('#s-excluded-add-btn');
+      input.value = 'https://www.steamtrades.com/trade/999/test-game';
+      btn.click();
+
+      await vi.waitFor(() => {
+        expect(sendMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'ADD_EXCLUDED_PAGE', url: 'https://www.steamtrades.com/trade/999/test-game' }),
+          expect.any(Function),
+        );
+      });
+
+      const listEl = container.querySelector('#s-excluded-pages-list');
+      expect(listEl.textContent).toContain('steamtrades.com/trade/999');
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('removes an excluded page when clicking delete', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    let pages = ['trade:123'];
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? {
+            apiKey: '',
+            steamId: '',
+            currency: 'EUR',
+            regions: ['eu'],
+            platforms: ['steam'],
+            keyshopsEnabled: false,
+            keyshops: [],
+            keyshopFees: {},
+            showSidebar: true,
+            showFullTimestamp: false,
+            selectiveFetch: true,
+            dealThresholdPct: 10,
+          }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? [...pages]
+          : message.type === 'REMOVE_EXCLUDED_PAGE'
+            ? (pages = pages.filter(p => p !== message.page), [])
+            : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    const storageGet = vi.fn((key, callback) => callback({ [key]: false }));
+    const storageSet = vi.fn((value, callback) => callback?.());
+
+    globalThis.chrome = {
+      runtime: {
+        sendMessage,
+        getManifest: vi.fn(() => ({ version: '0.1.3' })),
+      },
+      storage: {
+        local: {
+          get: storageGet,
+          set: storageSet,
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      await vi.waitFor(() => {
+        const listEl = container.querySelector('#s-excluded-pages-list');
+        expect(listEl.textContent).toContain('steamtrades.com/trade/123');
+      });
+
+      const deleteBtn = container.querySelector('.excluded-page-delete');
+      deleteBtn.click();
+
+      await vi.waitFor(() => {
+        expect(sendMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'REMOVE_EXCLUDED_PAGE', page: 'trade:123' }),
+          expect.any(Function),
+        );
+        const listEl = container.querySelector('#s-excluded-pages-list');
+        expect(listEl.textContent).not.toContain('steamtrades.com/trade/123');
+      });
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shows "must be a steamtrades.com page" when adding invalid URL to empty list', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? {
+            apiKey: '',
+            steamId: '',
+            currency: 'EUR',
+            regions: ['eu'],
+            platforms: ['steam'],
+            keyshopsEnabled: false,
+            keyshops: [],
+            keyshopFees: {},
+            showSidebar: true,
+            showFullTimestamp: false,
+            selectiveFetch: true,
+            dealThresholdPct: 10,
+          }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? []
+          : message.type === 'ADD_EXCLUDED_PAGE'
+            ? []
+            : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    const storageGet = vi.fn((key, callback) => callback({ [key]: false }));
+    const storageSet = vi.fn((value, callback) => callback?.());
+
+    globalThis.chrome = {
+      runtime: {
+        sendMessage,
+        getManifest: vi.fn(() => ({ version: '0.1.3' })),
+      },
+      storage: {
+        local: {
+          get: storageGet,
+          set: storageSet,
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      const input = container.querySelector('#s-excluded-add-url');
+      const btn = container.querySelector('#s-excluded-add-btn');
+      input.value = 'https://example.com/trade/123';
+      btn.click();
+
+      await vi.waitFor(() => {
+        const msgEl = container.querySelector('.add-error-msg');
+        expect(msgEl).not.toBeNull();
+        expect(msgEl.textContent).toBe('URL must be a steamtrades.com page');
+      });
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shows "Already in your personal pages" when re-adding a duplicate URL', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const existingList = ['trade:999'];
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? {
+            apiKey: '',
+            steamId: '',
+            currency: 'EUR',
+            regions: ['eu'],
+            platforms: ['steam'],
+            keyshopsEnabled: false,
+            keyshops: [],
+            keyshopFees: {},
+            showSidebar: true,
+            showFullTimestamp: false,
+            selectiveFetch: true,
+            dealThresholdPct: 10,
+          }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? [...existingList]
+          : message.type === 'ADD_EXCLUDED_PAGE'
+            ? [...existingList]
+            : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    const storageGet = vi.fn((key, callback) => callback({ [key]: false }));
+    const storageSet = vi.fn((value, callback) => callback?.());
+
+    globalThis.chrome = {
+      runtime: {
+        sendMessage,
+        getManifest: vi.fn(() => ({ version: '0.1.3' })),
+      },
+      storage: {
+        local: {
+          get: storageGet,
+          set: storageSet,
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      const input = container.querySelector('#s-excluded-add-url');
+      const btn = container.querySelector('#s-excluded-add-btn');
+      input.value = 'https://www.steamtrades.com/trade/999/test-game';
+      btn.click();
+
+      await vi.waitFor(() => {
+        const msgEl = container.querySelector('.add-error-msg');
+        expect(msgEl).not.toBeNull();
+        expect(msgEl.textContent).toBe('Already in your personal pages');
+      });
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shows "Could not add this page" when backend returns unchanged list for a valid non-duplicate URL', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const existingList = ['trade:111'];
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? {
+            apiKey: '',
+            steamId: '',
+            currency: 'EUR',
+            regions: ['eu'],
+            platforms: ['steam'],
+            keyshopsEnabled: false,
+            keyshops: [],
+            keyshopFees: {},
+            showSidebar: true,
+            showFullTimestamp: false,
+            selectiveFetch: true,
+            dealThresholdPct: 10,
+          }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? [...existingList]
+          : message.type === 'ADD_EXCLUDED_PAGE'
+            ? [...existingList]
+            : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    const storageGet = vi.fn((key, callback) => callback({ [key]: false }));
+    const storageSet = vi.fn((value, callback) => callback?.());
+
+    globalThis.chrome = {
+      runtime: {
+        sendMessage,
+        getManifest: vi.fn(() => ({ version: '0.1.3' })),
+      },
+      storage: {
+        local: {
+          get: storageGet,
+          set: storageSet,
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      const input = container.querySelector('#s-excluded-add-url');
+      const btn = container.querySelector('#s-excluded-add-btn');
+      // Valid steamtrades URL, not in the existing list, but backend returns unchanged list
+      input.value = 'https://www.steamtrades.com/trade/222/new-trade';
+      btn.click();
+
+      await vi.waitFor(() => {
+        const msgEl = container.querySelector('.add-error-msg');
+        expect(msgEl).not.toBeNull();
+        expect(msgEl.textContent).toBe('Could not add this page');
+      });
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
       document.body.replaceChildren();
       vi.restoreAllMocks();
     }

@@ -4,8 +4,9 @@ import { resolveTitle, confirmResolution } from './resolver.js';
 import { fetchProfile, getCachedProfile } from './profile.js';
 import { cacheGet, cacheSet, cacheClear, setDismissed, setUndismissed, isDismissed, setDelisted, setUndelisted } from './cache.js';
 import { getDisplayRegion, normalizeSteamType } from '../utils/similarity.js';
-import { writeSnapshot, pruneOldSnapshots } from './snapshots.js';
 import { scrapeGame, scrapeBatch, handleScrapedResult, getScrapedData } from './ggdeals-scraper.js';
+import { normalizePageUrl, isSteamTradesUrl } from '../utils/excluded-pages.js';
+import { writeSnapshot, pruneOldSnapshots } from './snapshots.js';
 import {
   buildDiagnosticLog as renderDiagnosticLog,
   DEFAULT_RESOLUTION_STATS,
@@ -18,6 +19,7 @@ import {
 const SETTINGS_KEY = 'settings';
 const TRADABLES_KEY = 'tradables_list';
 const TRADABLES_SNAPSHOTS_INDEX_KEY = 'tradables_snapshots_index';
+const EXCLUDED_PAGES_KEY = 'excluded_pages';
 const ALARM_NAME = 'daily-snapshot';
 
 // --- Default Settings (tradables now stored separately) ---
@@ -44,6 +46,7 @@ const DEFAULT_SETTINGS = {
   rangeHighRatio: 3.0,
   snapshotWindowDays: 180,
   currency: 'EUR',
+  ggdealsAutoScroll: true,
 };
 
 /**
@@ -232,14 +235,14 @@ chrome.alarms.onAlarm.addListener(async alarm => {
 
 // --- Message Router ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  handleMessage(message).then(sendResponse).catch(err => {
+  handleMessage(message, sender).then(sendResponse).catch(err => {
     console.error('[SW] Error handling message', message.type, err);
     sendResponse({ error: err.message });
   });
   return true; // keep channel open for async response
 });
 
-async function handleMessage(msg) {
+async function handleMessage(msg, sender) {
   const settings = await getSettings();
 
   switch (msg.type) {
@@ -254,6 +257,45 @@ async function handleMessage(msg) {
     case 'SAVE_TRADABLES': {
       await cacheSet(TRADABLES_KEY, msg.tradables, 0);
       return { ok: true };
+    }
+
+    case 'GET_EXCLUDED_PAGES': {
+      const cached = await cacheGet(EXCLUDED_PAGES_KEY);
+      return cached?.value ?? [];
+    }
+
+    case 'SAVE_EXCLUDED_PAGES': {
+      const pages = Array.isArray(msg.pages) ? msg.pages : [];
+      await cacheSet(EXCLUDED_PAGES_KEY, pages, 0);
+      return { ok: true };
+    }
+
+    case 'ADD_EXCLUDED_PAGE': {
+      const rawUrl = typeof msg.url === 'string' ? msg.url : '';
+      if (!rawUrl || !isSteamTradesUrl(rawUrl)) {
+        const cached = await cacheGet(EXCLUDED_PAGES_KEY);
+        return cached?.value ?? [];
+      }
+      const normalized = normalizePageUrl(rawUrl);
+      const cached = await cacheGet(EXCLUDED_PAGES_KEY);
+      const list = cached?.value ?? [];
+      if (!list.includes(normalized)) {
+        list.push(normalized);
+        await cacheSet(EXCLUDED_PAGES_KEY, list, 0);
+      }
+      return list;
+    }
+
+    case 'REMOVE_EXCLUDED_PAGE': {
+      const page = normalizePageUrl(typeof msg.page === 'string' ? msg.page : '');
+      if (!page) {
+        const cached = await cacheGet(EXCLUDED_PAGES_KEY);
+        return cached?.value ?? [];
+      }
+      const cached = await cacheGet(EXCLUDED_PAGES_KEY);
+      const list = (cached?.value ?? []).filter(p => p !== page);
+      await cacheSet(EXCLUDED_PAGES_KEY, list, 0);
+      return list;
     }
 
     case 'SAVE_SETTINGS': {

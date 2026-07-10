@@ -15,6 +15,19 @@ function broadcastProgress(message) {
   runtimeSendMessage(message).catch(() => {});
 }
 
+export async function sendScrapePing(tabId, retries = 30, delayMs = 200) {
+  for (let i = 0; i < retries; i++) {
+    const delivered = await new Promise(resolve => {
+      chrome.tabs.sendMessage(tabId, { type: 'GGDEALS_SCRAPE_TAB' }, () => {
+        resolve(!chrome.runtime.lastError);
+      });
+    });
+    if (delivered) return true;
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return false;
+}
+
 export async function scrapeGame(gameId, ggdealsUrl) {
   if (!ggdealsUrl) {
     return { success: false, error: 'No GG.deals URL provided' };
@@ -33,15 +46,16 @@ export async function scrapeGame(gameId, ggdealsUrl) {
 async function scrapeSingleTab(gameId, url) {
   try {
     const tab = await tabsCreate({ url, active: true });
+    sendScrapePing(tab.id).catch(() => {});
 
     return await new Promise((resolve) => {
-      const closeTab = () => {
+      const cleanup = () => {
         tabsRemove(tab.id).catch(() => {});
       };
 
       const timeoutId = setTimeout(() => {
         chrome.runtime.onMessage.removeListener(listener);
-        closeTab();
+        cleanup();
         resolve({ success: false, error: 'Scrape timeout (30s)', tabId: tab.id });
       }, SCRAPE_TIMEOUT_MS);
 
@@ -49,7 +63,7 @@ async function scrapeSingleTab(gameId, url) {
         if (message.type === 'GGDEALS_SCRAPED' && sender?.tab?.id === tab.id) {
           clearTimeout(timeoutId);
           chrome.runtime.onMessage.removeListener(listener);
-          closeTab();
+          cleanup();
           resolve({
             success: message.success,
             data: message.data,
