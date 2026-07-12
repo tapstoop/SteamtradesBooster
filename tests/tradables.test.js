@@ -20,7 +20,9 @@ const {
   buildTradablesResolvePopoverElement,
   buildTradablesSnapshotOptions,
   bindTradablesRuntimeStateForInit,
+  computeTradablesTotalValue,
   createTradablesInitGuard,
+  initTradables,
   normalizeTradableItem,
   parseTradablesAcqPrice,
   parseTradablesQuantity,
@@ -66,6 +68,76 @@ describe('tradables init guards', () => {
 });
 
 describe('buildTradablesListItemElement', () => {
+  it('uses manual acquisition price for the displayed unit and quantity total', () => {
+    const element = buildTradablesListItemElement({
+      name: 'Manual Price Game',
+      appId: '123',
+      type: 'app',
+      qty: 3,
+      acqPrice: 10,
+    }, {
+      priceData: {
+        prices: { currentRetail: 119, historicalRetail: 99 },
+      },
+      settings: { currency: 'EUR', keyshopsEnabled: false },
+    });
+
+    const badge = element.querySelector('.tradables-price-badge');
+    expect(badge.classList.contains('manual')).toBe(true);
+    expect(badge.textContent).toContain('€10.00');
+    expect(badge.textContent).toContain('× 3 = €30.00');
+    expect(badge.title).toContain('API: €1.19');
+  });
+
+  it('links resolved titles and valid prices using their typed Steam paths', () => {
+    for (const [type, id, path] of [
+      ['app', '10', '/app/10'],
+      ['sub', '20', '/sub/20'],
+      ['bundle', '30', '/bundle/30'],
+    ]) {
+      const element = buildTradablesListItemElement({
+        name: `Game ${type}`,
+        appId: id,
+        type,
+        qty: 1,
+      }, {
+        priceData: {
+          prices: { currentRetail: 500 },
+          url: 'https://gg.deals/game/example/',
+        },
+      });
+
+      const titleLink = element.querySelector('.tradables-name');
+      expect(titleLink.tagName).toBe('A');
+      expect(new URL(titleLink.href).pathname).toBe(path);
+      expect(titleLink.target).toBe('_blank');
+      expect(titleLink.rel).toBe('noopener noreferrer');
+      expect(titleLink.title).toBe('Open on Steam');
+
+      const ggDealsLink = element.querySelector('.tradables-item-meta a');
+      expect(ggDealsLink.textContent).toBe('GG.deals ↗');
+      expect(ggDealsLink.href).toBe('https://gg.deals/game/example/');
+    }
+  });
+
+  it('keeps unresolved titles plain and omits invalid price links', () => {
+    const element = buildTradablesListItemElement({
+      name: 'Unresolved Game',
+      appId: 'not-an-id',
+      type: 'app',
+      qty: 1,
+    }, {
+      priceData: {
+        prices: { currentRetail: 0 },
+        url: 'javascript:alert(1)',
+      },
+    });
+
+    expect(element.querySelector('.tradables-name').tagName).toBe('SPAN');
+    expect(element.querySelector('.tradables-item-meta a')).toBeNull();
+    expect(element.querySelector('.tradables-unresolved')).not.toBeNull();
+  });
+
   it('renders stored item data as text and preserves row metadata', () => {
     const item = {
       name: 'Bad <img src=x onerror=alert(1)>',
@@ -101,8 +173,8 @@ describe('buildTradablesListItemElement', () => {
     expect(element.querySelector('[onfocus]')).toBeNull();
     expect(element.querySelector('.tradables-name').textContent).toBe(item.name);
     expect(element.querySelector('.tradables-appid').textContent).toBe('Bundle #123');
-    expect(element.querySelector('.tradables-price-badge.deal')).not.toBeNull();
-    expect(element.querySelector('.tradables-qty-suffix').textContent).toContain(' x 2 = ');
+    expect(element.querySelector('.tradables-price-badge.manual')).not.toBeNull();
+    expect(element.querySelector('.tradables-qty-suffix').textContent).toContain(' × 2 = ');
     const qtyUp = element.querySelector('.tradables-qty-arrow.tradables-qty-up');
     const qtyDown = element.querySelector('.tradables-qty-arrow.tradables-qty-down');
     const qtyInput = element.querySelector('.tradables-qty-input');
@@ -143,6 +215,99 @@ describe('buildTradablesListItemElement', () => {
     expect(unresolved.dataset.origIndex).toBe('2');
     expect(unresolved.textContent).toBe('unresolved ↗');
     expect(element.querySelector('.tradables-price-badge.na').textContent).toBe('N/A');
+  });
+});
+
+describe('tradables value calculations', () => {
+  it('uses manual acquisition price per unit and multiplies it by quantity', () => {
+    const result = computeTradablesTotalValue([
+      { appId: '123', type: 'app', qty: 2, acqPrice: 10 },
+    ], {
+      'app:123': { prices: { currentRetail: 119 } },
+    }, { keyshopsEnabled: true });
+
+    expect(result).toEqual({ total: 2000, count: 2 });
+  });
+
+  it('falls back to the selected fetched price when no acquisition price exists', () => {
+    const result = computeTradablesTotalValue([
+      { appId: '123', type: 'app', qty: 2 },
+    ], {
+      'app:123': { prices: { currentRetail: 119, currentKeyshops: 99 } },
+    }, { keyshopsEnabled: true });
+
+    expect(result).toEqual({ total: 198, count: 2 });
+  });
+
+  it('includes unresolved items when they have a manual acquisition price', () => {
+    const result = computeTradablesTotalValue([
+      { appId: null, type: 'app', qty: 3, acqPrice: 10 },
+    ], {}, { keyshopsEnabled: true });
+
+    expect(result).toEqual({ total: 3000, count: 3 });
+  });
+});
+
+describe('tradables persistence', () => {
+  it('saves quantity changes so reopening the view keeps the quantity', async () => {
+    const sendMessage = chrome.runtime.sendMessage;
+    const settings = {
+      apiKey: '',
+      steamId: '',
+      currency: 'EUR',
+      regions: ['eu'],
+      platforms: ['steam'],
+      keyshopsEnabled: false,
+      keyshops: [],
+      keyshopFees: {},
+      showSidebar: true,
+      showFullTimestamp: false,
+      ggdealsAutoScroll: true,
+      selectiveFetch: true,
+      dealThresholdPct: 10,
+    };
+    let savedTradables = [{ name: 'Persisted Game', appId: '123', type: 'app', qty: 1 }];
+    sendMessage.mockImplementation((message, callback) => {
+      let response = {};
+      if (message.type === 'GET_SETTINGS') response = settings;
+      if (message.type === 'GET_TRADABLES') response = savedTradables;
+      if (message.type === 'GET_TRADABLES_SNAPSHOTS') response = [];
+      if (message.type === 'SAVE_TRADABLES') {
+        savedTradables = message.tradables;
+        response = { ok: true };
+      }
+      callback?.(response);
+    });
+
+    try {
+      const firstContainer = document.createElement('div');
+      document.body.appendChild(firstContainer);
+      await initTradables(firstContainer);
+      const searchInput = firstContainer.querySelector('#t-search');
+      searchInput.focus();
+      searchInput.value = 'Persisted';
+      searchInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+      await vi.waitFor(() => {
+        expect(firstContainer.querySelector('#t-search')).toBe(searchInput);
+        expect(document.activeElement).toBe(searchInput);
+      });
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const qtyInput = firstContainer.querySelector('.tradables-qty-input');
+      qtyInput.value = '3';
+      qtyInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+
+      await vi.waitFor(() => expect(savedTradables[0].qty).toBe(3));
+
+      firstContainer.remove();
+      const reopenedContainer = document.createElement('div');
+      document.body.appendChild(reopenedContainer);
+      await initTradables(reopenedContainer);
+      expect(reopenedContainer.querySelector('.tradables-qty-input').value).toBe('3');
+      document.body.replaceChildren();
+    } finally {
+      sendMessage.mockReset();
+    }
   });
 });
 

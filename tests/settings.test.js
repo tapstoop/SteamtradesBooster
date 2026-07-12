@@ -686,3 +686,75 @@ describe('settings diagnostics panel', () => {
     }
   });
 });
+
+describe('settings chip persistence', () => {
+  it('persists region and platform changes across settings reinitialization', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    let savedSettings = {
+      apiKey: '',
+      steamId: '',
+      currency: 'EUR',
+      regions: ['eu', 'us'],
+      platforms: ['steam'],
+      keyshopsEnabled: false,
+      keyshops: [],
+      keyshopFees: {},
+      showSidebar: true,
+      showFullTimestamp: false,
+      ggdealsAutoScroll: true,
+      selectiveFetch: true,
+      dealThresholdPct: 10,
+    };
+    const sendMessage = vi.fn((message, callback) => {
+      let response = {};
+      if (message.type === 'GET_SETTINGS') response = savedSettings;
+      if (message.type === 'GET_EXCLUDED_PAGES') response = [];
+      if (message.type === 'SAVE_SETTINGS') {
+        savedSettings = message.settings;
+        response = { ok: true };
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+
+    globalThis.chrome = {
+      runtime: {
+        sendMessage,
+        onMessage: { addListener: vi.fn() },
+        getManifest: vi.fn(() => ({ version: '0.1.3' })),
+      },
+      storage: {
+        local: {
+          get: vi.fn((key, callback) => callback({ [key]: false })),
+          set: vi.fn((value, callback) => callback?.()),
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      container.querySelector('#s-regions .chip[data-region="eu"]').click();
+      container.querySelector('#s-regions .chip[data-region="ca"]').click();
+      container.querySelector('#s-platforms .chip[data-platform="gog"]').click();
+
+      await vi.waitFor(() => {
+        expect(savedSettings.regions).toEqual(['ca', 'us']);
+        expect(savedSettings.platforms).toEqual(['steam', 'gog']);
+      });
+
+      await initSettings(container);
+      expect(container.querySelector('#s-regions .chip[data-region="eu"]').classList.contains('active')).toBe(false);
+      expect(container.querySelector('#s-regions .chip[data-region="ca"]').classList.contains('active')).toBe(true);
+      expect(container.querySelector('#s-platforms .chip[data-platform="gog"]').classList.contains('active')).toBe(true);
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+});

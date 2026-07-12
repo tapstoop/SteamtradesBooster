@@ -316,3 +316,109 @@ test.describe('B8 - Excluded pages stay synchronized', () => {
     await tradePage.close();
   });
 });
+
+test.describe('B9 - Tradables quantity and search behavior', () => {
+  test('uses manual unit prices, preserves quantities, and keeps search focused', async ({ extensionContext, setSettings }) => {
+    const { context, extensionId } = extensionContext;
+    const sw = context.serviceWorkers()[0];
+
+    await setSettings({
+      apiKey: 'TEST',
+      regions: ['eu'],
+      platforms: ['steam'],
+      keyshopsEnabled: false,
+      selectiveFetch: true,
+      currency: 'EUR',
+      theme: 'dark',
+    });
+
+    await sw.evaluate(async () => {
+      const now = Date.now();
+      await chrome.storage.local.set({
+        tradables_list: {
+          value: [{ name: 'Asterix & Obelix XXL 2', appId: '8760', type: 'app', qty: 1 }],
+          cachedAt: now,
+          expiresAt: 0,
+        },
+        'price:8760:eu': {
+          value: {
+            prices: {
+              currentRetail: 119,
+              historicalRetail: 99,
+              currency: 'EUR',
+            },
+          },
+          cachedAt: now,
+          expiresAt: 0,
+        },
+      });
+    });
+
+    const popupUrl = `chrome-extension://${extensionId}/popup/popup.html?tab=tradables`;
+    const page = await context.newPage();
+    await page.goto(popupUrl);
+    await page.waitForSelector('#t-list .tradables-item');
+
+    const quantity = page.locator('.tradables-qty-input').first();
+    await quantity.fill('3');
+    await quantity.blur();
+    await expect(page.locator('#t-total-count')).toHaveText('3');
+
+    const acquisition = page.locator('.tradables-acq-input').first();
+    await acquisition.fill('10');
+    await acquisition.blur();
+    await expect(page.locator('.tradables-price-badge').first()).toContainText('€10.00 × 3 = €30.00');
+    await expect(page.locator('#t-total-value')).toHaveText('€30.00');
+
+    const search = page.locator('#t-search');
+    await search.fill('Asterix');
+    await page.waitForTimeout(300);
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue('Asterix');
+
+    await page.close();
+
+    const reopened = await context.newPage();
+    await reopened.goto(popupUrl);
+    await reopened.waitForSelector('#t-list .tradables-item');
+    await expect(reopened.locator('.tradables-qty-input').first()).toHaveValue('3');
+    await expect(reopened.locator('.tradables-acq-input').first()).toHaveValue('10');
+    await expect(reopened.locator('#t-total-value')).toHaveText('€30.00');
+    await reopened.close();
+  });
+});
+
+test.describe('B10 - Settings chip persistence', () => {
+  test('persists region and platform changes after closing and reopening popup settings', async ({ extensionContext, setSettings }) => {
+    const { context, extensionId } = extensionContext;
+    await setSettings({
+      apiKey: 'TEST',
+      regions: ['eu', 'us'],
+      platforms: ['steam'],
+      keyshopsEnabled: false,
+      selectiveFetch: true,
+      currency: 'EUR',
+      theme: 'dark',
+    });
+
+    const popupUrl = `chrome-extension://${extensionId}/popup/popup.html?tab=settings`;
+    const page = await context.newPage();
+    await page.goto(popupUrl);
+    await page.waitForSelector('#s-regions');
+    await page.locator('#s-regions .chip[data-region="eu"]').click();
+    await page.locator('#s-regions .chip[data-region="ca"]').click();
+    await page.locator('#s-platforms .chip[data-platform="gog"]').click();
+    await page.waitForTimeout(300);
+    await page.close();
+
+    const reopened = await context.newPage();
+    await reopened.goto(popupUrl);
+    await reopened.waitForSelector('#s-regions');
+    await expect(reopened.locator('#s-regions .chip[data-region="eu"]')).not.toHaveClass(/active/);
+    await expect(reopened.locator('#s-regions .chip[data-region="ca"]')).toHaveClass(/active/);
+    await expect(reopened.locator('#s-regions .chip[data-region="us"]')).toHaveClass(/active/);
+    await expect(reopened.locator('#s-platforms .chip[data-platform="steam"]')).toHaveClass(/active/);
+    await expect(reopened.locator('#s-platforms .chip[data-platform="gog"]')).toHaveClass(/active/);
+    await reopened.close();
+  });
+});

@@ -34,6 +34,48 @@ describe('createDetailedStateElement', () => {
 });
 
 describe('createTradablesDetailedCardElement', () => {
+  it('renders typed Steam and validated GG.deals links', () => {
+    const card = createTradablesDetailedCardElement({
+      title: 'Example Bundle',
+      appId: '30',
+      type: 'bundle',
+      ggDealsUrl: 'https://gg.deals/game/example-bundle/',
+      currentRetail: 1200,
+      historicalRetail: 800,
+      currency: 'EUR',
+      settings: { keyshopsEnabled: false },
+    });
+
+    const steamLink = card.querySelector('.game-card-title a');
+    expect(steamLink.href).toBe('https://store.steampowered.com/bundle/30');
+    expect(steamLink.target).toBe('_blank');
+    expect(steamLink.rel).toBe('noopener noreferrer');
+    expect(steamLink.style.textDecoration).toBe('underline');
+
+    const ggDealsLink = card.querySelector('.game-card-meta a');
+    expect(ggDealsLink.textContent).toBe('GG.deals ↗');
+    expect(ggDealsLink.href).toBe('https://gg.deals/game/example-bundle/');
+    expect(card.querySelector('.game-card-meta').textContent).toContain('GG.deals ↗:');
+  });
+
+  it('omits invalid external links without leaving a dangling GG.deals label', () => {
+    const card = createTradablesDetailedCardElement({
+      title: 'Plain Game <img src=x onerror=alert(1)>',
+      appId: 'bad-id',
+      ggDealsUrl: 'https://gg.deals.evil.test/game/example/',
+      currentRetail: 1200,
+      historicalRetail: 800,
+      currency: 'EUR',
+      settings: { keyshopsEnabled: false },
+    });
+
+    expect(card.querySelector('.game-card-title a')).toBeNull();
+    expect(card.querySelector('.game-card-title').textContent).toBe('Plain Game <img src=x onerror=alert(1)>');
+    expect(card.querySelector('.game-card-meta a')).toBeNull();
+    expect(card.querySelector('.game-card-meta').textContent).not.toContain('GG.deals:');
+    expect(card.querySelector('img')).toBeNull();
+  });
+
   it('renders malicious titles as text and preserves normal card classes', () => {
     const title = 'Bad <img src=x onerror=alert(1)>';
     const card = createTradablesDetailedCardElement({

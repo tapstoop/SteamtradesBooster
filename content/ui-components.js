@@ -83,26 +83,7 @@ export function createGameRow({ game, isSelected, isInWishlist, isInTradables, i
   return row;
 }
 
-export function createSearchBar({ placeholder, onSearch }) {
-  const container = document.createElement('div');
-  container.className = 'stpt-ws-search';
-
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'stpt-ws-search-input';
-  input.placeholder = placeholder || 'Search...';
-
-  let timeout = null;
-  input.addEventListener('input', e => {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => {
-      if (onSearch) onSearch(e.target.value);
-    }, 200);
-  });
-
-  container.appendChild(input);
-  return container;
-}
+export { createSearchBar } from '../utils/search-bar.js';
 
 export function createSortSelect({ options, onSort }) {
   const select = document.createElement('select');

@@ -306,9 +306,18 @@
 /* ── Price Badge ─────────────────────────────────────────────────── */
 .tradables-item-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  row-gap: 2px;
   margin-top: 2px;
+}
+
+.tradables-appid,
+.tradables-ggdeals,
+.tradables-item-meta a,
+.tradables-price-badge {
+  white-space: nowrap;
 }
 
 .tradables-price-badge {
@@ -329,6 +338,11 @@
 .tradables-price-badge.trade {
   background: #0d2a28;
   color: #4ecdc4;
+}
+
+.tradables-price-badge.manual {
+  background: #1d2a3a;
+  color: #8ac7ff;
 }
 
 .tradables-price-badge.deal {
