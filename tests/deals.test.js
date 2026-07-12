@@ -23,6 +23,8 @@ const {
   getDealsCacheIdentity,
   mergePriceResponse,
   normalizeGgDealsUrl,
+  steamStoreUrl,
+  createGgDealsLinkElement,
   renderGgDealsLink,
   createDealsGameListElement,
 } = await import('../popup/deals.js');
@@ -178,6 +180,46 @@ describe('renderGgDealsLink', () => {
 
   it('does not render invalid GG.deals links', () => {
     expect(renderGgDealsLink('https://evil.test/game/hollow-knight/')).toBe('');
+  });
+});
+
+describe('steamStoreUrl', () => {
+  it('builds typed app, sub, and bundle URLs and falls back to app', () => {
+    expect(steamStoreUrl('10', 'app')).toBe('https://store.steampowered.com/app/10');
+    expect(steamStoreUrl('20', 'sub')).toBe('https://store.steampowered.com/sub/20');
+    expect(steamStoreUrl('30', 'bundle')).toBe('https://store.steampowered.com/bundle/30');
+    expect(steamStoreUrl('40', 'unknown')).toBe('https://store.steampowered.com/app/40');
+  });
+
+  it('rejects invalid IDs', () => {
+    expect(steamStoreUrl('10.5', 'app')).toBeNull();
+    expect(steamStoreUrl('10" onclick="alert(1)', 'app')).toBeNull();
+    expect(steamStoreUrl('', 'app')).toBeNull();
+  });
+});
+
+describe('createGgDealsLinkElement', () => {
+  it('creates a safe external link with shared link attributes and text', () => {
+    const dom = new JSDOM('<!doctype html><body></body>');
+    globalThis.document = dom.window.document;
+
+    const link = createGgDealsLinkElement('https://store.gg.deals/us/game/example/');
+
+    expect(link).not.toBeNull();
+    expect(link.textContent).toBe('GG.deals ↗');
+    expect(link.href).toBe('https://store.gg.deals/us/game/example/');
+    expect(link.target).toBe('_blank');
+    expect(link.rel).toBe('noopener noreferrer');
+  });
+
+  it('rejects unsafe URLs and keeps supplied text out of the DOM', () => {
+    const dom = new JSDOM('<!doctype html><body></body>');
+    globalThis.document = dom.window.document;
+
+    expect(createGgDealsLinkElement('http://gg.deals/game/example/')).toBeNull();
+    expect(createGgDealsLinkElement('https://gg.deals.evil.test/game/example/')).toBeNull();
+    expect(createGgDealsLinkElement('javascript:alert(1)')).toBeNull();
+    expect(createGgDealsLinkElement('https://user@gg.deals/game/example/')).toBeNull();
   });
 });
 

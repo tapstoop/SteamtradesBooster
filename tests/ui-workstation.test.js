@@ -51,6 +51,22 @@ describe('SidebarWorkstation all games count', () => {
     expect(workstation.el.querySelector('.stpt-ws-all-count').textContent).toBe('Total: 1');
   });
 
+  it('keeps the All games search input focused while filtering', () => {
+    workstation.setPageGames([
+      { title: 'Alpha', section: 'have', appId: '1', type: 'app' },
+      { title: 'Beta', section: 'have', appId: '2', type: 'app' },
+    ]);
+
+    const search = workstation.el.querySelector('.stpt-ws-data .stpt-ws-search input');
+    search.focus();
+    search.value = 'alp';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    vi.advanceTimersByTime(250);
+
+    expect(document.activeElement).toBe(search);
+    expect(search.value).toBe('alp');
+  });
+
   it('updates a page game by stptId after manual resolution', () => {
     workstation.setPageGames([
       { stptId: '7', title: 'Ambiguous Name', section: 'have', appId: null, type: 'app', price: null },

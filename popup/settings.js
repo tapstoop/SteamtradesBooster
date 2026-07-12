@@ -520,17 +520,26 @@ export async function initSettings(container) {
 
   // ── Other event wiring ────────────────────────────────────────────────────
 
-  container.querySelector('#s-regions').addEventListener('click', e => {
-    if (e.target.classList.contains('chip')) e.target.classList.toggle('active');
+  container.querySelector('#s-regions').addEventListener('click', async e => {
+    if (e.target.classList.contains('chip')) {
+      e.target.classList.toggle('active');
+      await save();
+    }
   });
-  container.querySelector('#s-platforms').addEventListener('click', e => {
-    if (e.target.classList.contains('chip')) e.target.classList.toggle('active');
+  container.querySelector('#s-platforms').addEventListener('click', async e => {
+    if (e.target.classList.contains('chip')) {
+      e.target.classList.toggle('active');
+      await save();
+    }
   });
   container.querySelector('#s-keyshops').addEventListener('change', e => {
     container.querySelector('#s-keyshop-detail').style.display = e.target.checked ? 'block' : 'none';
   });
-  container.querySelector('#s-keyshop-chips').addEventListener('click', e => {
-    if (e.target.classList.contains('chip')) e.target.classList.toggle('active');
+  container.querySelector('#s-keyshop-chips').addEventListener('click', async e => {
+    if (e.target.classList.contains('chip')) {
+      e.target.classList.toggle('active');
+      await save();
+    }
   });
   container.querySelector('#s-clear').addEventListener('click', async () => {
     await msg('CLEAR_CACHE');

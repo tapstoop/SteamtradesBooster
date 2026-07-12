@@ -1,5 +1,6 @@
 // popup/tradables-detailed.js
 import { getPriceRange } from '../background/snapshots.js';
+import { createExternalLink, createGgDealsLinkElement, steamStoreUrl } from './deals.js';
 
 function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
@@ -55,6 +56,9 @@ export function createTradablesDetailedCardElement({
   snapRange = null,
   acqPrice = null,
   settings = {},
+  appId = null,
+  type = 'app',
+  ggDealsUrl = null,
 }) {
   let bestAtl = historicalRetail;
   if (settings.keyshopsEnabled && historicalKeyshops != null
@@ -67,11 +71,16 @@ export function createTradablesDetailedCardElement({
 
   const titleElement = document.createElement('div');
   titleElement.className = 'game-card-title';
-  titleElement.textContent = title ?? '';
+  const steamUrl = appId ? steamStoreUrl(appId, type) : null;
+  const steamLink = steamUrl
+    ? createExternalLink(steamUrl, title ?? '', { title: 'Open on Steam', style: 'color:inherit;text-decoration:underline;' })
+    : null;
+  titleElement.append(steamLink ?? String(title ?? ''));
 
   const priceMeta = document.createElement('div');
   priceMeta.className = 'game-card-meta';
-  priceMeta.appendChild(document.createTextNode('GG.deals: '));
+  const ggDealsLink = createGgDealsLinkElement(ggDealsUrl);
+  if (ggDealsLink) priceMeta.append(ggDealsLink, document.createTextNode(': '));
   const current = document.createElement('strong');
   current.textContent = formatPrice(currentRetail, currency);
   priceMeta.append(current, document.createTextNode(` · ${settings.keyshopsEnabled ? 'Historical ATL' : 'ATL'}: `));
@@ -214,6 +223,9 @@ export async function initTradablesDetailed(container) {
     const { price: acqPrice } = await msg('GET_ACQ_PRICE', { appId, itemType: type });
     cards.push(createTradablesDetailedCardElement({
       title,
+      appId,
+      type,
+      ggDealsUrl: data.url,
       currentRetail,
       historicalRetail,
       historicalKeyshops,

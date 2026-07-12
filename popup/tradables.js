@@ -1,13 +1,9 @@
 // popup/tradables.js
 import { createBulkImportModal } from './tradables-bulk-modal.js';
 import { getDisplayRegion } from '../utils/similarity.js';
+import { createSearchBar } from '../utils/search-bar.js';
 import { parseSteamStoreUrl } from './tradables-parser.js';
-
-let qtySaveTimer = null;
-function debouncedSave() {
-  clearTimeout(qtySaveTimer);
-  qtySaveTimer = setTimeout(() => save(), 300);
-}
+import { createExternalLink, createGgDealsLinkElement, steamStoreUrl } from './deals.js';
 
 function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
@@ -52,26 +48,14 @@ function renderPriceBadge(priceData, settings, item) {
   const badge = document.createElement('span');
   badge.className = 'tradables-price-badge';
 
-  if (!priceData || !priceData.prices) {
-    badge.classList.add('na');
-    badge.textContent = 'N/A';
-    return badge;
-  }
-
-  const prices = priceData.prices;
-  const keyshopsEnabled = settings.keyshopsEnabled;
-  
-  // Determine best current price
-  let bestCurrent = prices.currentRetail;
-  if (keyshopsEnabled && prices.currentKeyshops != null) {
-    if (bestCurrent == null || prices.currentKeyshops < bestCurrent) {
-      bestCurrent = prices.currentKeyshops;
-    }
-  }
+  const prices = priceData?.prices ?? {};
+  const selectedPrice = selectTradablesUnitPrice(item, priceData, settings);
+  const bestCurrent = selectedPrice.apiPrice;
+  const displayPrice = selectedPrice.value;
 
   // Determine best ATL
   let bestAtl = prices.historicalRetail;
-  if (keyshopsEnabled && prices.historicalKeyshops != null) {
+  if (settings.keyshopsEnabled && prices.historicalKeyshops != null) {
     if (bestAtl == null || prices.historicalKeyshops < bestAtl) {
       bestAtl = prices.historicalKeyshops;
     }
@@ -79,19 +63,34 @@ function renderPriceBadge(priceData, settings, item) {
 
   // Use settings.currency for consistency
   const currency = settings.currency ?? 'EUR';
-  const priceFormatted = formatPrice(bestCurrent, currency);
-  const timestamp = priceData.cachedAt ? formatTimestamp(priceData.cachedAt) : '';
+  const priceFormatted = formatPrice(displayPrice, currency);
+  const timestamp = priceData?.cachedAt ? formatTimestamp(priceData.cachedAt) : '';
 
   const qty = item?.qty ?? 1;
   const appendBadgeText = () => {
     badge.append(document.createTextNode(priceFormatted));
-    if (qty > 1 && bestCurrent != null) {
+    if (qty > 1 && displayPrice != null) {
       const qtySuffix = document.createElement('span');
       qtySuffix.className = 'tradables-qty-suffix';
-      qtySuffix.textContent = ` x ${qty} = ${formatPrice(bestCurrent * qty, currency)}`;
+      qtySuffix.textContent = ` × ${qty} = ${formatPrice(displayPrice * qty, currency)}`;
       badge.appendChild(qtySuffix);
     }
   };
+
+  if (displayPrice == null) {
+    badge.classList.add('na');
+    badge.textContent = 'N/A';
+    return badge;
+  }
+
+  if (selectedPrice.source === 'manual') {
+    badge.classList.add('manual');
+    const apiReference = bestCurrent != null ? ` · API: ${formatPrice(bestCurrent, currency)}` : '';
+    const atlReference = bestAtl != null ? ` · ATL: ${formatPrice(bestAtl, currency)}` : '';
+    badge.title = `Manual acquisition price${apiReference}${atlReference}${timestamp ? ` · ${timestamp}` : ''}`;
+    appendBadgeText();
+    return badge;
+  }
 
   // Check if this is a DEAL (current price within threshold of ATL)
   if (bestCurrent != null && bestAtl != null && bestAtl > 0) {
@@ -193,6 +192,34 @@ function readPriceEntry(store, item) {
   return type === 'app' ? store[appId] ?? null : null;
 }
 
+export function computeTradablesTotalValue(tradablesList = [], priceData = {}, settings = {}) {
+  let total = 0;
+  let count = 0;
+
+  for (const item of tradablesList) {
+    const quantity = normalizeQuantity(item.qty);
+    const selectedPrice = selectTradablesUnitPrice(item, priceData, settings);
+    if (selectedPrice.value != null) {
+      total += selectedPrice.value * quantity;
+      count += quantity;
+    }
+  }
+
+  return count > 0 ? { total, count } : null;
+}
+
+function selectTradablesUnitPrice(item, priceData, settings = {}) {
+  const manualPrice = normalizeAcqPrice(item?.acqPrice);
+  const data = priceData?.prices ? priceData : readPriceEntry(priceData, item);
+  const prices = data?.prices ?? null;
+  let apiPrice = prices?.currentRetail ?? null;
+  if (settings.keyshopsEnabled && prices?.currentKeyshops != null) {
+    if (apiPrice == null || prices.currentKeyshops < apiPrice) apiPrice = prices.currentKeyshops;
+  }
+  if (manualPrice != null) return { value: Math.round(manualPrice * 100), apiPrice, source: 'manual' };
+  return { value: apiPrice, apiPrice, source: apiPrice != null ? 'api' : null };
+}
+
 
 function getTradablesTypeLabel(type) {
   if (type === 'bundle') return 'Bundle';
@@ -245,9 +272,12 @@ export function buildTradablesListItemElement(item, {
   const main = document.createElement('div');
   main.className = 'tradables-item-main';
 
-  const name = document.createElement('span');
+  const steamUrl = appId ? steamStoreUrl(appId, item.type) : null;
+  const name = steamUrl
+    ? createExternalLink(steamUrl, item.name ?? '', { title: 'Open on Steam' })
+    : document.createElement('span');
   name.className = 'tradables-name';
-  name.textContent = item.name ?? '';
+  if (!steamUrl) name.textContent = item.name ?? '';
 
   const meta = document.createElement('div');
   meta.className = 'tradables-item-meta';
@@ -267,6 +297,13 @@ export function buildTradablesListItemElement(item, {
   }
 
   meta.appendChild(renderPriceBadge(priceData, settings, item));
+  const ggDealsLink = createGgDealsLinkElement(priceData?.url);
+  if (ggDealsLink) {
+    const ggDeals = document.createElement('span');
+    ggDeals.className = 'tradables-ggdeals';
+    ggDeals.append('· ', ggDealsLink);
+    meta.appendChild(ggDeals);
+  }
   main.append(name, meta);
 
   const actions = document.createElement('div');
@@ -599,39 +636,7 @@ export async function initTradables(container) {
    * PHASE 4A: Use acquisition price override when set, instead of GG.deals price.
    */
   function computeTotalValue() {
-    let total = 0;
-    let count = 0;
-
-    for (const item of tradablesList) {
-      if (!item.appId) continue;
-      
-      // PHASE 4A: Check if acquisition price is set — use it for EST. VALUE
-      if (item.acqPrice != null) {
-        total += Math.round(item.acqPrice * 100) * (item.qty ?? 1); // Convert to cents
-        count += item.qty ?? 1;
-        continue;
-      }
-      
-      const data = readPriceEntry(priceData, item);
-      if (!data?.prices) continue;
-
-      const prices = data.prices;
-      const keyshopsEnabled = settings.keyshopsEnabled;
-      
-      let bestCurrent = prices.currentRetail;
-      if (keyshopsEnabled && prices.currentKeyshops != null) {
-        if (bestCurrent == null || prices.currentKeyshops < bestCurrent) {
-          bestCurrent = prices.currentKeyshops;
-        }
-      }
-
-      if (bestCurrent != null) {
-        total += bestCurrent * (item.qty ?? 1);
-        count += item.qty ?? 1;
-      }
-    }
-
-    return count > 0 ? { total, count } : null;
+    return computeTradablesTotalValue(tradablesList, priceData, settings);
   }
 
   /**
@@ -689,12 +694,14 @@ export async function initTradables(container) {
     const hasUndo = undoStack.length > 0;
     const lastUndo = undoStack[undoStack.length - 1];
     const totalQty = tradablesList.reduce((sum, item) => sum + (item.qty ?? 1), 0);
+    const shellInitialized = Boolean(container.querySelector('#t-list'));
 
     // Static structured shell only; live state is populated through DOM APIs immediately below.
-    container.innerHTML = `
+    if (!shellInitialized) {
+      container.innerHTML = `
       <div class="tradables-container">
         <div class="tradables-toolbar" style="margin-bottom:8px;">
-          <input type="text" id="t-search" class="tradables-search" placeholder="Search tradables...">
+          <div id="t-search-wrap"></div>
           <select id="t-sort" class="tradables-sort" title="Sort by">
             <option value="name">Name A→Z</option>
             <option value="name-desc">Name Z→A</option>
@@ -740,6 +747,19 @@ export async function initTradables(container) {
       </div>
     `;
 
+      const searchWrap = container.querySelector('#t-search-wrap');
+      searchWrap.appendChild(createSearchBar({
+          placeholder: 'Search tradables...',
+          containerClass: 'tradables-search-wrap',
+          inputClass: 'tradables-search',
+          inputId: 't-search',
+          onSearch: (query) => {
+            searchQuery = query;
+            render();
+          },
+        }));
+    }
+
     populateTradablesShellState(container, {
       searchQuery,
       sortBy,
@@ -765,27 +785,22 @@ export async function initTradables(container) {
       }));
     }
 
-    // PHASE 2A: Prevent popup close on interaction
-    container.addEventListener('mousedown', (e) => e.stopPropagation());
-    container.addEventListener('click', (e) => e.stopPropagation());
-    container.addEventListener('input', (e) => e.stopPropagation());
-    container.addEventListener('change', (e) => e.stopPropagation());
+    if (!shellInitialized) {
+      // PHASE 2A: Prevent popup close on interaction
+      container.addEventListener('mousedown', (e) => e.stopPropagation());
+      container.addEventListener('click', (e) => e.stopPropagation());
+      container.addEventListener('input', (e) => e.stopPropagation());
+      container.addEventListener('change', (e) => e.stopPropagation());
 
-    // Attach event listeners
-    container.querySelector('#t-search').addEventListener('input', (e) => {
-      e.stopPropagation();
-      searchQuery = e.target.value;
-      render();
-    });
+      // Attach event listeners
+      container.querySelector('#t-sort').addEventListener('change', (e) => {
+        e.stopPropagation();
+        sortBy = e.target.value;
+        render();
+      });
 
-    container.querySelector('#t-sort').addEventListener('change', (e) => {
-      e.stopPropagation();
-      sortBy = e.target.value;
-      render();
-    });
-
-    // PHASE 4C: Refresh prices button
-    container.querySelector('#t-refresh-btn').addEventListener('click', async (e) => {
+      // PHASE 4C: Refresh prices button
+      container.querySelector('#t-refresh-btn').addEventListener('click', async (e) => {
       e.stopPropagation();
       const btn = container.querySelector('#t-refresh-btn');
       btn.textContent = '↻ Loading…';
@@ -801,9 +816,9 @@ export async function initTradables(container) {
       }
       btn.textContent = '↻ Refresh';
       btn.disabled = false;
-    });
+      });
 
-    container.querySelector('#t-add-btn').addEventListener('click', (e) => {
+      container.querySelector('#t-add-btn').addEventListener('click', (e) => {
       e.stopPropagation();
       if (modal) modal.destroy();
       modal = createBulkImportModal(async ({ additions, increments }) => {
@@ -818,12 +833,14 @@ export async function initTradables(container) {
         render();
         updateStats();
       }, { existingTradables: tradablesList });
-    });
+      });
+
+    }
 
     // Undo button (Phase 4D: ensure undo bar renders outside the loop)
-    const undoBtn = container.querySelector('#t-undo');
-    if (undoBtn) {
-      undoBtn.addEventListener('click', async (e) => {
+      const undoBtn = container.querySelector('#t-undo');
+      if (undoBtn) {
+        undoBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         if (undoStack.length === 0) return;
         const lastDelete = undoStack.pop();
@@ -834,11 +851,11 @@ export async function initTradables(container) {
         render();
         updateStats();
         clearUndoTimeout();
-      });
-    }
+        });
+      }
 
-    listEl.querySelectorAll('.tradables-remove').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+      listEl.querySelectorAll('.tradables-remove').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const origIdx = parseInt(btn.dataset.origIndex);
         const item = tradablesList[origIdx];
@@ -856,11 +873,11 @@ export async function initTradables(container) {
         await save();
         render();
         updateStats();
+        });
       });
-    });
 
-    listEl.querySelectorAll('.tradables-acq-input').forEach(input => {
-      input.addEventListener('change', async (e) => {
+      listEl.querySelectorAll('.tradables-acq-input').forEach(input => {
+        input.addEventListener('change', async (e) => {
         e.stopPropagation();
         const origIdx = parseInt(input.dataset.origIndex);
         const item = tradablesList[origIdx];
@@ -870,11 +887,11 @@ export async function initTradables(container) {
           render();
           updateStats();
         }
+        });
       });
-    });
 
-    listEl.querySelectorAll('.tradables-qty-arrow').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+      listEl.querySelectorAll('.tradables-qty-arrow').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const origIdx = parseInt(btn.dataset.origIndex);
         const item = tradablesList[origIdx];
@@ -884,14 +901,14 @@ export async function initTradables(container) {
         if (qty < 1) qty = 1;
         if (qty > 999) qty = 999;
         item.qty = qty;
-        debouncedSave();
+        await save();
         render();
         updateStats();
+        });
       });
-    });
 
-    listEl.querySelectorAll('.tradables-qty-input').forEach(input => {
-      input.addEventListener('change', async (e) => {
+      listEl.querySelectorAll('.tradables-qty-input').forEach(input => {
+        input.addEventListener('change', async (e) => {
         e.stopPropagation();
         const origIdx = parseInt(input.dataset.origIndex);
         const item = tradablesList[origIdx];
@@ -899,15 +916,15 @@ export async function initTradables(container) {
         const qty = parseTradablesQuantity(input.value);
         input.value = qty;
         item.qty = qty;
-        debouncedSave();
+        await save();
         render();
         updateStats();
+        });
       });
-    });
 
-    // Resolve unresolved games — click to search and pick a match
-    listEl.querySelectorAll('.tradables-resolve-link').forEach(link => {
-      link.addEventListener('click', async (e) => {
+      // Resolve unresolved games — click to search and pick a match
+      listEl.querySelectorAll('.tradables-resolve-link').forEach(link => {
+        link.addEventListener('click', async (e) => {
         e.stopPropagation();
         const origIdx = parseInt(link.dataset.origIndex);
         const item = tradablesList[origIdx];
@@ -1008,31 +1025,32 @@ export async function initTradables(container) {
         popover.querySelector('.trp-cancel').addEventListener('click', () => popover.remove());
         setTimeout(() => document.addEventListener('click', () => popover.remove(), { once: true }), 0);
         setTimeout(() => { searchInput.focus(); searchInput.select(); }, 0);
+        });
       });
-    });
 
-    // PHASE 4E: Delete All with double confirmation
-    const deleteAllBtn = container.querySelector('#t-delete-all');
-    if (deleteAllBtn) {
-      deleteAllBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (!confirm('Are you sure? This is going to delete your tradables list. This action is irreversible.')) return;
-        if (!confirm('Are you really sure?')) return;
-        tradablesList = [];
-        await save();
-        render();
-        updateStats();
-      });
-    }
+    if (!shellInitialized) {
+      // PHASE 4E: Delete All with double confirmation
+      const deleteAllBtn = container.querySelector('#t-delete-all');
+      if (deleteAllBtn) {
+        deleteAllBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (!confirm('Are you sure? This is going to delete your tradables list. This action is irreversible.')) return;
+          if (!confirm('Are you really sure?')) return;
+          tradablesList = [];
+          await save();
+          render();
+          updateStats();
+        });
+      }
 
-    // PHASE 1B: Snapshot UI
-    const snapshotSection = container.querySelector('#t-snapshots-section');
-    const snapshotSelect = container.querySelector('#t-snapshot-select');
-    const snapshotRestoreBtn = container.querySelector('#t-snapshot-restore');
-    const snapshotDeleteBtn = container.querySelector('#t-snapshot-delete');
-    const snapshotCreateBtn = container.querySelector('#t-snapshot-create');
+      // PHASE 1B: Snapshot UI
+      const snapshotSection = container.querySelector('#t-snapshots-section');
+      const snapshotSelect = container.querySelector('#t-snapshot-select');
+      const snapshotRestoreBtn = container.querySelector('#t-snapshot-restore');
+      const snapshotDeleteBtn = container.querySelector('#t-snapshot-delete');
+      const snapshotCreateBtn = container.querySelector('#t-snapshot-create');
 
-    async function loadSnapshots() {
+      async function loadSnapshots() {
       const snapshots = await msg('GET_TRADABLES_SNAPSHOTS');
       snapshotSelect.replaceChildren(...buildTradablesSnapshotOptions(snapshots));
       if (snapshots && snapshots.length > 0) {
@@ -1040,25 +1058,25 @@ export async function initTradables(container) {
       } else {
         snapshotSection.style.display = 'none';
       }
-    }
+      }
 
-    loadSnapshots();
+      loadSnapshots();
 
-    snapshotSelect.addEventListener('change', (e) => {
+      snapshotSelect.addEventListener('change', (e) => {
       e.stopPropagation();
       const hasSelection = snapshotSelect.value !== '';
       snapshotRestoreBtn.style.display = hasSelection ? 'inline-block' : 'none';
       snapshotDeleteBtn.style.display = hasSelection ? 'inline-block' : 'none';
-    });
+      });
 
-    snapshotCreateBtn.addEventListener('click', async (e) => {
+      snapshotCreateBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const label = `Snapshot ${new Date().toLocaleString()} (${tradablesList.length} games)`;
       await msg('SAVE_TRADABLES_SNAPSHOT', { label, tradables: tradablesList });
       loadSnapshots();
-    });
+      });
 
-    snapshotRestoreBtn.addEventListener('click', async (e) => {
+      snapshotRestoreBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const snapId = snapshotSelect.value;
       if (!snapId) return;
@@ -1068,16 +1086,17 @@ export async function initTradables(container) {
       render();
       updateStats();
       loadSnapshots();
-    });
+      });
 
-    snapshotDeleteBtn.addEventListener('click', async (e) => {
+      snapshotDeleteBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const snapId = snapshotSelect.value;
       if (!snapId) return;
       if (!confirm('Delete this snapshot?')) return;
       await msg('DELETE_TRADABLES_SNAPSHOT', { id: snapId });
       loadSnapshots();
-    });
+      });
+    }
 
     updateStats();
   }
@@ -1091,6 +1110,7 @@ export async function initTradables(container) {
     if (!valueEl || !countEl) return;
 
     const pricedCount = tradablesList.filter(item => {
+      if (normalizeAcqPrice(item.acqPrice) != null) return true;
       if (!item.appId) return false;
       const data = readPriceEntry(priceData, item);
       return data?.prices?.currentRetail != null || data?.prices?.currentKeyshops != null;

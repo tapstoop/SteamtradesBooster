@@ -67,7 +67,7 @@ function normalizeSafeExternalUrl(url) {
   return parsed.href;
 }
 
-function createExternalLink(url, text, options = {}) {
+export function createExternalLink(url, text, options = {}) {
   const safeUrl = normalizeSafeExternalUrl(url);
   if (!safeUrl) return null;
   const link = document.createElement('a');
@@ -77,13 +77,26 @@ function createExternalLink(url, text, options = {}) {
   link.textContent = text;
   if (options.className) link.className = options.className;
   if (options.style) link.setAttribute('style', options.style);
+  if (options.title) link.title = options.title;
   return link;
+}
+
+const GG_DEALS_LINK_TEXT = 'GG.deals ↗';
+const GG_DEALS_LINK_STYLE = 'color:#66c0f4;';
+
+export function createGgDealsLinkElement(url, options = {}) {
+  const safeUrl = normalizeGgDealsUrl(url);
+  if (!safeUrl) return null;
+  return createExternalLink(safeUrl, GG_DEALS_LINK_TEXT, {
+    ...options,
+    style: options.style ?? GG_DEALS_LINK_STYLE,
+  });
 }
 
 export function renderGgDealsLink(url) {
   const safeUrl = normalizeGgDealsUrl(url);
   if (!safeUrl) return '';
-  return `· <a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" style="color:#66c0f4;">GG.deals ↗</a>`;
+  return `· <a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer" style="${GG_DEALS_LINK_STYLE}">${GG_DEALS_LINK_TEXT}</a>`;
 }
 
 function createErrorLogLinkElement() {
@@ -229,7 +242,7 @@ function normalizeSteamStoreType(type) {
   return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
 }
 
-function steamStoreUrl(id, type = 'app') {
+export function steamStoreUrl(id, type = 'app') {
   const appId = normalizeStoredAppId(id);
   if (!appId) return null;
   const normalizedType = normalizeSteamStoreType(type);
@@ -282,7 +295,8 @@ function applySettingsToCards(cards, settings) {
 }
 
 // Listen for SETTINGS_UPDATED — recompute display fields from stored multi-region data, then re-render
-chrome.runtime.onMessage.addListener((message) => {
+if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((message) => {
   if (message.type !== 'SETTINGS_UPDATED') return;
   dealsLoadSequence++;
   const container = document.querySelector('#tab-deals');
@@ -302,7 +316,8 @@ chrome.runtime.onMessage.addListener((message) => {
     applySettingsToCards(dealsState.cards, message.settings);
     renderDeals(document.querySelector('#tab-deals'));
   }
-});
+  });
+}
 
 export async function initDeals(container) {
   if (!container.querySelector('#deals-header')) {
@@ -693,7 +708,7 @@ function appendCardTitle(title, card, settings) {
 
 function appendGgDealsLink(meta, card) {
   const ggDealsUrl = card.ggdealsUrl ?? card.url;
-  const link = createExternalLink(ggDealsUrl, 'GG.deals ↗', { style: 'color:#66c0f4;' });
+  const link = createGgDealsLinkElement(ggDealsUrl);
   if (!link) return;
   meta.append(' · ', link);
 }
