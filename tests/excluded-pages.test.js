@@ -66,6 +66,11 @@ describe('normalizePageUrl', () => {
       .toBe('trade:007');
   });
 
+  it('handles alphanumeric trade IDs', () => {
+    expect(normalizePageUrl('https://www.steamtrades.com/trade/9EnIv/h-games-w-games'))
+      .toBe('trade:9EnIv');
+  });
+
   it('handles very long trade IDs', () => {
     const longId = '9'.repeat(20);
     expect(normalizePageUrl(`https://www.steamtrades.com/trade/${longId}/slug`))
@@ -103,6 +108,13 @@ describe('isPageExcluded', () => {
     const list = ['trade:42'];
     expect(isPageExcluded('https://www.steamtrades.com/trade/42/some-game', list)).toBe(true);
     expect(isPageExcluded('https://www.steamtrades.com/trade/42/edit', list)).toBe(true);
+  });
+
+  it('matches stored pathname entries to full trade URLs', () => {
+    expect(isPageExcluded(
+      'https://www.steamtrades.com/trade/9EnIv/h-games-w-games?view=all',
+      ['/trade/9EnIv/h-games-w-games'],
+    )).toBe(true);
   });
 
   it('matches non-trade page by pathname', () => {

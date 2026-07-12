@@ -5,7 +5,7 @@ import { fetchProfile, getCachedProfile } from './profile.js';
 import { cacheGet, cacheSet, cacheClear, setDismissed, setUndismissed, isDismissed, setDelisted, setUndelisted } from './cache.js';
 import { getDisplayRegion, normalizeSteamType } from '../utils/similarity.js';
 import { scrapeGame, scrapeBatch, handleScrapedResult, getScrapedData } from './ggdeals-scraper.js';
-import { normalizePageUrl, isSteamTradesUrl } from '../utils/excluded-pages.js';
+import { getExcludedPageKey, getExcludedPagePath, isSteamTradesUrl } from '../utils/excluded-pages.js';
 import { writeSnapshot, pruneOldSnapshots } from './snapshots.js';
 import {
   buildDiagnosticLog as renderDiagnosticLog,
@@ -21,6 +21,30 @@ const TRADABLES_KEY = 'tradables_list';
 const TRADABLES_SNAPSHOTS_INDEX_KEY = 'tradables_snapshots_index';
 const EXCLUDED_PAGES_KEY = 'excluded_pages';
 const ALARM_NAME = 'daily-snapshot';
+
+async function getExcludedPages() {
+  const cached = await cacheGet(EXCLUDED_PAGES_KEY);
+  return Array.isArray(cached?.value) ? cached.value.filter(page => typeof page === 'string' && page) : [];
+}
+
+function broadcastExcludedPages(pages) {
+  const message = { type: 'EXCLUDED_PAGES_UPDATED', pages };
+  try {
+    chrome.runtime.sendMessage(message).catch(() => {});
+  } catch {
+    // No popup/content listener may be present while the service worker runs.
+  }
+  chrome.tabs.query({}, tabs => {
+    tabs.forEach(tab => {
+      if (tab.id == null) return;
+      try {
+        chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+      } catch {
+        // Ignore tabs that have navigated away or have no content script.
+      }
+    });
+  });
+}
 
 // --- Default Settings (tradables now stored separately) ---
 const DEFAULT_SETTINGS = {
@@ -260,42 +284,42 @@ async function handleMessage(msg, sender) {
     }
 
     case 'GET_EXCLUDED_PAGES': {
-      const cached = await cacheGet(EXCLUDED_PAGES_KEY);
-      return cached?.value ?? [];
+      return getExcludedPages();
     }
 
     case 'SAVE_EXCLUDED_PAGES': {
       const pages = Array.isArray(msg.pages) ? msg.pages : [];
       await cacheSet(EXCLUDED_PAGES_KEY, pages, 0);
+      broadcastExcludedPages(pages);
       return { ok: true };
     }
 
     case 'ADD_EXCLUDED_PAGE': {
       const rawUrl = typeof msg.url === 'string' ? msg.url : '';
       if (!rawUrl || !isSteamTradesUrl(rawUrl)) {
-        const cached = await cacheGet(EXCLUDED_PAGES_KEY);
-        return cached?.value ?? [];
+        return getExcludedPages();
       }
-      const normalized = normalizePageUrl(rawUrl);
-      const cached = await cacheGet(EXCLUDED_PAGES_KEY);
-      const list = cached?.value ?? [];
-      if (!list.includes(normalized)) {
-        list.push(normalized);
+      const list = await getExcludedPages();
+      const key = getExcludedPageKey(rawUrl);
+      if (!list.some(page => getExcludedPageKey(page) === key)) {
+        list.push(getExcludedPagePath(rawUrl));
         await cacheSet(EXCLUDED_PAGES_KEY, list, 0);
+        broadcastExcludedPages(list);
       }
       return list;
     }
 
     case 'REMOVE_EXCLUDED_PAGE': {
-      const page = normalizePageUrl(typeof msg.page === 'string' ? msg.page : '');
-      if (!page) {
-        const cached = await cacheGet(EXCLUDED_PAGES_KEY);
-        return cached?.value ?? [];
+      const page = typeof msg.page === 'string' ? msg.page : '';
+      const key = getExcludedPageKey(page);
+      const list = await getExcludedPages();
+      if (!key) return list;
+      const next = list.filter(entry => getExcludedPageKey(entry) !== key);
+      if (next.length !== list.length) {
+        await cacheSet(EXCLUDED_PAGES_KEY, next, 0);
+        broadcastExcludedPages(next);
       }
-      const cached = await cacheGet(EXCLUDED_PAGES_KEY);
-      const list = (cached?.value ?? []).filter(p => p !== page);
-      await cacheSet(EXCLUDED_PAGES_KEY, list, 0);
-      return list;
+      return next;
     }
 
     case 'SAVE_SETTINGS': {

@@ -55,6 +55,63 @@ body {
 }
 .settings-input:focus { outline: none; border-color: #66c0f4; }
 
+.personal-pages-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.personal-pages-add .settings-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  margin-bottom: 0;
+}
+.personal-pages-add .settings-copy {
+  flex: 0 0 auto;
+  width: auto;
+  margin-top: 0;
+  white-space: nowrap;
+}
+.personal-pages-add .add-error-msg {
+  flex: 0 0 100%;
+}
+.excluded-page-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 0;
+  border-bottom: 1px solid #2a2a2a;
+}
+.excluded-page-link {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #c6d4df;
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.excluded-page-link:hover { color: #66c0f4; }
+.excluded-page-delete {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: #ff6b6b;
+  font-size: 13px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.excluded-page-delete:hover { color: #ff3333; }
+.excluded-page-delete:disabled { opacity: 0.5; cursor: wait; }
+
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chip {
   padding: 2px 8px;

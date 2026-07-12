@@ -254,6 +254,13 @@ test.describe('B7 - Excluded add-via-settings', () => {
     // Type trade URL into input and click Add
     const urlInput = page.locator('#s-excluded-add-url');
     await expect(urlInput).toBeAttached();
+
+    const inputBox = await urlInput.boundingBox();
+    const buttonBox = await page.locator('#s-excluded-add-btn').boundingBox();
+    expect(inputBox).not.toBeNull();
+    expect(buttonBox).not.toBeNull();
+    expect(inputBox.width).toBeGreaterThan(buttonBox.width * 2);
+
     await urlInput.fill(tradeUrl);
 
     const addButton = page.locator('#s-excluded-add-btn');
@@ -273,5 +280,39 @@ test.describe('B7 - Excluded add-via-settings', () => {
     // Assert no badges appear (page is excluded)
     const badgeCount = await tradePage.locator('.stpt-badge').count({ timeout: 3000 }).catch(() => 0);
     expect(badgeCount).toBe(0);
+  });
+});
+
+test.describe('B8 - Excluded pages stay synchronized', () => {
+  test('syncs popup and page-button changes with compact link deletion', async ({ extensionContext, navigate }) => {
+    const { context, extensionId } = extensionContext;
+    const tradeUrl = 'https://www.steamtrades.com/trade/9EnIv/h-games-w-games-paypal-revolut';
+    const popupUrl = `chrome-extension://${extensionId}/popup/popup.html`;
+
+    const tradePage = await navigate(tradeUrl);
+    await tradePage.waitForSelector('#stpt-exclusion-btn', { state: 'attached', timeout: 10000 });
+
+    const popup = await context.newPage();
+    await popup.goto(`${popupUrl}?tab=settings`);
+    await popup.waitForLoadState('networkidle');
+    await popup.waitForTimeout(300);
+
+    const input = popup.locator('#s-excluded-add-url');
+    await input.fill(tradeUrl);
+    await popup.locator('#s-excluded-add-btn').click();
+
+    const savedLink = popup.locator('.excluded-page-link');
+    await expect(savedLink).toContainText('...9EnIv/h-games-w-games-paypal-revolut');
+    await expect(tradePage.locator('#stpt-exclusion-btn')).toContainText('Personal page', { timeout: 10000 });
+
+    await popup.locator('.excluded-page-delete').click();
+    await expect(popup.locator('#s-excluded-pages-list')).toContainText('No personal pages added yet.');
+    await expect(tradePage.locator('#stpt-exclusion-btn')).toHaveText('Mark as personal page', { timeout: 10000 });
+
+    await tradePage.locator('#stpt-exclusion-btn').click();
+    await expect(popup.locator('.excluded-page-link')).toContainText('...9EnIv/h-games-w-games-paypal-revolut', { timeout: 10000 });
+
+    await popup.close();
+    await tradePage.close();
   });
 });

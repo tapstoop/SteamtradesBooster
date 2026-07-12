@@ -1,6 +1,6 @@
 // popup/settings.js
 
-import { isSteamTradesUrl, normalizePageUrl } from '../utils/excluded-pages.js';
+import { getExcludedPagePath, isPageExcluded, isSteamTradesUrl } from '../utils/excluded-pages.js';
 
 const REGIONS = ['au','be','br','ca','ch','de','dk','es','eu','fi','fr','gb','ie','it','nl','no','pl','se','us'];
 const PLATFORMS = ['Steam','GOG','Epic','EA App','Ubisoft Connect','Battle.net'];
@@ -238,9 +238,9 @@ export async function initSettings(container) {
         Pages listed here won't show price badges or the sidebar. You can also mark a page directly from the trade thread.
       </div>
       <div id="s-excluded-pages-list"></div>
-      <div class="personal-pages-add" style="display:flex;gap:6px;margin-top:8px;">
-        <input class="settings-input" id="s-excluded-add-url" type="text" placeholder="Paste a steamtrades.com page URL" style="flex:1;">
-        <button class="btn-primary settings-copy" id="s-excluded-add-btn" type="button" style="white-space:nowrap;">Add Page</button>
+      <div class="personal-pages-add">
+        <input class="settings-input" id="s-excluded-add-url" type="text" placeholder="Paste a steamtrades.com page URL">
+        <button class="btn-primary settings-copy" id="s-excluded-add-btn" type="button">Add Page</button>
       </div>
     </div>
 
@@ -359,63 +359,157 @@ export async function initSettings(container) {
   // ── Excluded pages list ────────────────────────────────────────────────────
 
   let lastRenderedList = [];
+  let renderRequest = 0;
+  let excludedPagesMutationPending = false;
+
+  function excludedPageHref(page) {
+    if (page.startsWith('trade:')) {
+      return `https://www.steamtrades.com/trade/${page.slice(6)}`;
+    }
+    const path = getExcludedPagePath(page);
+    return `https://www.steamtrades.com${path.startsWith('/') ? path : `/${path}`}`;
+  }
+
+  function excludedPageLabel(page) {
+    const path = page.startsWith('trade:')
+      ? `/trade/${page.slice(6)}`
+      : getExcludedPagePath(page);
+    const displayPath = path.startsWith('/trade/') ? path.slice('/trade/'.length) : path.replace(/^\/+/, '');
+    return `...${displayPath}`;
+  }
 
   async function renderExcludedPages(list) {
     const listEl = container.querySelector('#s-excluded-pages-list');
     if (!listEl) return;
+    const requestId = ++renderRequest;
     const pages = list !== undefined ? list : await msg('GET_EXCLUDED_PAGES');
+    if (requestId !== renderRequest) return;
     lastRenderedList = Array.isArray(pages) ? pages : [];
-    if (pages.length === 0) {
+    if (lastRenderedList.length === 0) {
       listEl.innerHTML = '<div style="color:#555;font-size:10px;">No personal pages added yet.</div>';
       return;
     }
-    listEl.innerHTML = pages.map(p => {
-      const display = p.startsWith('trade:')
-        ? `steamtrades.com/trade/${p.slice(6)}`
-        : p;
-      return `<div class="excluded-page-row" style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid #2a2a2a;">
-        <span style="color:#e2e8f0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;" title="${escapeHtml(p)}">${escapeHtml(display)}</span>
-        <button class="btn-danger excluded-page-delete" data-page="${escapeHtml(p)}" type="button" style="padding:2px 8px;font-size:10px;margin-left:8px;">Delete</button>
+    listEl.innerHTML = lastRenderedList.map(page => {
+      const href = excludedPageHref(page);
+      const label = excludedPageLabel(page);
+      return `<div class="excluded-page-row">
+        <a class="excluded-page-link" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(href)}">${escapeHtml(label)}</a>
+        <button class="excluded-page-delete" data-page="${escapeHtml(page)}" type="button" aria-label="Remove personal page" title="Remove personal page">x</button>
       </div>`;
     }).join('');
+  }
 
-    listEl.querySelectorAll('.excluded-page-delete').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        await msg('REMOVE_EXCLUDED_PAGE', { page: btn.dataset.page });
-        renderExcludedPages();
-      });
-    });
+  const listEl = container.querySelector('#s-excluded-pages-list');
+  const previousListClickHandler = listEl?.__excludedPagesClickHandler;
+  if (listEl && previousListClickHandler) listEl.removeEventListener('click', previousListClickHandler);
+  const listClickHandler = async event => {
+    const button = event.target.closest?.('.excluded-page-delete');
+    if (!button || excludedPagesMutationPending) return;
+    excludedPagesMutationPending = true;
+    button.disabled = true;
+    try {
+      const result = await msg('REMOVE_EXCLUDED_PAGE', { page: button.dataset.page });
+      if (Array.isArray(result)) await renderExcludedPages(result);
+      else await renderExcludedPages();
+    } catch {
+      showAddError('Could not update personal pages');
+    } finally {
+      excludedPagesMutationPending = false;
+      if (button.isConnected) button.disabled = false;
+    }
+  };
+  if (listEl) {
+    listEl.__excludedPagesClickHandler = listClickHandler;
+    listEl.addEventListener('click', listClickHandler);
+  }
+
+  const previousExcludedPagesListener = container.__excludedPagesListener;
+  if (previousExcludedPagesListener && chrome.runtime.onMessage?.removeListener) {
+    chrome.runtime.onMessage.removeListener(previousExcludedPagesListener);
+  }
+  const excludedPagesListener = message => {
+    if (message?.type === 'EXCLUDED_PAGES_UPDATED' && Array.isArray(message.pages)) {
+      renderExcludedPages(message.pages);
+    }
+  };
+  if (chrome.runtime.onMessage?.addListener) {
+    chrome.runtime.onMessage.addListener(excludedPagesListener);
+    container.__excludedPagesListener = excludedPagesListener;
   }
 
   await renderExcludedPages();
 
-  container.querySelector('#s-excluded-add-btn').addEventListener('click', async () => {
+  const addButton = container.querySelector('#s-excluded-add-btn');
+  const previousAddHandler = addButton.__excludedPagesAddHandler;
+  if (previousAddHandler) addButton.removeEventListener('click', previousAddHandler);
+  const addHandler = async () => {
+    if (excludedPagesMutationPending) return;
     const input = container.querySelector('#s-excluded-add-url');
-    const url = input.value.trim();
+    let url = input.value.trim();
     if (!url) return;
+    if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
     const before = lastRenderedList;
-    const result = await msg('ADD_EXCLUDED_PAGE', { url });
-    input.value = '';
-    const pages = Array.isArray(result) ? result : undefined;
-    if (pages === undefined) { renderExcludedPages(); return; }
-    renderExcludedPages(pages);
-    const added = pages.length > before.length;
-    if (!added) {
-      const isValid = isSteamTradesUrl(url);
-      const isDuplicate = isValid && before.includes(normalizePageUrl(url));
-      const msgEl = document.createElement('div');
-      msgEl.className = 'add-error-msg';
-      msgEl.style.cssText = 'color:#ff6b6b;font-size:10px;margin-top:4px;';
-      msgEl.textContent = !isValid
-        ? 'URL must be a steamtrades.com page'
-        : isDuplicate
-          ? 'Already in your personal pages'
-          : 'Could not add this page';
-      const addContainer = input.parentElement;
-      addContainer.querySelector('.add-error-msg')?.remove();
-      addContainer.appendChild(msgEl);
-      setTimeout(() => msgEl.remove(), 2000);
+    if (!isSteamTradesUrl(url)) {
+      showAddError('URL must be a steamtrades.com page');
+      return;
     }
+    excludedPagesMutationPending = true;
+    addButton.disabled = true;
+    try {
+      const result = await msg('ADD_EXCLUDED_PAGE', { url });
+      if (!Array.isArray(result)) {
+        await renderExcludedPages();
+        showAddError('Could not update personal pages');
+        return;
+      }
+      await renderExcludedPages(result);
+      const added = !isPageExcluded(url, before) && isPageExcluded(url, result);
+      if (!added) {
+        const isDuplicate = isPageExcluded(url, before);
+        showAddError(isDuplicate
+          ? 'Already in your personal pages'
+          : 'Could not add this page');
+      } else {
+        input.value = '';
+        clearAddError();
+        const currentList = container.querySelector('#s-excluded-pages-list');
+        if (currentList) {
+          currentList.style.transition = 'none';
+          currentList.style.outline = '1px solid #10b981';
+          setTimeout(() => {
+            currentList.style.transition = 'outline 1.5s ease-out';
+            currentList.style.outline = '1px solid transparent';
+          }, 0);
+        }
+      }
+    } catch {
+      showAddError('Could not update personal pages');
+    } finally {
+      excludedPagesMutationPending = false;
+      addButton.disabled = false;
+    }
+  };
+  addButton.__excludedPagesAddHandler = addHandler;
+  addButton.addEventListener('click', addHandler);
+
+  function showAddError(text) {
+    clearAddError();
+    const addContainer = container.querySelector('.personal-pages-add');
+    if (!addContainer) return;
+    const msgEl = document.createElement('div');
+    msgEl.className = 'add-error-msg';
+    msgEl.style.cssText = 'color:#ff6b6b;font-size:10px;margin-top:4px;';
+    msgEl.textContent = text;
+    addContainer.appendChild(msgEl);
+  }
+
+  function clearAddError() {
+    container.querySelector('.add-error-msg')?.remove();
+  }
+
+  // Clear error when user starts typing
+  container.querySelector('#s-excluded-add-url').addEventListener('input', () => {
+    clearAddError();
   });
 
   // ── Currency change ────────────────────────────────────────────────────────

@@ -329,7 +329,10 @@ describe('settings diagnostics panel', () => {
       });
 
       const listEl = container.querySelector('#s-excluded-pages-list');
-      expect(listEl.textContent).toContain('steamtrades.com/trade/999');
+      expect(listEl.textContent).toContain('...999/test-game');
+      expect(listEl.querySelector('.excluded-page-link').getAttribute('href'))
+        .toBe('https://www.steamtrades.com/trade/999/test-game');
+      expect(listEl.querySelector('.excluded-page-delete').textContent).toBe('x');
     } finally {
       globalThis.chrome = originalChrome;
       globalThis.location = originalLocation;
@@ -389,7 +392,7 @@ describe('settings diagnostics panel', () => {
 
       await vi.waitFor(() => {
         const listEl = container.querySelector('#s-excluded-pages-list');
-        expect(listEl.textContent).toContain('steamtrades.com/trade/123');
+        expect(listEl.textContent).toContain('...123');
       });
 
       const deleteBtn = container.querySelector('.excluded-page-delete');
@@ -401,7 +404,78 @@ describe('settings diagnostics panel', () => {
           expect.any(Function),
         );
         const listEl = container.querySelector('#s-excluded-pages-list');
-        expect(listEl.textContent).not.toContain('steamtrades.com/trade/123');
+        expect(listEl.textContent).toContain('No personal pages added yet.');
+      });
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('rerenders the saved-page list when another context broadcasts an update', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const listeners = [];
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? {
+            apiKey: '',
+            steamId: '',
+            currency: 'EUR',
+            regions: ['eu'],
+            platforms: ['steam'],
+            keyshopsEnabled: false,
+            keyshops: [],
+            keyshopFees: {},
+            showSidebar: true,
+            showFullTimestamp: false,
+            selectiveFetch: true,
+            dealThresholdPct: 10,
+          }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? []
+          : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    const storageGet = vi.fn((key, callback) => callback({ [key]: false }));
+    const storageSet = vi.fn((value, callback) => callback?.());
+
+    globalThis.chrome = {
+      runtime: {
+        sendMessage,
+        onMessage: {
+          addListener: vi.fn(listener => listeners.push(listener)),
+          removeListener: vi.fn(listener => {
+            const index = listeners.indexOf(listener);
+            if (index >= 0) listeners.splice(index, 1);
+          }),
+        },
+        getManifest: vi.fn(() => ({ version: '0.1.3' })),
+      },
+      storage: {
+        local: {
+          get: storageGet,
+          set: storageSet,
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      listeners[0]({
+        type: 'EXCLUDED_PAGES_UPDATED',
+        pages: ['/trade/9EnIv/h-games-w-games-paypal-revolut'],
+      });
+
+      await vi.waitFor(() => {
+        expect(container.querySelector('#s-excluded-pages-list').textContent)
+          .toContain('...9EnIv/h-games-w-games-paypal-revolut');
       });
     } finally {
       globalThis.chrome = originalChrome;
