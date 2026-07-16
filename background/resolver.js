@@ -1,6 +1,7 @@
 // background/resolver.js
-import { cacheGet, cacheSet, isDismissed, isDelisted } from './cache.js';
+import { safeCacheGet, cacheSet, isDismissed, isDelisted } from './cache.js';
 import { normalizeTitle, wordSimilarity, normalizeSteamType } from '../utils/similarity.js';
+import { steamFetch } from './steam-rate-limiter.js';
 
 // Re-export for backwards compatibility and tests
 export { normalizeTitle, wordSimilarity };
@@ -8,19 +9,6 @@ export { normalizeTitle, wordSimilarity };
 const STEAM_SEARCH = 'https://store.steampowered.com/api/storesearch/';
 const RESOLVE_TTL = 0; // permanent
 const SIMILARITY_THRESHOLD = 0.85; // 85% word overlap for fuzzy matching
-const RESOLVE_REQUEST_INTERVAL_MS = 200;
-let lastResolveRequestAt = 0;
-
-async function rateLimitedFetch(url) {
-  const now = Date.now();
-  const waitMs = Math.max(0, RESOLVE_REQUEST_INTERVAL_MS - (now - lastResolveRequestAt));
-  if (waitMs > 0) {
-    await new Promise(r => setTimeout(r, waitMs));
-  }
-  lastResolveRequestAt = Date.now();
-  return fetch(url);
-}
-
 function resolutionValue(id, type = 'app') {
   return { appId: String(id), type: normalizeSteamType(type) };
 }
@@ -81,7 +69,7 @@ function getSearchTerms(title) {
 
 async function fetchSteamItems(term) {
   const url = `${STEAM_SEARCH}?term=${encodeURIComponent(term)}&l=english&cc=us`;
-  const resp = await rateLimitedFetch(url);
+  const resp = await steamFetch(url, {}, { kind: 'storesearch' });
   if (!resp.ok) return [];
   const data = await resp.json();
   return data.items ?? [];
@@ -94,39 +82,42 @@ async function fetchSteamItems(term) {
  *          |{ status: 'not-found', cacheKey: string }
  *          |{ status: 'dismissed' }}
  */
-export async function resolveTitle(title) {
+export async function resolveTitle(title, options = {}) {
   const key = `resolve:${normalizeTitle(title)}`;
+  const forceRefresh = options.forceRefresh === true;
 
-  // Check if user dismissed this title
-  if (await isDismissed(key)) {
-    return { status: 'dismissed', cacheKey: key };
-  }
+  if (!forceRefresh) {
+    // Check if user dismissed this title
+    if (await isDismissed(key)) {
+      return { status: 'dismissed', cacheKey: key };
+    }
 
-  // Check if user marked this as delisted
-  if (await isDelisted(key)) {
-    // Check if there's a confirmed appId or cached resolution for price display
-    const confirmed = await cacheGet(`${key}:confirmed`);
+    // Check if user marked this as delisted
+    if (await isDelisted(key)) {
+      // Check if there's a confirmed appId or cached resolution for price display
+      const confirmed = await safeCacheGet(`${key}:confirmed`);
+      if (confirmed?.value) {
+        const confirmedTitle = await safeCacheGet(`${key}:confirmed:title`);
+        return resultFromCache(confirmed.value, 'delisted', key, { title: confirmedTitle?.value, confirmed: true });
+      }
+      const cached = await safeCacheGet(key);
+      if (cached?.value) {
+        return resultFromCache(cached.value, 'delisted', key);
+      }
+      return { status: 'delisted', cacheKey: key };
+    }
+
+    // Check confirmed user choice
+    const confirmed = await safeCacheGet(`${key}:confirmed`);
     if (confirmed?.value) {
-      const confirmedTitle = await cacheGet(`${key}:confirmed:title`);
-      return resultFromCache(confirmed.value, 'delisted', key, { title: confirmedTitle?.value, confirmed: true });
+      const confirmedTitle = await safeCacheGet(`${key}:confirmed:title`);
+      return resultFromCache(confirmed.value, 'hit', key, { title: confirmedTitle?.value, confirmed: true });
     }
-    const cached = await cacheGet(key);
-    if (cached?.value) {
-      return resultFromCache(cached.value, 'delisted', key);
-    }
-    return { status: 'delisted', cacheKey: key };
-  }
 
-  // Check confirmed user choice
-  const confirmed = await cacheGet(`${key}:confirmed`);
-  if (confirmed?.value) {
-    const confirmedTitle = await cacheGet(`${key}:confirmed:title`);
-    return resultFromCache(confirmed.value, 'hit', key, { title: confirmedTitle?.value, confirmed: true });
+    // Check resolved cache
+    const cached = await safeCacheGet(key);
+    if (cached?.value) return resultFromCache(cached.value, 'hit', key);
   }
-
-  // Check resolved cache
-  const cached = await cacheGet(key);
-  if (cached?.value) return resultFromCache(cached.value, 'hit', key);
 
   let bestExactMatch = null;
   let bestFuzzyResult = null;

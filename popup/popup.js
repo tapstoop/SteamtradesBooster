@@ -7,6 +7,31 @@ import { initTradables } from './tradables.js';
 // Tab state tracking
 const tabInitStatus = { deals: false, tradablesDetailed: false, tradables: false, settings: false };
 
+function renderTabError(tabContent, error) {
+  if (!tabContent) return;
+  const message = error?.message ?? String(error ?? 'Unknown error');
+  tabContent.innerHTML = '';
+  const state = document.createElement('div');
+  state.className = 'error-state';
+  state.textContent = `Failed to load this tab: ${message}`;
+  tabContent.append(state);
+}
+
+function runTabInit(tabName, tabContent) {
+  try {
+    let initPromise;
+    if (tabName === 'deals') initPromise = initDeals(tabContent);
+    else if (tabName === 'tradablesDetailed') initPromise = initTradablesDetailed(tabContent);
+    else if (tabName === 'tradables') initPromise = initTradables(tabContent);
+    else if (tabName === 'settings') initPromise = initSettings(tabContent);
+    if (initPromise?.catch) {
+      initPromise.catch(error => renderTabError(tabContent, error));
+    }
+  } catch (error) {
+    renderTabError(tabContent, error);
+  }
+}
+
 function activateTab(tabName) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -21,10 +46,7 @@ function activateTab(tabName) {
     tabInitStatus[tabName] = true;
   }
   // Always re-init the tab content so it re-binds listeners and refreshes data
-  if (tabName === 'deals') initDeals(tabContent);
-  else if (tabName === 'tradablesDetailed') initTradablesDetailed(tabContent);
-  else if (tabName === 'tradables') initTradables(tabContent);
-  else if (tabName === 'settings') initSettings(tabContent);
+  runTabInit(tabName, tabContent);
 }
 
 // Bind tab clicks with stopPropagation to prevent popup close on blur

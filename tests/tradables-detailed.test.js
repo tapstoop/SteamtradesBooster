@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
@@ -7,7 +7,9 @@ globalThis.HTMLElement = dom.window.HTMLElement;
 
 const {
   createDetailedStateElement,
+  createEmptyTradablesDetailedElement,
   createTradablesDetailedCardElement,
+  initTradablesDetailed,
 } = await import('../popup/tradables-detailed.js');
 
 describe('createDetailedStateElement', () => {
@@ -30,6 +32,17 @@ describe('createDetailedStateElement', () => {
     expect(state.className).toBe('empty-state');
     expect(state.textContent).toBe('<script>alert(1)</script>');
     expect(state.querySelector('script')).toBeNull();
+  });
+
+  it('renders the empty tradables detailed message with a Tradables tab link', () => {
+    const state = createEmptyTradablesDetailedElement();
+
+    expect(state.textContent).toBe('No tradable games found. Add your tradables in Tradables.');
+    const link = state.querySelector('a');
+    expect(link.textContent).toBe('Tradables');
+    expect(link.getAttribute('href')).toBe('popup.html?tab=tradables');
+    expect(link.style.color).toBe('inherit');
+    expect(link.style.textDecoration).toBe('underline');
   });
 });
 
@@ -142,5 +155,87 @@ describe('createTradablesDetailedCardElement', () => {
     expect(acquisition.textContent).not.toContain('Infinity');
     expect(acquisition.textContent).not.toContain('NaN');
     expect(acquisition.textContent).not.toMatch(/\(\d+%\)/);
+  });
+});
+
+describe('initTradablesDetailed', () => {
+  it('does not load the profile or prices when the tradables list is empty', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      if (message.type === 'GET_SETTINGS') {
+        callback?.({ apiKey: 'KEY', steamId: '76561198000000000', regions: ['eu'] });
+      } else if (message.type === 'GET_TRADABLES') {
+        callback?.({ tradables: [], tradablesRevision: 'missing' });
+      } else {
+        callback?.({});
+      }
+    });
+    globalThis.chrome = {
+      runtime: { sendMessage },
+    };
+
+    try {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      await initTradablesDetailed(container);
+
+      expect(container.textContent).toContain('No tradable games found. Add your tradables in Tradables.');
+      expect(container.querySelector('a')?.getAttribute('href')).toBe('popup.html?tab=tradables');
+      expect(sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'GET_PROFILE' }),
+        expect.any(Function),
+      );
+      expect(sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'GET_PRICES' }),
+        expect.any(Function),
+      );
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('reuses detailed cards when the tradables revision did not change', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      if (message.type === 'GET_SETTINGS') {
+        callback?.({ apiKey: 'KEY', steamId: '76561198000000000', regions: ['eu'], keyshopsEnabled: false });
+      } else if (message.type === 'GET_TRADABLES') {
+        callback?.({ tradables: [{ name: 'Gift', appId: '10', type: 'app' }], tradablesRevision: 'tradables-1' });
+      } else if (message.type === 'RESOLVE_TITLES') {
+        callback?.([{ status: 'hit', appId: '10', type: 'app' }]);
+      } else if (message.type === 'GET_PRICES') {
+        callback?.({
+          10: {
+            eu: {
+              prices: { currentRetail: 500, historicalRetail: 400, currency: 'EUR' },
+            },
+          },
+        });
+      } else if (message.type === 'GET_ACQ_PRICE') {
+        callback?.({ price: null });
+      } else {
+        callback?.({});
+      }
+    });
+    globalThis.chrome = {
+      runtime: { sendMessage, onMessage: { addListener: vi.fn() } },
+    };
+
+    try {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      await initTradablesDetailed(container);
+      await initTradablesDetailed(container);
+
+      expect(container.textContent).toContain('Gift');
+      expect(sendMessage.mock.calls.filter(([message]) => message.type === 'GET_PRICES')).toHaveLength(1);
+      expect(sendMessage.mock.calls.filter(([message]) => message.type === 'RESOLVE_TITLES')).toHaveLength(1);
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
   });
 });

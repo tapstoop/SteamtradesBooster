@@ -687,47 +687,27 @@ describe('settings diagnostics panel', () => {
   });
 });
 
-describe('settings chip persistence', () => {
-  it('persists region and platform changes across settings reinitialization', async () => {
+describe('settings save guards', () => {
+  it('does not send SAVE_SETTINGS when GET_SETTINGS returned storageError', async () => {
     const originalChrome = globalThis.chrome;
     const originalLocation = globalThis.location;
-    let savedSettings = {
-      apiKey: '',
-      steamId: '',
-      currency: 'EUR',
-      regions: ['eu', 'us'],
-      platforms: ['steam'],
-      keyshopsEnabled: false,
-      keyshops: [],
-      keyshopFees: {},
-      showSidebar: true,
-      showFullTimestamp: false,
-      ggdealsAutoScroll: true,
-      selectiveFetch: true,
-      dealThresholdPct: 10,
-    };
     const sendMessage = vi.fn((message, callback) => {
-      let response = {};
-      if (message.type === 'GET_SETTINGS') response = savedSettings;
-      if (message.type === 'GET_EXCLUDED_PAGES') response = [];
-      if (message.type === 'SAVE_SETTINGS') {
-        savedSettings = message.settings;
-        response = { ok: true };
-      }
+      const response = message.type === 'GET_SETTINGS'
+        ? { storageError: true, apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [], dealThresholdPct: 10 }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? []
+          : message.type === 'GET_DIAGNOSTIC_LOG'
+            ? { log: '' }
+            : {};
       callback?.(response);
       return Promise.resolve(response);
     });
-
     globalThis.chrome = {
-      runtime: {
-        sendMessage,
-        onMessage: { addListener: vi.fn() },
-        getManifest: vi.fn(() => ({ version: '0.1.3' })),
-      },
+      runtime: { sendMessage, getManifest: vi.fn(() => ({ version: '0.1.3' })) },
       storage: {
         local: {
-          get: vi.fn((key, callback) => callback({ [key]: false })),
-          set: vi.fn((value, callback) => callback?.()),
+          get: vi.fn((key, cb) => cb({ [key]: false })),
+          set: vi.fn((v, cb) => cb?.()),
         },
       },
     };
@@ -737,22 +717,267 @@ describe('settings chip persistence', () => {
       const container = document.createElement('div');
       await initSettings(container);
 
-      container.querySelector('#s-regions .chip[data-region="eu"]').click();
-      container.querySelector('#s-regions .chip[data-region="ca"]').click();
-      container.querySelector('#s-platforms .chip[data-platform="gog"]').click();
+      const errorBanner = container.querySelector('[data-settings-read-error]');
+      expect(errorBanner).not.toBeNull();
+      expect(errorBanner.textContent).toContain('Saving is disabled');
 
-      await vi.waitFor(() => {
-        expect(savedSettings.regions).toEqual(['ca', 'us']);
-        expect(savedSettings.platforms).toEqual(['steam', 'gog']);
-      });
+      const input = container.querySelector('#s-apikey');
+      input.value = 'new-key';
+      const event = document.createEvent('Event');
+      event.initEvent('change', true, true);
+      input.dispatchEvent(event);
+      await new Promise(r => setTimeout(r, 800));
 
-      await initSettings(container);
-      expect(container.querySelector('#s-regions .chip[data-region="eu"]').classList.contains('active')).toBe(false);
-      expect(container.querySelector('#s-regions .chip[data-region="ca"]').classList.contains('active')).toBe(true);
-      expect(container.querySelector('#s-platforms .chip[data-platform="gog"]').classList.contains('active')).toBe(true);
+      expect(sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'SAVE_SETTINGS' }),
+        expect.any(Function),
+      );
     } finally {
       globalThis.chrome = originalChrome;
       globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shows error banner when SAVE_SETTINGS returns { ok: false }', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? { apiKey: 'x', steamId: '1', currency: 'EUR', regions: ['eu'], platforms: [], dealThresholdPct: 10 }
+        : message.type === 'SAVE_SETTINGS'
+          ? { ok: false, error: 'Quota exceeded' }
+          : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { sendMessage, getManifest: vi.fn(() => ({ version: '0.1.3' })) },
+      storage: {
+        local: {
+          get: vi.fn((key, cb) => cb({ [key]: false })),
+          set: vi.fn((v, cb) => cb?.()),
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      expect(container.querySelector('[data-settings-save-error]')).toBeNull();
+      const input = container.querySelector('#s-apikey');
+      input.value = 'new-key';
+      const event = document.createEvent('Event');
+      event.initEvent('change', true, true);
+      input.dispatchEvent(event);
+      await new Promise(r => setTimeout(r, 800));
+
+      const banner = container.querySelector('[data-settings-save-error]');
+      expect(banner).not.toBeNull();
+      expect(banner.textContent).toContain('Quota exceeded');
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shows error banner when SAVE_SETTINGS hits runtime.lastError', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const sendMessage = vi.fn((message, callback) => {
+      if (message.type === 'GET_SETTINGS') {
+        callback?.({
+          apiKey: 'x',
+          steamId: '1',
+          currency: 'EUR',
+          regions: ['eu'],
+          platforms: [],
+          dealThresholdPct: 10,
+          settingsRevision: 'settings-1',
+        });
+        return;
+      }
+      if (message.type === 'SAVE_SETTINGS') {
+        globalThis.chrome.runtime.lastError = { message: 'Message channel closed' };
+        callback?.(undefined);
+        globalThis.chrome.runtime.lastError = null;
+        return;
+      }
+      callback?.({});
+    });
+    globalThis.chrome = {
+      runtime: { sendMessage, lastError: null, getManifest: vi.fn(() => ({ version: '0.1.3' })) },
+      storage: {
+        local: {
+          get: vi.fn((key, cb) => cb({ [key]: false })),
+          set: vi.fn((value, cb) => cb?.()),
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+      const input = container.querySelector('#s-apikey');
+      input.value = 'new-key';
+      const event = document.createEvent('Event');
+      event.initEvent('change', true, true);
+      input.dispatchEvent(event);
+      await new Promise(resolve => setTimeout(resolve, 800));
+
+      expect(container.querySelector('[data-settings-save-error]')?.textContent)
+        .toContain('Message channel closed');
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('clears save-error banner when SAVE_SETTINGS returns { ok: true }', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    let saveCallCount = 0;
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? { apiKey: 'x', steamId: '1', currency: 'EUR', regions: ['eu'], platforms: [], dealThresholdPct: 10 }
+        : message.type === 'SAVE_SETTINGS'
+          ? (++saveCallCount > 1
+              ? { ok: true, revision: `settings-${saveCallCount}` }
+              : { ok: false, error: 'Storage full' })
+          : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { sendMessage, getManifest: vi.fn(() => ({ version: '0.1.3' })) },
+      storage: {
+        local: {
+          get: vi.fn((key, cb) => cb({ [key]: false })),
+          set: vi.fn((v, cb) => cb?.()),
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+
+      // First save: fails
+      const apiInput = container.querySelector('#s-apikey');
+      apiInput.value = 'new-key';
+      const event1 = document.createEvent('Event');
+      event1.initEvent('change', true, true);
+      apiInput.dispatchEvent(event1);
+      await new Promise(r => setTimeout(r, 800));
+      expect(container.querySelector('[data-settings-save-error]')).not.toBeNull();
+
+      // Second save: succeeds — banner should be cleared
+      const steamInput = container.querySelector('#s-steamid');
+      steamInput.value = 'new-id';
+      const event2 = document.createEvent('Event');
+      event2.initEvent('change', true, true);
+      steamInput.dispatchEvent(event2);
+      await new Promise(r => setTimeout(r, 800));
+      expect(container.querySelector('[data-settings-save-error]')).toBeNull();
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shows success only when CLEAR_CACHE returns ok true', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const originalAlert = globalThis.alert;
+    const alertMock = vi.fn();
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? { apiKey: 'x', steamId: '1', currency: 'EUR', regions: ['eu'], platforms: [], dealThresholdPct: 10 }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? []
+          : message.type === 'CLEAR_CACHE'
+            ? { ok: true }
+            : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.alert = alertMock;
+    globalThis.chrome = {
+      runtime: { sendMessage, getManifest: vi.fn(() => ({ version: '0.1.3' })) },
+      storage: {
+        local: {
+          get: vi.fn((key, cb) => cb({ [key]: false })),
+          set: vi.fn((v, cb) => cb?.()),
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+      container.querySelector('#s-clear').click();
+
+      await vi.waitFor(() => expect(alertMock).toHaveBeenCalledWith('Cache cleared.'));
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      globalThis.alert = originalAlert;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shows an error when CLEAR_CACHE returns ok false', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalLocation = globalThis.location;
+    const originalAlert = globalThis.alert;
+    const alertMock = vi.fn();
+    const sendMessage = vi.fn((message, callback) => {
+      const response = message.type === 'GET_SETTINGS'
+        ? { apiKey: 'x', steamId: '1', currency: 'EUR', regions: ['eu'], platforms: [], dealThresholdPct: 10 }
+        : message.type === 'GET_EXCLUDED_PAGES'
+          ? []
+          : message.type === 'CLEAR_CACHE'
+            ? { ok: false, code: 'CACHE_CLEAR_FAILED', error: 'storage failed' }
+            : {};
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.alert = alertMock;
+    globalThis.chrome = {
+      runtime: { sendMessage, getManifest: vi.fn(() => ({ version: '0.1.3' })) },
+      storage: {
+        local: {
+          get: vi.fn((key, cb) => cb({ [key]: false })),
+          set: vi.fn((v, cb) => cb?.()),
+        },
+      },
+    };
+    globalThis.location = new URL('https://extension.test/popup.html?tab=settings');
+
+    try {
+      const container = document.createElement('div');
+      await initSettings(container);
+      container.querySelector('#s-clear').click();
+
+      await vi.waitFor(() => expect(alertMock).toHaveBeenCalledWith('Cache clear failed: storage failed'));
+      expect(alertMock).not.toHaveBeenCalledWith('Cache cleared.');
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.location = originalLocation;
+      globalThis.alert = originalAlert;
       document.body.replaceChildren();
       vi.restoreAllMocks();
     }

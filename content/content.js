@@ -44,6 +44,10 @@ const settingsRef = { current: null, revision: 0 }; // Mutable reference for run
     console.warn('[STPT] Failed to get profile — using empty defaults');
     profile = { wishlist: [], tradables: [] };
   }
+  if (profile?.storageError) {
+    console.warn('[STPT] Profile storage error — aborting enrichment:', profile.error);
+    return;
+  }
   const rows = parseGameRows();
   if (rows.length === 0) return;
 

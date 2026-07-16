@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
@@ -28,6 +28,7 @@ const {
   parseTradablesQuantity,
   populateTradablesShellState,
   renderTradablesSearchStatus,
+  initTradables,
 } = await import('../popup/tradables.js');
 
 const { hasBundleKeywords } = await import('../popup/tradables-parser.js');
@@ -647,5 +648,576 @@ describe('parseTradablesAcqPrice', () => {
     expect(parseTradablesAcqPrice('1.2.3')).toBeNull();
     expect(parseTradablesAcqPrice('Infinity')).toBeNull();
     expect(parseTradablesAcqPrice('NaN')).toBeNull();
+  });
+});
+
+describe('tradables save guards and error surfacing', () => {
+  afterEach(async () => {
+    await new Promise(r => setTimeout(r, 50));
+  });
+  function makeContainer() {
+    const container = document.createElement('div');
+    container.id = 'tradables-root';
+    container.innerHTML = `
+      <input id="t-search" type="text">
+      <select id="t-sort"></select>
+      <button id="t-refresh-btn"></button>
+      <span id="t-total-count"></span>
+      <span id="t-total-count-label"></span>
+      <span id="t-prices-count"></span>
+      <span id="t-total-value"></span>
+    `;
+    document.body.appendChild(container);
+    return container;
+  }
+
+  it('does not send SAVE_TRADABLES when GET_TRADABLES returned storageError', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      let response;
+      if (message.type === 'GET_SETTINGS') {
+        response = { apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] };
+      } else if (message.type === 'GET_TRADABLES') {
+        response = { storageError: true, tradables: [] };
+      } else if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        response = [];
+      } else {
+        response = {};
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+
+      const errorBanner = container.querySelector('[data-tradables-save-error]');
+      expect(errorBanner).not.toBeNull();
+      expect(errorBanner.textContent).toContain('Saving is disabled');
+
+      // The auto-save block at initTradables is guarded by !tradablesReadFailed.
+      // Verify no SAVE_TRADABLES was sent during the entire init flow.
+      expect(sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'SAVE_TRADABLES' }),
+        expect.any(Function),
+      );
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shows error banner when SAVE_TRADABLES returns { ok: false } via remove button', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      let response;
+      if (message.type === 'GET_SETTINGS') {
+        response = { apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] };
+      } else if (message.type === 'GET_TRADABLES') {
+        response = [{ name: 'Game A', appId: '100', type: 'app', qty: 1 }];
+      } else if (message.type === 'SAVE_TRADABLES') {
+        response = { ok: false, error: 'Storage full' };
+      } else if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        response = [];
+      } else {
+        response = {};
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+
+      // No error banner after successful init
+      expect(container.querySelector('[data-tradables-save-error]')).toBeNull();
+
+      // Click the remove button to trigger save()
+      const removeBtn = container.querySelector('.tradables-remove');
+      expect(removeBtn).not.toBeNull();
+      removeBtn.click();
+
+      // Wait for async save() + render()
+      await new Promise(r => setTimeout(r, 500));
+
+      // Error banner should now be visible
+      const banner = container.querySelector('[data-tradables-save-error]');
+      expect(banner).not.toBeNull();
+      expect(banner.textContent).toContain('Storage full');
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('closes the add modal after save without waiting for price refresh', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      if (message.type === 'GET_SETTINGS') {
+        callback?.({ apiKey: 'KEY', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] });
+        return;
+      }
+      if (message.type === 'GET_TRADABLES') {
+        callback?.({ tradables: [], tradablesRevision: 'tradables-1' });
+        return;
+      }
+      if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        callback?.([]);
+        return;
+      }
+      if (message.type === 'RESOLVE_TITLES') {
+        callback?.([{ status: 'hit', appId: '367520', type: 'app', title: 'Hollow Knight' }]);
+        return;
+      }
+      if (message.type === 'SAVE_TRADABLES') {
+        callback?.({ ok: true, revision: 'tradables-2' });
+        return;
+      }
+      if (message.type === 'GET_PRICES') {
+        return;
+      }
+      callback?.({});
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+
+      container.querySelector('#t-add-btn').click();
+      document.querySelector('#bulk-input').value = 'Hollow Knight';
+      document.querySelector('#bulk-preview-btn').click();
+      await vi.waitFor(() => expect(document.querySelector('.preview-checkbox')).not.toBeNull());
+
+      document.querySelector('#bulk-add-btn').click();
+      await vi.waitFor(() => expect(document.querySelector('.modal-overlay')).toBeNull());
+
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'SAVE_TRADABLES' }),
+        expect.any(Function),
+      );
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'GET_PRICES' }),
+        expect.any(Function),
+      );
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('clears the tradables list after Delete All succeeds', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalConfirm = globalThis.confirm;
+    const sendMessage = vi.fn((message, callback) => {
+      if (message.type === 'GET_SETTINGS') {
+        callback?.({ apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] });
+        return;
+      }
+      if (message.type === 'GET_TRADABLES') {
+        callback?.({
+          tradables: [{ name: 'Game A', appId: '100', type: 'app', qty: 1 }],
+          tradablesRevision: 'tradables-1',
+        });
+        return;
+      }
+      if (message.type === 'SAVE_TRADABLES') {
+        callback?.({ ok: true, revision: 'tradables-2' });
+        return;
+      }
+      callback?.(message.type === 'GET_TRADABLES_SNAPSHOTS' ? [] : {});
+    });
+    globalThis.confirm = vi.fn(() => true);
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+      expect(container.textContent).toContain('Game A');
+
+      container.querySelector('#t-delete-all').click();
+      await vi.waitFor(() => expect(container.textContent).toContain('No tradables found.'));
+
+      expect(container.textContent).not.toContain('Game A');
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'SAVE_TRADABLES', tradables: [] }),
+        expect.any(Function),
+      );
+    } finally {
+      globalThis.chrome = originalChrome;
+      globalThis.confirm = originalConfirm;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('restores the confirmed list when SAVE_TRADABLES hits runtime.lastError', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      if (message.type === 'GET_SETTINGS') {
+        callback?.({ apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] });
+        return;
+      }
+      if (message.type === 'GET_TRADABLES') {
+        callback?.({
+          tradables: [{ name: 'Game A', appId: '100', type: 'app', qty: 1 }],
+          tradablesRevision: 'tradables-1',
+        });
+        return;
+      }
+      if (message.type === 'SAVE_TRADABLES') {
+        globalThis.chrome.runtime.lastError = { message: 'Message channel closed' };
+        callback?.(undefined);
+        globalThis.chrome.runtime.lastError = null;
+        return;
+      }
+      callback?.(message.type === 'GET_TRADABLES_SNAPSHOTS' ? [] : {});
+    });
+    globalThis.chrome = {
+      runtime: { lastError: null, onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+      container.querySelector('.tradables-remove').click();
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      expect(container.querySelector('.tradables-name')?.textContent).toContain('Game A');
+      expect(container.querySelector('[data-tradables-save-error]')?.textContent)
+        .toContain('Message channel closed');
+      expect(container.querySelector('#t-undo')).toBeNull();
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('does not crash when auto-resolved tradables fail to save during init', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      let response;
+      if (message.type === 'GET_SETTINGS') {
+        response = { apiKey: 'TEST', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] };
+      } else if (message.type === 'GET_TRADABLES') {
+        response = {
+          tradables: [{ name: 'Unresolved Game', appId: null, type: 'app', qty: 1 }],
+          tradablesRevision: 'tradables-1',
+        };
+      } else if (message.type === 'RESOLVE_TITLES') {
+        response = [{ status: 'hit', appId: '123', type: 'app', title: 'Resolved Game' }];
+      } else if (message.type === 'SAVE_TRADABLES') {
+        response = { ok: false, error: 'Storage full' };
+      } else if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        response = [];
+      } else {
+        response = {};
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await expect(initTradables(container)).resolves.toBeUndefined();
+      expect(container.querySelector('[data-tradables-save-error]')?.textContent).toContain('Storage full');
+      expect(container.textContent).toContain('Unresolved Game');
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('clears error banner on subsequent successful save (F1 fix)', async () => {
+    const originalChrome = globalThis.chrome;
+    let saveCount = 0;
+    const sendMessage = vi.fn((message, callback) => {
+      let response;
+      if (message.type === 'GET_SETTINGS') {
+        response = { apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] };
+      } else if (message.type === 'GET_TRADABLES') {
+        response = [
+          { name: 'Game A', appId: '100', type: 'app', qty: 1 },
+          { name: 'Game B', appId: '200', type: 'app', qty: 1 },
+        ];
+      } else if (message.type === 'SAVE_TRADABLES') {
+        saveCount++;
+        response = saveCount === 1
+          ? { ok: false, error: 'Storage full' }
+          : { ok: true, revision: `tradables-${saveCount}` };
+      } else if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        response = [];
+      } else {
+        response = {};
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+
+      // First remove: save fails → banner shown
+      const firstRemove = container.querySelector('.tradables-remove');
+      expect(firstRemove).not.toBeNull();
+      firstRemove.click();
+      await new Promise(r => setTimeout(r, 500));
+
+      let banner = container.querySelector('[data-tradables-save-error]');
+      expect(banner).not.toBeNull();
+      expect(banner.textContent).toContain('Storage full');
+
+      // Second remove: save succeeds → banner cleared
+      const secondRemove = container.querySelector('.tradables-remove');
+      expect(secondRemove).not.toBeNull();
+      secondRemove.click();
+      await new Promise(r => setTimeout(r, 500));
+
+      banner = container.querySelector('[data-tradables-save-error]');
+      expect(banner).toBeNull();
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('error banner survives a re-render (C1 fix)', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      let response;
+      if (message.type === 'GET_SETTINGS') {
+        response = { apiKey: 'x', steamId: '1', currency: 'EUR', regions: ['eu'], platforms: [] };
+      } else if (message.type === 'GET_TRADABLES') {
+        response = { storageError: true, tradables: [] };
+      } else if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        response = [];
+      } else {
+        response = {};
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+
+      let banner = container.querySelector('[data-tradables-save-error]');
+      expect(banner).not.toBeNull();
+
+      container.querySelector('#t-search').value = 'trigger-re-render';
+      const event = document.createEvent('Event');
+      event.initEvent('input', true, true);
+      container.querySelector('#t-search').dispatchEvent(event);
+      await new Promise(r => setTimeout(r, 500));
+
+      banner = container.querySelector('[data-tradables-save-error]');
+      expect(banner).not.toBeNull();
+      expect(banner.textContent).toContain('Saving is disabled');
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('blocks snapshot creation when read failed', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      let response;
+      if (message.type === 'GET_SETTINGS') {
+        response = { apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] };
+      } else if (message.type === 'GET_TRADABLES') {
+        response = { storageError: true, tradables: [] };
+      } else if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        response = [];
+      } else {
+        response = {};
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+
+      sendMessage.mockClear();
+      const snapshotBtn = container.querySelector('#t-snapshot-create');
+      expect(snapshotBtn).not.toBeNull();
+      snapshotBtn.click();
+      await new Promise(r => setTimeout(r, 200));
+      expect(sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'SAVE_TRADABLES_SNAPSHOT' }),
+        expect.any(Function),
+      );
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('exercises save() read-failure guard via delete-all button (TG1)', async () => {
+    const originalChrome = globalThis.chrome;
+    const originalConfirm = globalThis.confirm;
+    globalThis.confirm = vi.fn(() => true);
+    const sendMessage = vi.fn((message, callback) => {
+      let response;
+      if (message.type === 'GET_SETTINGS') {
+        response = { apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] };
+      } else if (message.type === 'GET_TRADABLES') {
+        response = { storageError: true, tradables: [] };
+      } else if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        response = [];
+      } else {
+        response = {};
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+
+      sendMessage.mockClear();
+      const deleteAllBtn = container.querySelector('#t-delete-all');
+      expect(deleteAllBtn).not.toBeNull();
+      deleteAllBtn.click();
+      await new Promise(r => setTimeout(r, 500));
+
+      // save() guard prevents SAVE_TRADABLES from being sent
+      expect(sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'SAVE_TRADABLES' }),
+        expect.any(Function),
+      );
+    } finally {
+      globalThis.confirm = originalConfirm;
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('saves immediately via qty arrow without waiting for a debounce', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      let response;
+      if (message.type === 'GET_SETTINGS') {
+        response = { apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] };
+      } else if (message.type === 'GET_TRADABLES') {
+        response = [{ name: 'Game A', appId: '100', type: 'app', qty: 1 }];
+      } else if (message.type === 'SAVE_TRADABLES') {
+        response = { ok: true, revision: 'tradables-1' };
+      } else if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        response = [];
+      } else {
+        response = {};
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+
+      sendMessage.mockClear();
+      const qtyUp = container.querySelector('.tradables-qty-up');
+      expect(qtyUp).not.toBeNull();
+      qtyUp.click();
+
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'SAVE_TRADABLES' }),
+        expect.any(Function),
+      ));
+      expect(sendMessage.mock.calls.find(([message]) => message.type === 'SAVE_TRADABLES')?.[0].tradables[0].qty).toBe(2);
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('saves a typed valid quantity on input without requiring blur/change', async () => {
+    const originalChrome = globalThis.chrome;
+    const sendMessage = vi.fn((message, callback) => {
+      let response;
+      if (message.type === 'GET_SETTINGS') {
+        response = { apiKey: '', steamId: '', currency: 'EUR', regions: ['eu'], platforms: [] };
+      } else if (message.type === 'GET_TRADABLES') {
+        response = [{ name: 'Game A', appId: '100', type: 'app', qty: 1 }];
+      } else if (message.type === 'SAVE_TRADABLES') {
+        response = { ok: true, revision: 'tradables-typed' };
+      } else if (message.type === 'GET_TRADABLES_SNAPSHOTS') {
+        response = [];
+      } else {
+        response = {};
+      }
+      callback?.(response);
+      return Promise.resolve(response);
+    });
+    globalThis.chrome = {
+      runtime: { onMessage: { addListener: vi.fn() }, sendMessage },
+    };
+
+    try {
+      const container = makeContainer();
+      await initTradables(container);
+
+      sendMessage.mockClear();
+      const qtyInput = container.querySelector('.tradables-qty-input');
+      expect(qtyInput).not.toBeNull();
+      qtyInput.value = '7';
+      qtyInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+
+      await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'SAVE_TRADABLES' }),
+        expect.any(Function),
+      ));
+      expect(sendMessage.mock.calls.find(([message]) => message.type === 'SAVE_TRADABLES')?.[0].tradables[0].qty).toBe(7);
+    } finally {
+      globalThis.chrome = originalChrome;
+      document.body.replaceChildren();
+      vi.restoreAllMocks();
+    }
   });
 });

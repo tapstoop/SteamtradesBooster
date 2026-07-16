@@ -223,10 +223,28 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
   picker.addEventListener('click', e => e.stopPropagation());
 
   let searchTimeout = null;
+  let localSearchSequence = 0;
+  let activeSearchRequestId = null;
+  const createRequestId = () => `picker-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const cancelActiveSearch = () => {
+    if (!activeSearchRequestId) return;
+    sendMessage('CANCEL_STEAM_SEARCH', { requestId: activeSearchRequestId }).catch(() => {});
+    activeSearchRequestId = null;
+  };
+  const closePicker = () => {
+    cancelActiveSearch();
+    picker.remove();
+  };
   const performSearch = async (query) => {
+    cancelActiveSearch();
+    const sequence = ++localSearchSequence;
+    const requestId = createRequestId();
+    activeSearchRequestId = requestId;
     resultsContainer.replaceChildren(createPickerStatusMessage('Searching...'));
     try {
-      const results = await sendMessage('SEARCH_STEAM', { query });
+      const results = await sendMessage('SEARCH_STEAM', { query, requestId });
+      if (sequence !== localSearchSequence || activeSearchRequestId !== requestId || searchInput.value.trim() !== query || !picker.isConnected || results?.cancelled) return;
+      activeSearchRequestId = null;
       resultsContainer.replaceChildren();
       if (!results.items?.length) {
         resultsContainer.replaceChildren(createPickerStatusMessage('No results'));
@@ -239,7 +257,7 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
           meta: `${formatPickerItemType(type)} ${String(item.id)}`,
         });
         resultItem.addEventListener('click', () => {
-          picker.remove();
+          closePicker();
           rowEl.dispatchEvent(new CustomEvent('stpt-resolve', { bubbles: true, detail: { appId: String(item.id), title: item.name, cacheKey, type } }));
           sendMessage('CONFIRM_RESOLUTION', { cacheKey, appId: String(item.id), title: item.name, type }).catch(err => console.error('[STPT] CONFIRM_RESOLUTION failed:', err));
         });
@@ -247,6 +265,7 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
       });
       resultsContainer.replaceChildren(...resultItems);
     } catch (e) {
+      if (sequence !== localSearchSequence || !picker.isConnected) return;
       resultsContainer.replaceChildren(createPickerStatusMessage('Search failed', '#f38ba8'));
     }
   };
@@ -255,6 +274,8 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
     clearTimeout(searchTimeout);
     const query = e.target.value.trim();
     if (query.length < 2) {
+      cancelActiveSearch();
+      localSearchSequence++;
       resultsContainer.replaceChildren();
       return;
     }
@@ -270,7 +291,7 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
   dismiss.textContent = 'Not a game — dismiss';
   dismiss.style.cssText = 'border-top:1px solid #1e1e2e;margin-top:5px;';
   dismiss.addEventListener('click', async () => {
-    picker.remove();
+    closePicker();
     await sendMessage('SET_DISMISSED', { cacheKey });
     const existing = rowEl.querySelector('.stpt-badge');
     if (existing) existing.remove();
@@ -287,7 +308,7 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
   delisted.textContent = 'Delisted game';
   delisted.style.cssText = 'color:#ff4444;border-top:1px solid #1e1e2e;margin-top:2px;padding-top:5px;';
   delisted.addEventListener('click', async () => {
-    picker.remove();
+    closePicker();
     await sendMessage('SET_DELISTED', { cacheKey });
     const existing = rowEl.querySelector('.stpt-badge');
     if (existing) existing.remove();
@@ -307,7 +328,7 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
     searchInput.select();
   }, 0);
 
-  setTimeout(() => document.addEventListener('click', () => picker.remove(), { once: true }), 0);
+  setTimeout(() => document.addEventListener('click', closePicker, { once: true }), 0);
 }
 
 // ── Popover ───────────────────────────────────────────────────────────
