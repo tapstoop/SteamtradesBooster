@@ -1,5 +1,5 @@
 ---
-title: Architecture des refresh dynamiques wishlist, tradables et cache MV3
+title: Dynamic Wishlist, Tradables, and MV3 Cache Refresh Architecture
 date: "2026-07-16"
 module: popup/deals, popup/tradables, popup/tradables-detailed, background/service-worker
 category: architecture
@@ -15,118 +15,119 @@ tags:
   - service-worker
 ---
 
-# Architecture des refresh dynamiques wishlist, tradables et cache MV3
+# Dynamic Wishlist, Tradables, and MV3 Cache Refresh Architecture
 
-## Objectif
+## Goal
 
-Cette note documente l'architecture construite pour rendre les flux Wishlist, Tradables et Clear cache robustes dans une extension Chrome MV3.
+This document describes the architecture used to make Wishlist, Tradables, and Clear Cache flows reliable in a Chrome Manifest V3 extension.
 
-Les problèmes résolus étaient principalement :
+The main problems addressed were:
 
-- les réponses async obsolètes qui réécrivaient l'UI ou le stockage après un clear cache ;
-- les anciens caches wishlist qui réapparaissaient pendant un refresh incomplet ;
-- les chargements wishlist qui perdaient l'état progressif à la fermeture/réouverture du popup ;
-- les prix GG.deals qui n'étaient appliqués qu'en fin de chargement ;
-- les 429 GG.deals affichés comme de simples prix indisponibles ;
-- les mutations Tradables qui pouvaient perdre des quantités ou laisser des vues stale ;
-- les recherches Steam concurrentes ou obsolètes qui pouvaient afficher de mauvais résultats.
+- stale async responses rewriting UI or storage after a cache clear;
+- old wishlist caches reappearing during an incomplete refresh;
+- wishlist loading losing progressive state when the popup is closed or reopened;
+- GG.deals prices being applied only after the full Steam wishlist had finished loading;
+- GG.deals 429 responses being shown as generic unavailable prices;
+- users with long wishlists missing API-limit warnings because they were visible only on individual cards;
+- Tradables quantity mutations being lost or leaving stale views visible;
+- concurrent or obsolete Steam searches rendering incorrect results.
 
-Le principe général est simple : les données durables restent dans `chrome.storage.local`, mais les opérations vivantes du service worker et du popup sont coordonnées par des epochs, des tokens et des guards de séquence.
+The core rule is simple: durable data lives in `chrome.storage.local`, while currently active service-worker and popup operations are coordinated with epochs, tokens, request IDs, and sequence guards.
 
-## Vue d'ensemble des responsabilités
+## Responsibilities
 
 ### Background service worker
 
-Le service worker reste la couche d'autorité pour :
+The service worker is the authority for:
 
-- les messages Chrome runtime ;
-- les accès à `chrome.storage.local` ;
-- les appels Steam ;
-- les appels GG.deals ;
-- les écritures de cache ;
-- les broadcasts vers popup/content scripts.
+- Chrome runtime messages;
+- `chrome.storage.local` access;
+- Steam API calls;
+- GG.deals API calls;
+- cache writes;
+- broadcasts to popup and content scripts.
 
-Comme MV3 peut hiberner le service worker, son état mémoire n'est utilisé que pour coordonner les opérations actuellement vivantes. Toute donnée durable doit être persistée.
+Because MV3 can suspend the service worker, in-memory state is used only to coordinate currently running work. Durable state must be persisted.
 
-Les mécanismes importants sont :
+Important mechanisms:
 
-- une barrière de cycle de vie autour de `CLEAR_CACHE` ;
-- un verrou d'écriture stockage unique ;
-- des refresh tokens pour les caches wishlist ;
-- des messages de progression wishlist ;
-- des broadcasts d'événements : `CACHE_CLEARED`, `TRADABLES_UPDATED`, `GGDEALS_RATE_LIMITED`.
+- a lifecycle barrier around `CLEAR_CACHE`;
+- one shared storage write lock;
+- refresh tokens for wishlist cache transactions;
+- progressive wishlist messages;
+- broadcasts such as `CACHE_CLEARED`, `TRADABLES_UPDATED`, and `GGDEALS_RATE_LIMITED`.
 
 ### Popup Wishlist
 
-`popup/deals.js` est responsable de l'expérience utilisateur wishlist :
+`popup/deals.js` owns the Wishlist user experience:
 
-- affichage immédiat du cache complet quand il est autoritaire ;
-- affichage progressif pendant un refresh Steam/GG.deals ;
-- persistance des cartes partielles non autoritaires ;
-- commit final du nouveau cache complet ;
-- distinction entre `Refresh prices` et `Reload wishlist`.
+- rendering an authoritative complete cache immediately;
+- rendering progressively while Steam and GG.deals calls are still running;
+- persisting non-authoritative partial cards;
+- committing the final complete cache;
+- keeping `Refresh prices` and `Reload wishlist` as separate actions.
 
-La wishlist ne doit jamais repasser à un écran vide si des cartes sont déjà connues pour le refresh courant.
+The Wishlist view should not fall back to an empty loading state when cards are already known for the current refresh.
 
 ### Popup Tradables
 
-`popup/tradables.js` et `popup/tradables-detailed.js` partagent une logique de cohérence :
+`popup/tradables.js` and `popup/tradables-detailed.js` share consistency rules:
 
-- les mutations Tradables sont sauvegardées immédiatement ;
-- une seule mutation visible est autorisée à la fois ;
-- le service worker broadcast `TRADABLES_UPDATED` après chaque écriture ;
-- `Tradables detailed` se précharge et se met à jour sans attendre que l'utilisateur clique sur l'onglet.
+- visible Tradables mutations are saved immediately;
+- only one visible mutation is allowed at a time;
+- the service worker broadcasts `TRADABLES_UPDATED` after each write;
+- Tradables Detailed preloads and updates without waiting for the user to click the tab.
 
-## Clear cache et barrière de cycle de vie
+## Clear Cache Lifecycle Barrier
 
-`CLEAR_CACHE` est traité comme une opération de cycle de vie globale.
+`CLEAR_CACHE` is a global lifecycle operation.
 
-Le service worker :
+The service worker:
 
-1. ferme l'admission de nouvelles opérations ;
-2. incrémente un epoch ;
-3. invalide les profils coalescés ;
-4. annule les recherches Steam en cours ;
-5. reset le scheduler Steam ;
-6. attend le drain des opérations déjà admises ;
-7. vide le stockage non préservé ;
-8. rouvre l'admission ;
-9. broadcast `CACHE_CLEARED`.
+1. closes admission for new operations;
+2. increments the lifecycle epoch;
+3. invalidates coalesced profile runs;
+4. cancels active Steam searches;
+5. resets the Steam scheduler;
+6. waits for already admitted operations to drain;
+7. clears non-preserved storage;
+8. reopens admission;
+9. broadcasts `CACHE_CLEARED`.
 
-Les messages reçus pendant une purge attendent la fin de la purge et deviennent du nouveau travail post-purge.
+Messages received during a clear wait for the clear to finish, then run as new post-clear work.
 
-Les clés utilisateur à préserver incluent notamment :
+Preserved user data includes:
 
-- settings ;
-- clé API ;
-- Steam ID ;
-- Tradables ;
-- snapshots Tradables ;
-- acquisitions ;
-- options de refresh.
+- settings;
+- GG.deals API key;
+- Steam ID;
+- Tradables;
+- Tradables snapshots;
+- acquisition data;
+- refresh options.
 
-Le cache wishlist complet et les caches de prix/résolution ne sont pas préservés par `CLEAR_CACHE`.
+The complete wishlist cache and secondary price/resolution caches are not preserved by `CLEAR_CACHE`.
 
-## Cache wishlist transactionnel
+## Transactional Wishlist Cache
 
-Le cache historique s'appelle encore `deals_cards_cache`. Il représente désormais le cache wishlist complet ou un marker de refresh incomplet.
+The historical storage key is still `deals_cards_cache`. It now represents either a complete authoritative wishlist cache or an incomplete refresh marker.
 
-Deux messages structurent la transaction :
+The transaction is structured by two messages:
 
 - `BEGIN_DEALS_REFRESH`
 - `COMMIT_DEALS_REFRESH`
 
-Un marker incomplet contient :
+An incomplete marker contains:
 
 - `profileComplete: false`
 - `cacheIdentity`
 - `refreshToken`
 - `startedAt`
-- éventuellement `previousComplete`
-- éventuellement `partialCards`
-- éventuellement `partialSavedAt`
+- optional `previousComplete`
+- optional `partialCards`
+- optional `partialSavedAt`
 
-Un cache complet contient :
+A complete cache contains:
 
 - `profileComplete: true`
 - `cacheIdentity`
@@ -134,21 +135,21 @@ Un cache complet contient :
 - `savedAt`
 - `failedAppIds`
 
-Règles :
+Rules:
 
-- seul `COMMIT_DEALS_REFRESH` écrit un cache complet autoritaire ;
-- `UPDATE_DEALS_REFRESH_PROGRESS` ne stocke que des cartes partielles non autoritaires ;
-- un commit vérifie `cacheIdentity` et `refreshToken` ;
-- un ancien refresh ne peut pas remplacer un refresh plus récent ;
-- un profil incomplet ne doit jamais produire un cache complet.
+- only `COMMIT_DEALS_REFRESH` writes an authoritative complete cache;
+- `UPDATE_DEALS_REFRESH_PROGRESS` stores only non-authoritative partial cards;
+- commits verify both `cacheIdentity` and `refreshToken`;
+- an older refresh cannot replace a newer refresh;
+- an incomplete profile never produces a complete cache.
 
-À terme, `deals_cards_cache` devra être renommé vers `wishlist_cards_cache`, mais ce renommage est volontairement séparé pour éviter de mélanger migration de nom et correction de concurrence.
+The storage key should eventually be renamed from `deals_cards_cache` to `wishlist_cards_cache`, but that migration is intentionally separate from the concurrency fixes.
 
-## Rendu progressif Wishlist
+## Progressive Wishlist Rendering
 
-La wishlist suit un run actif côté popup.
+The popup keeps an active wishlist run for the whole Steam -> resolution -> price -> commit pipeline.
 
-Ce run contient notamment :
+The run tracks:
 
 - `sequence`
 - `requestId`
@@ -163,176 +164,182 @@ Ce run contient notamment :
 - `progressCardsByAppId`
 - `progressPriceKeys`
 
-Les phases principales sont :
+Main phases:
 
 - `steam-loading`
 - `resolving`
 - `pricing`
 - `complete`
 
-Le run reste vivant pendant toute la chaîne Steam -> résolution -> prix -> commit. Il n'est pas détruit juste après `GET_PROFILE`.
+The run is not destroyed immediately after `GET_PROFILE`. This ensures:
 
-Cela garantit que :
+- switching tabs does not lose cards already received;
+- closing and reopening the popup can rehydrate partial cards;
+- the `resolving` phase does not fall back to a blank `Loading wishlist...` screen;
+- Steam and GG.deals links appear as soon as the required data exists;
+- GG.deals prices are applied chunk by chunk.
 
-- changer d'onglet ne fait pas perdre les cartes déjà reçues ;
-- fermer/réouvrir le popup pendant un chargement peut réhydrater les cartes partielles ;
-- la phase `resolving` ne revient pas à `Loading wishlist...` ;
-- les liens Steam et GG.deals apparaissent dès que les données nécessaires existent ;
-- les prix GG.deals sont appliqués chunk par chunk.
+## Refresh Prices vs Reload Wishlist
 
-## Différence entre Refresh prices et Reload wishlist
-
-Les deux boutons ont des responsabilités différentes.
+The two Wishlist buttons intentionally do different work.
 
 ### Refresh prices
 
-`Refresh prices` est un refresh léger :
+`Refresh prices` is a lightweight price refresh:
 
-- ne recharge pas Steam ;
-- ne reconstruit pas la wishlist ;
-- utilise la liste actuellement affichée ;
-- appelle GG.deals pour les prix selon la logique de cache/stale ;
-- ne démarre pas de nouveau cache wishlist transactionnel.
+- does not reload Steam;
+- does not rebuild the wishlist;
+- uses the currently displayed list;
+- calls GG.deals for prices according to the cache/stale policy;
+- does not start a new transactional wishlist cache refresh.
 
 ### Reload wishlist
 
-`Reload wishlist` est un force rebuild complet :
+`Reload wishlist` is a full forced rebuild:
 
-- ignore le cache wishlist Steam ;
-- ignore les partial cards existantes ;
-- appelle `GET_PROFILE` avec `forceRefresh: true` ;
-- ignore `GET_CACHED_RESOLUTIONS` ;
-- appelle `RESOLVE_TITLES` pour toute la wishlist ;
-- ignore `GET_CACHED_PRICES` ;
-- appelle `REFRESH_PRICES` pour tous les App IDs résolus ;
-- persiste les cartes partielles pendant le chargement ;
-- commit le nouveau cache complet à la fin.
+- ignores the cached Steam wishlist;
+- ignores existing partial cards;
+- calls `GET_PROFILE` with `forceRefresh: true`;
+- skips `GET_CACHED_RESOLUTIONS`;
+- calls `RESOLVE_TITLES` for the full wishlist with `forceRefresh: true`;
+- skips `GET_CACHED_PRICES`;
+- calls `REFRESH_PRICES` for all resolved App IDs;
+- persists partial cards while loading;
+- commits the new complete cache at the end.
 
-Le résultat complet de `Reload wishlist` devient la nouvelle et dernière liste autoritaire sauvegardée.
+The final result of `Reload wishlist` becomes the latest authoritative wishlist cache.
 
-## GG.deals, rate limiting et progression des prix
+## GG.deals Rate Limiting and Progressive Prices
 
-Steam wishlist et GG.deals sont deux APIs distinctes avec deux limites distinctes.
+The Steam wishlist API and the GG.deals API are separate APIs with separate rate limits.
 
-Le flux correct est :
+The correct pipeline is:
 
-1. Steam renvoie un lot de jeux ;
-2. le popup affiche les cartes immédiatement ;
-3. les titres sont résolus en App IDs ;
-4. GG.deals est appelé pour les jeux résolus ;
-5. les prix sont appliqués dès réception ;
-6. les cartes partielles sont persistées ;
-7. le commit final remplace le cache complet.
+1. Steam returns a batch of games;
+2. the popup renders those cards immediately;
+3. titles are resolved to Steam App IDs;
+4. GG.deals is called for resolved games;
+5. prices are applied as soon as they arrive;
+6. partial cards are persisted;
+7. the final commit replaces the complete cache.
 
-Les appels GG.deals restent soumis au rate limiter. En cas de 429 ou d'attente locale connue, le service worker broadcast :
+GG.deals calls remain governed by the rate limiter. On a 429 or known local quota wait, the service worker broadcasts:
 
 - `GGDEALS_RATE_LIMITED`
 
-Le popup marque alors les cartes concernées avec :
+The popup marks affected cards with:
 
 - `priceStatus: { type: "rate-limited", resetAt }`
 
-Le rendu affiche :
+Card-level rendering shows:
 
 - `GG.deals API limit reached — resets at HH:MM`
 
-ou, si l'heure est inconnue :
+or, when the reset time is unknown:
 
 - `GG.deals API limit reached — retrying shortly`
 
-Ce message remplace `Price unavailable` uniquement quand la cause est réellement une limite API. Quand un prix arrive plus tard, `priceStatus` est supprimé.
+The Wishlist summary also derives a global warning from the same card state and displays it next to the count, for example:
 
-## Tradables et Tradables detailed
+- `76 games on wishlist — 6 with prices — GG.deals API limit reached — resets at 14:24`
 
-Les Tradables sont désormais traités comme une donnée durable sensible.
+During progressive loading, the warning is appended without hiding the current loading phase, for example:
 
-Principes :
+- `12 games received — 6 with prices — GG.deals API limit reached — resets at 14:24 — loading...`
 
-- `SAVE_TRADABLES` écrit immédiatement via le service worker ;
-- les quantités ne sont plus sauvegardées via debounce fragile ;
-- une mutation visible désactive les contrôles jusqu'à confirmation ;
-- en cas d'échec, l'UI restaure la dernière liste confirmée ;
-- après sauvegarde, le service worker broadcast `TRADABLES_UPDATED`.
+This keeps the warning visible for long wishlists without requiring the user to scroll to a specific affected card. When prices later arrive for affected cards, `priceStatus` is cleared and the global warning disappears automatically.
 
-`Tradables detailed` :
+## Tradables and Tradables Detailed
 
-- ne doit pas recharger inutilement à chaque clic d'onglet ;
-- précharge en arrière-plan quand les Tradables changent ;
-- affiche dynamiquement les résultats si l'utilisateur ouvre l'onglet pendant un chargement ;
-- affiche un état vide direct quand la liste Tradables est vide ;
-- utilise un lien vers l'onglet Tradables pour guider l'utilisateur.
+Tradables are treated as sensitive durable data.
 
-## Recherches Steam annulables
+Principles:
 
-Les recherches Steam utilisent un contrat avec `requestId`.
+- `SAVE_TRADABLES` writes immediately through the service worker;
+- quantities are no longer saved through a fragile debounce;
+- visible mutations disable controls until confirmation;
+- on failure, the UI restores the last confirmed list;
+- after saving, the service worker broadcasts `TRADABLES_UPDATED`.
 
-Messages :
+Tradables Detailed:
+
+- does not reload unnecessarily on every tab click;
+- preloads in the background when Tradables change;
+- renders progressively if the user opens the tab during loading;
+- shows an immediate empty state when the Tradables list is empty;
+- links to the Tradables tab to guide the user.
+
+## Cancellable Steam Searches
+
+Steam searches use a `requestId` contract.
+
+Messages:
 
 - `SEARCH_STEAM { query, requestId }`
 - `CANCEL_STEAM_SEARCH { requestId }`
 
-Le service worker coalesce les recherches identiques tout en gardant des abonnés séparés.
+The service worker coalesces identical searches while keeping subscribers separate.
 
-Règles :
+Rules:
 
-- une frappe invalide immédiatement la recherche précédente ;
-- une annulation ne coupe le réseau que si le dernier abonné disparaît ;
-- une réponse annulée ou obsolète est ignorée ;
-- `CLEAR_CACHE` annule toutes les recherches en cours ;
-- les interfaces vérifient toujours que le champ, le compteur local et le conteneur DOM sont encore valides après chaque `await`.
+- each keystroke invalidates the previous search immediately;
+- cancellation aborts the network only when the final subscriber disappears;
+- cancelled or obsolete responses are ignored;
+- `CLEAR_CACHE` cancels all active searches;
+- UIs verify the input value, local counter, and connected DOM container after each `await`.
 
-## Lecture stricte des Tradables pour les profils
+## Strict Tradables Reads for Profiles
 
-La lecture Tradables utilisée par `GET_PROFILE` distingue :
+The Tradables read path used by `GET_PROFILE` distinguishes:
 
-- clé absente ;
-- liste valide ;
-- donnée malformée ;
-- erreur de stockage.
+- missing key;
+- valid list;
+- malformed data;
+- storage read error.
 
-En cas d'erreur de lecture storage :
+On a storage read error:
 
-- `GET_PROFILE` retourne `storageError: true` ;
-- aucun profil vide valide n'est produit ;
-- le content script n'enrichit pas la page avec une classification trompeuse ;
-- les vues popup affichent l'erreur réelle.
+- `GET_PROFILE` returns `storageError: true`;
+- no valid empty profile is produced;
+- the content script does not enrich the page with misleading classifications;
+- popup views show the real error.
 
-Cela évite de reclasser des jeux comme non-tradables à cause d'une erreur storage temporaire.
+This prevents games from being reclassified as non-tradable because of a transient storage failure.
 
-## Invariants importants
+## Important Invariants
 
-- Un ancien refresh ne peut jamais écraser un refresh plus récent.
-- Un cache incomplet n'est jamais autoritaire.
-- Un clear cache annule les écritures et rendus tardifs.
-- Un profil incomplet ne produit pas de cache wishlist complet.
-- `Refresh prices` ne recharge jamais Steam.
-- `Reload wishlist` force Steam + résolution + GG.deals sans utiliser les caches secondaires.
-- Les prix déjà reçus restent visibles pendant les attentes GG.deals.
-- Les messages 429 sont affichés explicitement à l'utilisateur.
-- Toute donnée durable doit survivre à l'hibernation MV3 via `chrome.storage.local`.
+- An older refresh can never overwrite a newer refresh.
+- An incomplete cache is never authoritative.
+- Clear cache cancels late writes and stale renders.
+- An incomplete profile never produces a complete wishlist cache.
+- `Refresh prices` never reloads Steam.
+- `Reload wishlist` forces Steam, resolution, and GG.deals without using secondary caches.
+- Prices already received stay visible during GG.deals waits.
+- GG.deals API-limit states are explicit both on cards and in the Wishlist summary.
+- Durable data must survive MV3 suspension through `chrome.storage.local`.
 
-## Tests de référence
+## Reference Tests
 
-Les tests couvrent notamment :
+The test suite covers:
 
-- purge cache concurrente ;
-- stale refresh tokens ;
-- cache incomplet non autoritaire ;
-- rendu progressif wishlist ;
-- tab switch pendant chargement ;
-- fermeture/réouverture pendant refresh ;
-- persistance des partial cards ;
-- 429 GG.deals visible dans l'UI ;
-- force reload wishlist sans caches résolutions/prix ;
-- mutations Tradables immédiates ;
-- broadcasts `TRADABLES_UPDATED` ;
-- recherches Steam annulables ;
-- builds Chrome/Firefox ;
-- scénario Playwright de régression quand Chromium peut démarrer.
+- concurrent cache clearing;
+- stale refresh tokens;
+- incomplete caches being non-authoritative;
+- progressive Wishlist rendering;
+- tab switching during loading;
+- popup close/reopen during refresh;
+- partial card persistence;
+- GG.deals 429 states on cards and in the Wishlist summary;
+- forced Wishlist reload without resolution or price cache reads;
+- immediate Tradables mutations;
+- `TRADABLES_UPDATED` broadcasts;
+- cancellable Steam searches;
+- Chrome and Firefox builds;
+- targeted Playwright regression scenarios when Chromium can launch.
 
-## Points à surveiller
+## Watch Points
 
-- Le nom `deals_cards_cache` est historique et devra être migré vers `wishlist_cards_cache`.
-- Le mot `deals` reste présent dans plusieurs fonctions popup ; un futur refactor devra renommer ces symboles vers `wishlist`.
-- Les caches de résolution et de prix sont utiles pour les refresh normaux, mais ne doivent pas être utilisés par `Reload wishlist`.
-- Le rate limiter GG.deals ne doit jamais être contourné ; l'UI doit expliquer les attentes au lieu de masquer l'état.
+- `deals_cards_cache` is a historical name and should later migrate to `wishlist_cards_cache`.
+- Several popup functions still use `deals` naming; a future refactor should rename these symbols toward `wishlist`.
+- Resolution and price caches are useful for normal refreshes, but must not be used by `Reload wishlist`.
+- The GG.deals rate limiter must not be bypassed; the UI should explain waits instead of hiding them.
