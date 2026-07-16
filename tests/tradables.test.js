@@ -28,7 +28,6 @@ const {
   parseTradablesQuantity,
   populateTradablesShellState,
   renderTradablesSearchStatus,
-  initTradables,
 } = await import('../popup/tradables.js');
 
 const { hasBundleKeywords } = await import('../popup/tradables-parser.js');

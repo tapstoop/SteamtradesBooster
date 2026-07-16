@@ -22,6 +22,54 @@ function formatPrice(amount, currency = 'EUR') {
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);
 }
 
+function normalizePriceType(type) {
+  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
+}
+
+function normalizeStoredAppId(appId) {
+  const value = String(appId ?? '').trim();
+  return /^\d+$/.test(value) ? value : null;
+}
+
+function steamStoreUrl(id, type = 'app') {
+  const appId = normalizeStoredAppId(id);
+  if (!appId) return null;
+  return `https://store.steampowered.com/${normalizePriceType(type)}/${encodeURIComponent(appId)}`;
+}
+
+function normalizeSafeExternalUrl(url) {
+  if (!url) return null;
+  let parsed;
+  try {
+    parsed = new URL(String(url));
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const isSteamStore = host === 'store.steampowered.com';
+  const isGgDeals = host === 'gg.deals' || host.endsWith('.gg.deals');
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (!isSteamStore && !isGgDeals)) {
+    return null;
+  }
+
+  return parsed.href;
+}
+
+function createExternalLink(url, text, options = {}) {
+  const safeUrl = normalizeSafeExternalUrl(url);
+  if (!safeUrl) return null;
+  const link = document.createElement('a');
+  link.href = safeUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = text;
+  if (options.className) link.className = options.className;
+  if (options.title) link.title = options.title;
+  if (options.style) link.setAttribute('style', options.style);
+  return link;
+}
+
 /** Migrate old newline-string format to [{name, appId}] array */
 export function normalizeTradableItem(item) {
   if (typeof item === 'string') {
@@ -53,6 +101,24 @@ function normalizeTradables(raw) {
 function renderPriceBadge(priceData, settings, item) {
   const badge = document.createElement('span');
   badge.className = 'tradables-price-badge';
+  const qty = item?.qty ?? 1;
+  const acqPrice = normalizeAcqPrice(item?.acqPrice);
+  if (acqPrice != null) {
+    const currency = settings.currency ?? 'EUR';
+    const manualCents = Math.round(acqPrice * 100);
+    badge.classList.add('manual');
+    badge.title = priceData?.prices?.currentRetail != null
+      ? `Manual acquisition price · API: ${formatPrice(priceData.prices.currentRetail, currency)}`
+      : 'Manual acquisition price';
+    badge.append(document.createTextNode(formatPrice(manualCents, currency)));
+    if (qty > 1) {
+      const qtySuffix = document.createElement('span');
+      qtySuffix.className = 'tradables-qty-suffix';
+      qtySuffix.textContent = ` × ${qty} = ${formatPrice(manualCents * qty, currency)}`;
+      badge.appendChild(qtySuffix);
+    }
+    return badge;
+  }
 
   if (!priceData || !priceData.prices) {
     badge.classList.add('na');
@@ -84,13 +150,12 @@ function renderPriceBadge(priceData, settings, item) {
   const priceFormatted = formatPrice(bestCurrent, currency);
   const timestamp = priceData.cachedAt ? formatTimestamp(priceData.cachedAt) : '';
 
-  const qty = item?.qty ?? 1;
   const appendBadgeText = () => {
     badge.append(document.createTextNode(priceFormatted));
     if (qty > 1 && bestCurrent != null) {
       const qtySuffix = document.createElement('span');
       qtySuffix.className = 'tradables-qty-suffix';
-      qtySuffix.textContent = ` x ${qty} = ${formatPrice(bestCurrent * qty, currency)}`;
+      qtySuffix.textContent = ` × ${qty} = ${formatPrice(bestCurrent * qty, currency)}`;
       badge.appendChild(qtySuffix);
     }
   };
@@ -132,15 +197,6 @@ function formatTimestamp(cachedAt) {
   if (hours > 0) return `${hours}h ago`;
   if (minutes > 0) return `${minutes}m ago`;
   return 'now';
-}
-
-function normalizePriceType(type) {
-  return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
-}
-
-function normalizeStoredAppId(appId) {
-  const value = String(appId ?? '').trim();
-  return /^\d+$/.test(value) ? value : null;
 }
 
 export function parseTradablesQuantity(value) {
@@ -202,6 +258,37 @@ function getTradablesTypeLabel(type) {
   return 'App';
 }
 
+export function computeTradablesTotalValue(tradables, pricesById, settings = {}) {
+  let total = 0;
+  let count = 0;
+
+  for (const item of tradables ?? []) {
+    const qty = normalizeQuantity(item?.qty);
+    const acqPrice = normalizeAcqPrice(item?.acqPrice);
+    if (acqPrice != null) {
+      total += Math.round(acqPrice * 100) * qty;
+      count += qty;
+      continue;
+    }
+
+    const data = readPriceEntry(pricesById, item);
+    if (!data?.prices) continue;
+    const apiPrices = data.prices;
+    let bestCurrent = apiPrices.currentRetail;
+    if (settings.keyshopsEnabled && apiPrices.currentKeyshops != null) {
+      if (bestCurrent == null || apiPrices.currentKeyshops < bestCurrent) {
+        bestCurrent = apiPrices.currentKeyshops;
+      }
+    }
+    if (bestCurrent != null) {
+      total += bestCurrent * qty;
+      count += qty;
+    }
+  }
+
+  return count > 0 ? { total, count } : null;
+}
+
 export function buildTradablesListItemElement(item, {
   priceData = null,
   settings = {},
@@ -247,9 +334,18 @@ export function buildTradablesListItemElement(item, {
   const main = document.createElement('div');
   main.className = 'tradables-item-main';
 
-  const name = document.createElement('span');
-  name.className = 'tradables-name';
-  name.textContent = item.name ?? '';
+  const steamUrl = appId ? steamStoreUrl(appId, item.type ?? 'app') : null;
+  const name = steamUrl
+    ? createExternalLink(steamUrl, item.name ?? '', {
+      className: 'tradables-name',
+      title: 'Open on Steam',
+      style: 'color:inherit;text-decoration:none;',
+    })
+    : document.createElement('span');
+  if (!steamUrl) {
+    name.className = 'tradables-name';
+    name.textContent = item.name ?? '';
+  }
 
   const meta = document.createElement('div');
   meta.className = 'tradables-item-meta';
@@ -269,6 +365,10 @@ export function buildTradablesListItemElement(item, {
   }
 
   meta.appendChild(renderPriceBadge(priceData, settings, item));
+  const ggDealsLink = createExternalLink(priceData?.url, 'GG.deals ↗', { style: 'color:#66c0f4;' });
+  if (ggDealsLink) {
+    meta.append(' · ', ggDealsLink);
+  }
   main.append(name, meta);
 
   const actions = document.createElement('div');
@@ -637,39 +737,7 @@ export async function initTradables(container) {
    * PHASE 4A: Use acquisition price override when set, instead of GG.deals price.
    */
   function computeTotalValue() {
-    let total = 0;
-    let count = 0;
-
-    for (const item of tradablesList) {
-      if (!item.appId) continue;
-      
-      // PHASE 4A: Check if acquisition price is set — use it for EST. VALUE
-      if (item.acqPrice != null) {
-        total += Math.round(item.acqPrice * 100) * (item.qty ?? 1); // Convert to cents
-        count += item.qty ?? 1;
-        continue;
-      }
-      
-      const data = readPriceEntry(priceData, item);
-      if (!data?.prices) continue;
-
-      const prices = data.prices;
-      const keyshopsEnabled = settings.keyshopsEnabled;
-      
-      let bestCurrent = prices.currentRetail;
-      if (keyshopsEnabled && prices.currentKeyshops != null) {
-        if (bestCurrent == null || prices.currentKeyshops < bestCurrent) {
-          bestCurrent = prices.currentKeyshops;
-        }
-      }
-
-      if (bestCurrent != null) {
-        total += bestCurrent * (item.qty ?? 1);
-        count += item.qty ?? 1;
-      }
-    }
-
-    return count > 0 ? { total, count } : null;
+    return computeTradablesTotalValue(tradablesList, priceData, settings);
   }
 
   /**
@@ -807,6 +875,7 @@ export async function initTradables(container) {
 
     // Render list
     const listEl = container.querySelector('#t-list');
+    if (!listEl) return;
     if (filteredSorted.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'tradables-empty';
@@ -831,7 +900,6 @@ export async function initTradables(container) {
     container.querySelector('#t-search').addEventListener('input', (e) => {
       e.stopPropagation();
       searchQuery = e.target.value;
-      render();
     });
 
     container.querySelector('#t-sort').addEventListener('change', (e) => {

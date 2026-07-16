@@ -36,6 +36,50 @@ function normalizePriceType(type) {
   return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
 }
 
+function normalizeStoredAppId(appId) {
+  const value = String(appId ?? '').trim();
+  return /^\d+$/.test(value) ? value : null;
+}
+
+function steamStoreUrl(id, type = 'app') {
+  const appId = normalizeStoredAppId(id);
+  if (!appId) return null;
+  return `https://store.steampowered.com/${normalizePriceType(type)}/${encodeURIComponent(appId)}`;
+}
+
+function normalizeSafeExternalUrl(url) {
+  if (!url) return null;
+  let parsed;
+  try {
+    parsed = new URL(String(url));
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const isSteamStore = host === 'store.steampowered.com';
+  const isGgDeals = host === 'gg.deals' || host.endsWith('.gg.deals');
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || (!isSteamStore && !isGgDeals)) {
+    return null;
+  }
+
+  return parsed.href;
+}
+
+function createExternalLink(url, text, options = {}) {
+  const safeUrl = normalizeSafeExternalUrl(url);
+  if (!safeUrl) return null;
+  const link = document.createElement('a');
+  link.href = safeUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = text;
+  if (options.className) link.className = options.className;
+  if (options.style) link.setAttribute('style', options.style);
+  if (options.title) link.title = options.title;
+  return link;
+}
+
 function readPriceRegion(prices, id, type = 'app', region) {
   if (!prices || !id) return null;
   const normalizedType = normalizePriceType(type);
@@ -168,6 +212,9 @@ async function buildDetailedCards({ settings, tradables, generation, refreshPric
     if (generation !== tradablesDetailedState.generation) return null;
     cards.push(createTradablesDetailedCardElement({
       title,
+      appId,
+      type,
+      ggDealsUrl: data.url,
       currentRetail,
       historicalRetail,
       historicalKeyshops,
@@ -247,6 +294,9 @@ ensureDetailedRuntimeListeners();
 
 export function createTradablesDetailedCardElement({
   title,
+  appId = null,
+  type = 'app',
+  ggDealsUrl = null,
   currentRetail,
   historicalRetail,
   historicalKeyshops,
@@ -267,11 +317,21 @@ export function createTradablesDetailedCardElement({
 
   const titleElement = document.createElement('div');
   titleElement.className = 'game-card-title';
-  titleElement.textContent = title ?? '';
+  const steamUrl = steamStoreUrl(appId, type);
+  const steamLink = steamUrl
+    ? createExternalLink(steamUrl, title ?? '', {
+      style: 'color:inherit;text-decoration:underline;',
+      title: 'Open on Steam',
+    })
+    : null;
+  titleElement.append(steamLink ?? String(title ?? ''));
 
   const priceMeta = document.createElement('div');
   priceMeta.className = 'game-card-meta';
-  priceMeta.appendChild(document.createTextNode('GG.deals: '));
+  const ggDealsLink = createExternalLink(ggDealsUrl, 'GG.deals ↗', { style: 'color:#66c0f4;' });
+  if (ggDealsLink) {
+    priceMeta.append(ggDealsLink, document.createTextNode(': '));
+  }
   const current = document.createElement('strong');
   current.textContent = formatPrice(currentRetail, currency);
   priceMeta.append(current, document.createTextNode(` · ${settings.keyshopsEnabled ? 'Historical ATL' : 'ATL'}: `));

@@ -259,11 +259,15 @@ function normalizeSteamStoreType(type) {
   return ['app', 'bundle', 'sub'].includes(type) ? type : 'app';
 }
 
-function steamStoreUrl(id, type = 'app') {
+export function steamStoreUrl(id, type = 'app') {
   const appId = normalizeStoredAppId(id);
   if (!appId) return null;
   const normalizedType = normalizeSteamStoreType(type);
   return `https://store.steampowered.com/${normalizedType}/${encodeURIComponent(appId)}`;
+}
+
+export function createGgDealsLinkElement(url) {
+  return createExternalLink(url, 'GG.deals ↗');
 }
 
 /**
