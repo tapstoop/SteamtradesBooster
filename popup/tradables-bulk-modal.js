@@ -566,9 +566,29 @@ export function createBulkImportModal(onAdd, options = {}) {
   // PHASE 4F: All 5 categories active by default
   let activeFilters = new Set(['exact', 'appid', 'fuzzy-auto', 'fuzzy-manual', 'notfound']);
   let currentPopover = null;
+  let popoverSearchSequence = 0;
+  let activePopoverSearchRequestId = null;
 
   function msg(type, data = {}) {
     return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
+  }
+
+  function createSearchRequestId() {
+    return `bulk-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function cancelActivePopoverSearch() {
+    if (!activePopoverSearchRequestId) return;
+    msg('CANCEL_STEAM_SEARCH', { requestId: activePopoverSearchRequestId }).catch(() => {});
+    activePopoverSearchRequestId = null;
+  }
+
+  function closeCurrentPopover() {
+    cancelActivePopoverSearch();
+    if (currentPopover) {
+      currentPopover.remove();
+      currentPopover = null;
+    }
   }
 
   // Render filter checkboxes
@@ -591,10 +611,7 @@ export function createBulkImportModal(onAdd, options = {}) {
 
   // Refresh preview list based on filters and state
   function refreshPreview() {
-    if (currentPopover) {
-      currentPopover.remove();
-      currentPopover = null;
-    }
+    closeCurrentPopover();
 
     const filtered = filterVisible(resolvedEntries, activeFilters);
     const addCount = getAddCount(filtered);
@@ -634,10 +651,7 @@ export function createBulkImportModal(onAdd, options = {}) {
 
   function showResolvePopover(anchor, entry, idx) {
     // Close existing popover
-    if (currentPopover) {
-      currentPopover.remove();
-      currentPopover = null;
-    }
+    closeCurrentPopover();
 
     const popover = buildResolvePopoverElement(entry);
 
@@ -649,6 +663,7 @@ export function createBulkImportModal(onAdd, options = {}) {
 
     let searchTimeout = null;
     const performSearch = async (query) => {
+      cancelActivePopoverSearch();
       const steamUrl = parseSteamStoreUrl(query);
       if (steamUrl) {
         const resultItem = buildUrlSearchResultElement(steamUrl);
@@ -661,7 +676,12 @@ export function createBulkImportModal(onAdd, options = {}) {
 
       resultsContainer.replaceChildren(buildSearchStatusElement('Searching...', '#555'));
       try {
-        const results = await msg('SEARCH_STEAM', { query });
+        const searchSequence = ++popoverSearchSequence;
+        const requestId = createSearchRequestId();
+        activePopoverSearchRequestId = requestId;
+        const results = await msg('SEARCH_STEAM', { query, requestId });
+        if (searchSequence !== popoverSearchSequence || activePopoverSearchRequestId !== requestId || searchInput.value.trim() !== query || !popover.isConnected || results?.cancelled) return;
+        activePopoverSearchRequestId = null;
         if (!results.items?.length) {
           resultsContainer.replaceChildren(buildSearchStatusElement('No results', '#555'));
           return;
@@ -675,6 +695,7 @@ export function createBulkImportModal(onAdd, options = {}) {
         });
         resultsContainer.replaceChildren(...resultItems);
       } catch {
+        if (!popover.isConnected) return;
         resultsContainer.replaceChildren(buildSearchStatusElement('Search failed', '#f38ba8'));
       }
     };
@@ -682,7 +703,12 @@ export function createBulkImportModal(onAdd, options = {}) {
     searchInput.addEventListener('input', (e2) => {
       clearTimeout(searchTimeout);
       const q = e2.target.value.trim();
-      if (q.length < 2) { resultsContainer.replaceChildren(); return; }
+      if (q.length < 2) {
+        cancelActivePopoverSearch();
+        popoverSearchSequence++;
+        resultsContainer.replaceChildren();
+        return;
+      }
       searchTimeout = setTimeout(() => performSearch(q), 300);
     });
 
@@ -691,8 +717,7 @@ export function createBulkImportModal(onAdd, options = {}) {
     }
 
     popover.querySelector('.trp-cancel').addEventListener('click', () => {
-      popover.remove();
-      currentPopover = null;
+      closeCurrentPopover();
     });
   }
 
@@ -704,10 +729,7 @@ export function createBulkImportModal(onAdd, options = {}) {
     if (name) entry.matchedName = name;
     entry.status = 'resolved';
     resolvedEntries[idx] = categorizeSingle(entry);
-    if (currentPopover) {
-      currentPopover.remove();
-      currentPopover = null;
-    }
+    closeCurrentPopover();
     refreshPreview();
   }
 
@@ -782,6 +804,7 @@ export function createBulkImportModal(onAdd, options = {}) {
   });
 
   function destroy() {
+    closeCurrentPopover();
     // PHASE 4G: Refocus a safe element before removing overlay
     // This prevents Chrome from detecting "nothing focused in popup" and closing it
     const focused = document.activeElement;

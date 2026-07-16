@@ -2,23 +2,25 @@
 import { createBulkImportModal } from './tradables-bulk-modal.js';
 import { getDisplayRegion } from '../utils/similarity.js';
 import { parseSteamStoreUrl } from './tradables-parser.js';
-
-let qtySaveTimer = null;
-function debouncedSave() {
-  clearTimeout(qtySaveTimer);
-  qtySaveTimer = setTimeout(() => save(), 300);
-}
+import { runtimeSendMessage } from '../utils/chrome-api.js';
 
 function msg(type, data = {}) {
-  return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
+  return runtimeSendMessage(type, data);
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function formatPrice(amount, currency = 'EUR') {
   if (amount == null) return '—';
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);
 }
-
-let searchSequence = 0;
 
 /** Migrate old newline-string format to [{name, appId}] array */
 export function normalizeTradableItem(item) {
@@ -482,6 +484,11 @@ function ensureTradablesRuntimeListeners() {
     tradablesRuntimeState.render?.();
     tradablesRuntimeState.updateStats?.();
   });
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type !== 'TRADABLES_UPDATED' || !tradablesRuntimeState.onTradablesUpdated) return;
+    tradablesRuntimeState.onTradablesUpdated(message);
+  });
 }
 
 export async function initTradables(container) {
@@ -492,11 +499,34 @@ export async function initTradables(container) {
   // Get tradables from separate storage (not from settings)
   const rawTradables = await msg('GET_TRADABLES');
   if (!isCurrentInit()) return;
-  let tradablesList = normalizeTradables(rawTradables);
+  const tradablesReadFailed = rawTradables?.storageError === true;
+  const initialTradables = Array.isArray(rawTradables) ? rawTradables : rawTradables?.tradables;
+  let tradablesRevision = rawTradables?.tradablesRevision ?? 'missing';
+  let tradablesList = tradablesReadFailed ? [] : normalizeTradables(initialTradables);
+  let persistedTradablesList = tradablesList.map(item => ({ ...item }));
+  let tradablesWriteDisabled = tradablesReadFailed;
+  let tradablesSaveChain = Promise.resolve();
+  let tradablesSaveSequence = 0;
+  let tradablesErrorMessage = tradablesReadFailed
+    ? 'Tradables could not be loaded from storage. Saving is disabled. Reopen the popup to retry.'
+    : null;
+  let searchQuery = '';
+  let sortBy = 'name'; // 'name', 'name-desc', 'price', 'price-desc', 'acq', 'acq-desc'
+  let undoStack = []; // Stack of {item, index} for undo functionality
+  let undoTimeout = null;
+  let modal = null;
+  let priceData = {}; // appId -> price info
+  let priceError = null;
+  let undoRenderTimeout = null; // For debounced undo bar rendering
+  let tradablesMutationActive = false;
+  let activeResolveSearchRequestId = null;
+  let resolveSearchSequence = 0;
+  let currency = settings.currency || 'EUR';
+  let currencySymbol = currency === 'USD' ? '$' : '€';
 
   // Resolve any tradables that have appId: null so prices can be fetched
   const unresolved = tradablesList.filter(t => !t.appId && t.name);
-  if (unresolved.length > 0 && settings.apiKey) {
+  if (!tradablesReadFailed && unresolved.length > 0 && settings.apiKey) {
     const titles = unresolved.map(t => t.name);
     const resolutions = await msg('RESOLVE_TITLES', { titles });
     if (!isCurrentInit()) return;
@@ -510,22 +540,23 @@ export async function initTradables(container) {
       }
     });
     if (changed) {
-      await msg('SAVE_TRADABLES', { tradables: tradablesList });
+      const saveResult = await save();
       if (!isCurrentInit()) return;
+      if (!saveResult) {
+        render();
+      }
     }
   }
-  let searchQuery = '';
-  let sortBy = 'name'; // 'name', 'name-desc', 'price', 'price-desc', 'acq', 'acq-desc'
-  let undoStack = []; // Stack of {item, index} for undo functionality
-  let undoTimeout = null;
-  let modal = null;
-  let priceData = {}; // appId -> price info
-  let priceError = null;
-  let undoRenderTimeout = null; // For debounced undo bar rendering
 
-  // Currency from settings (default EUR)
-  let currency = settings.currency || 'EUR';
-  let currencySymbol = currency === 'USD' ? '$' : '€';
+  function createResolveSearchRequestId() {
+    return `tradables-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function cancelActiveResolveSearch() {
+    if (!activeResolveSearchRequestId) return;
+    msg('CANCEL_STEAM_SEARCH', { requestId: activeResolveSearchRequestId }).catch(() => {});
+    activeResolveSearchRequestId = null;
+  }
 
   /**
    * Load cached prices first (no API calls), then optionally refresh.
@@ -592,6 +623,13 @@ export async function initTradables(container) {
   function clearUndoTimeout() {
     clearTimeout(undoTimeout);
     undoTimeout = null;
+  }
+
+  function clearUndoStack() {
+    undoStack = [];
+    clearUndoTimeout();
+    clearTimeout(undoRenderTimeout);
+    undoRenderTimeout = null;
   }
 
   /**
@@ -680,6 +718,21 @@ export async function initTradables(container) {
     return indices;
   }
 
+  function setMutableControlsDisabled(disabled) {
+    container.querySelectorAll([
+      '.tradables-qty-arrow',
+      '.tradables-qty-input',
+      '.tradables-remove',
+      '.tradables-acq-input',
+      '#t-add-btn',
+      '#t-delete-all',
+      '#t-snapshot-create',
+      '#t-snapshot-restore',
+    ].join(',')).forEach(control => {
+      control.disabled = disabled;
+    });
+  }
+
   function render() {
     const sortedIndices = getSortedIndices();
     const filteredSorted = sortedIndices
@@ -693,6 +746,7 @@ export async function initTradables(container) {
     // Static structured shell only; live state is populated through DOM APIs immediately below.
     container.innerHTML = `
       <div class="tradables-container">
+        ${tradablesErrorMessage ? `<div data-tradables-save-error="true" style="color:#b94a4a;font-size:10px;padding:6px;background:#2a1414;border-radius:3px;margin-bottom:8px;">⚠️ ${escapeHtml(tradablesErrorMessage)}</div>` : ''}
         <div class="tradables-toolbar" style="margin-bottom:8px;">
           <input type="text" id="t-search" class="tradables-search" placeholder="Search tradables...">
           <select id="t-sort" class="tradables-sort" title="Sort by">
@@ -765,6 +819,8 @@ export async function initTradables(container) {
       }));
     }
 
+    setMutableControlsDisabled(tradablesWriteDisabled || tradablesMutationActive);
+
     // PHASE 2A: Prevent popup close on interaction
     container.addEventListener('mousedown', (e) => e.stopPropagation());
     container.addEventListener('click', (e) => e.stopPropagation());
@@ -805,18 +861,29 @@ export async function initTradables(container) {
 
     container.querySelector('#t-add-btn').addEventListener('click', (e) => {
       e.stopPropagation();
+      if (tradablesMutationActive || tradablesWriteDisabled) return;
       if (modal) modal.destroy();
       modal = createBulkImportModal(async ({ additions, increments }) => {
-        for (const inc of increments ?? []) {
-          if (tradablesList[inc.index]) {
-            tradablesList[inc.index].qty = Math.max(1, parseInt(tradablesList[inc.index].qty) || 1) + inc.amount;
+        const saved = await runTradablesMutation(() => {
+          for (const inc of increments ?? []) {
+            if (tradablesList[inc.index]) {
+              tradablesList[inc.index].qty = Math.max(1, parseInt(tradablesList[inc.index].qty) || 1) + inc.amount;
+            }
           }
-        }
-        tradablesList = [...tradablesList, ...(additions ?? [])];
-        await save();
-        await fetchPrices();
-        render();
-        updateStats();
+          tradablesList = [...tradablesList, ...(additions ?? [])];
+        });
+        if (!saved) throw new Error(tradablesErrorMessage || 'Tradables could not be saved.');
+        fetchPrices().then(() => {
+          if (isCurrentInit()) {
+            render();
+            updateStats();
+          }
+        }).catch(err => {
+          if (!isCurrentInit()) return;
+          priceError = err?.message || 'Failed to fetch prices.';
+          render();
+          updateStats();
+        });
       }, { existingTradables: tradablesList });
     });
 
@@ -825,15 +892,13 @@ export async function initTradables(container) {
     if (undoBtn) {
       undoBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (undoStack.length === 0) return;
-        const lastDelete = undoStack.pop();
-        // Restore item at its original position (or end of list)
-        const restoreIdx = Math.min(lastDelete.index, tradablesList.length);
-        tradablesList.splice(restoreIdx, 0, lastDelete.item);
-        await save();
-        render();
-        updateStats();
-        clearUndoTimeout();
+        if (undoStack.length === 0 || tradablesMutationActive) return;
+        await runTradablesMutation(() => {
+          const lastDelete = undoStack.pop();
+          const restoreIdx = Math.min(lastDelete.index, tradablesList.length);
+          tradablesList.splice(restoreIdx, 0, lastDelete.item);
+          clearUndoTimeout();
+        });
       });
     }
 
@@ -842,20 +907,16 @@ export async function initTradables(container) {
         e.stopPropagation();
         const origIdx = parseInt(btn.dataset.origIndex);
         const item = tradablesList[origIdx];
-        if (!item) return;
-
-        // Push to undo stack
-        undoStack.push({ item, index: origIdx });
-        clearTimeout(undoTimeout);
-        undoTimeout = setTimeout(() => {
-          undoStack = [];
-          render();
-        }, 5000);
-
-        tradablesList.splice(origIdx, 1);
-        await save();
-        render();
-        updateStats();
+        if (!item || tradablesMutationActive) return;
+        await runTradablesMutation(() => {
+          undoStack.push({ item, index: origIdx });
+          clearTimeout(undoTimeout);
+          undoTimeout = setTimeout(() => {
+            undoStack = [];
+            render();
+          }, 5000);
+          tradablesList.splice(origIdx, 1);
+        });
       });
     });
 
@@ -864,11 +925,10 @@ export async function initTradables(container) {
         e.stopPropagation();
         const origIdx = parseInt(input.dataset.origIndex);
         const item = tradablesList[origIdx];
-        if (item) {
-          item.acqPrice = parseTradablesAcqPrice(input.value);
-          await save();
-          render();
-          updateStats();
+        if (item && !tradablesMutationActive) {
+          await runTradablesMutation(() => {
+            item.acqPrice = parseTradablesAcqPrice(input.value);
+          });
         }
       });
     });
@@ -878,30 +938,42 @@ export async function initTradables(container) {
         e.stopPropagation();
         const origIdx = parseInt(btn.dataset.origIndex);
         const item = tradablesList[origIdx];
-        if (!item) return;
-        const delta = btn.classList.contains('tradables-qty-up') ? 1 : -1;
-        let qty = (item.qty ?? 1) + delta;
-        if (qty < 1) qty = 1;
-        if (qty > 999) qty = 999;
-        item.qty = qty;
-        debouncedSave();
-        render();
-        updateStats();
+        if (!item || tradablesMutationActive) return;
+        await runTradablesMutation(() => {
+          const delta = btn.classList.contains('tradables-qty-up') ? 1 : -1;
+          let qty = (item.qty ?? 1) + delta;
+          if (qty < 1) qty = 1;
+          if (qty > 999) qty = 999;
+          item.qty = qty;
+        });
       });
     });
 
     listEl.querySelectorAll('.tradables-qty-input').forEach(input => {
+      input.addEventListener('input', async (e) => {
+        e.stopPropagation();
+        const origIdx = parseInt(input.dataset.origIndex);
+        const item = tradablesList[origIdx];
+        const raw = input.value.trim();
+        if (!item || tradablesMutationActive || !/^\d+$/.test(raw)) return;
+        await runTradablesMutation(() => {
+          item.qty = parseTradablesQuantity(raw);
+        }, { renderBeforeSave: false });
+      });
       input.addEventListener('change', async (e) => {
         e.stopPropagation();
         const origIdx = parseInt(input.dataset.origIndex);
         const item = tradablesList[origIdx];
-        if (!item) return;
+        if (!item || tradablesMutationActive) return;
         const qty = parseTradablesQuantity(input.value);
-        input.value = qty;
-        item.qty = qty;
-        debouncedSave();
-        render();
-        updateStats();
+        if (qty === normalizeQuantity(item.qty)) {
+          input.value = String(qty);
+          return;
+        }
+        await runTradablesMutation(() => {
+          input.value = String(qty);
+          item.qty = qty;
+        });
       });
     });
 
@@ -913,7 +985,13 @@ export async function initTradables(container) {
         const item = tradablesList[origIdx];
         if (!item) return;
 
+        cancelActiveResolveSearch();
+        container.querySelectorAll('.tradables-resolve-popover').forEach(existing => existing.remove());
         const popover = buildTradablesResolvePopoverElement(item);
+        const closePopover = () => {
+          cancelActiveResolveSearch();
+          popover.remove();
+        };
 
         // Position near the clicked link
         const rect = link.getBoundingClientRect();
@@ -931,6 +1009,7 @@ export async function initTradables(container) {
 
         let searchTimeout = null;
         const performSearch = async (query) => {
+          cancelActiveResolveSearch();
           // Check if query is a Steam URL
           const steamUrl = parseSteamStoreUrl(query);
           if (steamUrl) {
@@ -947,7 +1026,7 @@ export async function initTradables(container) {
               item.appId = steamUrl.id;
               item.type = steamUrl.type;
               await save();
-              popover.remove();
+              closePopover();
               await fetchPrices();
               render();
               updateStats();
@@ -957,10 +1036,13 @@ export async function initTradables(container) {
           }
 
           renderTradablesSearchStatus(resultsContainer, 'Searching...');
-          const searchSeq = ++searchSequence;
+          const searchSeq = ++resolveSearchSequence;
+          const requestId = createResolveSearchRequestId();
+          activeResolveSearchRequestId = requestId;
           try {
-            const results = await msg('SEARCH_STEAM', { query });
-            if (searchSequence !== searchSeq) return;
+            const results = await msg('SEARCH_STEAM', { query, requestId });
+            if (resolveSearchSequence !== searchSeq || activeResolveSearchRequestId !== requestId || searchInput.value.trim() !== query || !popover.isConnected || results?.cancelled) return;
+            activeResolveSearchRequestId = null;
             if (!results.items?.length) {
               renderTradablesSearchStatus(resultsContainer, 'No results');
               return;
@@ -982,7 +1064,7 @@ export async function initTradables(container) {
                 item.appId = String(r.id);
                 item.type = r.type ?? 'app';
                 await save();
-                popover.remove();
+                closePopover();
                 await fetchPrices();
                 render();
                 updateStats();
@@ -991,6 +1073,7 @@ export async function initTradables(container) {
             });
             resultsContainer.replaceChildren(...resultElements);
           } catch {
+            if (!popover.isConnected) return;
             renderTradablesSearchStatus(resultsContainer, 'Search failed', { error: true });
           }
         };
@@ -998,15 +1081,20 @@ export async function initTradables(container) {
         searchInput.addEventListener('input', (e2) => {
           clearTimeout(searchTimeout);
           const query = e2.target.value.trim();
-          if (query.length < 2) { resultsContainer.replaceChildren(); return; }
+          if (query.length < 2) {
+            cancelActiveResolveSearch();
+            resolveSearchSequence++;
+            resultsContainer.replaceChildren();
+            return;
+          }
           searchTimeout = setTimeout(() => performSearch(query), 300);
         });
 
         // Auto-search on open
         if (item.name && item.name.length >= 2) performSearch(item.name);
 
-        popover.querySelector('.trp-cancel').addEventListener('click', () => popover.remove());
-        setTimeout(() => document.addEventListener('click', () => popover.remove(), { once: true }), 0);
+        popover.querySelector('.trp-cancel').addEventListener('click', closePopover);
+        setTimeout(() => document.addEventListener('click', closePopover, { once: true }), 0);
         setTimeout(() => { searchInput.focus(); searchInput.select(); }, 0);
       });
     });
@@ -1016,12 +1104,12 @@ export async function initTradables(container) {
     if (deleteAllBtn) {
       deleteAllBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
+        if (tradablesMutationActive || tradablesWriteDisabled) return;
         if (!confirm('Are you sure? This is going to delete your tradables list. This action is irreversible.')) return;
         if (!confirm('Are you really sure?')) return;
-        tradablesList = [];
-        await save();
-        render();
-        updateStats();
+        await runTradablesMutation(() => {
+          tradablesList = [];
+        });
       });
     }
 
@@ -1053,6 +1141,7 @@ export async function initTradables(container) {
 
     snapshotCreateBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
+      if (tradablesWriteDisabled) return;
       const label = `Snapshot ${new Date().toLocaleString()} (${tradablesList.length} games)`;
       await msg('SAVE_TRADABLES_SNAPSHOT', { label, tradables: tradablesList });
       loadSnapshots();
@@ -1063,8 +1152,28 @@ export async function initTradables(container) {
       const snapId = snapshotSelect.value;
       if (!snapId) return;
       if (!confirm('Restore this snapshot? This will replace your current tradables list.')) return;
-      await msg('RESTORE_TRADABLES_SNAPSHOT', { id: snapId });
-      tradablesList = normalizeTradables(await msg('GET_TRADABLES'));
+      await tradablesSaveChain;
+      if (tradablesWriteDisabled) return;
+      try {
+        const result = await msg('RESTORE_TRADABLES_SNAPSHOT', {
+          id: snapId,
+          expectedRevision: tradablesRevision,
+        });
+        if (result?.ok !== true || !result.revision || !Array.isArray(result.tradables)) {
+          tradablesErrorMessage = result?.error || 'Snapshot could not be restored.';
+          if (result?.code === 'CONFLICT') tradablesWriteDisabled = true;
+          render();
+          return;
+        }
+        tradablesRevision = result.revision;
+        tradablesList = normalizeTradables(result.tradables);
+        persistedTradablesList = tradablesList.map(item => ({ ...item }));
+        tradablesErrorMessage = null;
+      } catch (err) {
+        tradablesErrorMessage = err?.message || 'Snapshot could not be restored.';
+        render();
+        return;
+      }
       render();
       updateStats();
       loadSnapshots();
@@ -1125,7 +1234,71 @@ export async function initTradables(container) {
 
   // PHASE 1A: Save tradables to separate storage, not settings
   async function save() {
-    await msg('SAVE_TRADABLES', { tradables: tradablesList });
+    if (tradablesWriteDisabled) return false;
+    const snapshot = tradablesList.map(item => ({ ...item }));
+    const saveSequence = ++tradablesSaveSequence;
+    const queued = tradablesSaveChain.then(async () => {
+      if (tradablesWriteDisabled) {
+        if (saveSequence === tradablesSaveSequence) {
+          tradablesList = persistedTradablesList.map(item => ({ ...item }));
+        }
+        return false;
+      }
+      try {
+        const result = await msg('SAVE_TRADABLES', {
+          tradables: snapshot,
+          expectedRevision: tradablesRevision,
+        });
+        if (result?.ok !== true || !result.revision) {
+          tradablesErrorMessage = result?.error || 'Tradables could not be saved.';
+          if (result?.code === 'CONFLICT') tradablesWriteDisabled = true;
+          if (saveSequence === tradablesSaveSequence) {
+            tradablesList = persistedTradablesList.map(item => ({ ...item }));
+            clearUndoStack();
+          }
+          return false;
+        }
+        tradablesRevision = result.revision;
+        persistedTradablesList = snapshot.map(item => ({ ...item }));
+        if (saveSequence === tradablesSaveSequence) {
+          tradablesList = snapshot.map(item => ({ ...item }));
+        }
+        tradablesErrorMessage = null;
+        return true;
+      } catch (err) {
+        tradablesErrorMessage = err?.message || 'Tradables could not be saved.';
+        if (saveSequence === tradablesSaveSequence) {
+          tradablesList = persistedTradablesList.map(item => ({ ...item }));
+          clearUndoStack();
+        }
+        return false;
+      }
+    });
+    tradablesSaveChain = queued.catch(() => {});
+    return queued;
+  }
+
+  async function runTradablesMutation(mutator, { afterSave, renderBeforeSave = true } = {}) {
+    if (tradablesWriteDisabled || tradablesMutationActive) return false;
+    tradablesMutationActive = true;
+    try {
+      mutator();
+      if (renderBeforeSave) {
+        render();
+      } else {
+        setMutableControlsDisabled(true);
+      }
+      updateStats();
+      const saved = await save();
+      if (saved && afterSave) await afterSave();
+      return saved;
+    } finally {
+      tradablesMutationActive = false;
+      if (isCurrentInit()) {
+        render();
+        updateStats();
+      }
+    }
   }
 
   if (!bindTradablesRuntimeStateForInit(isCurrentInit, {
@@ -1136,6 +1309,24 @@ export async function initTradables(container) {
     onSettingsUpdated: () => {
       currency = settings.currency || 'EUR';
       currencySymbol = currency === 'USD' ? '$' : '€';
+    },
+    onTradablesUpdated: (message) => {
+      if (tradablesMutationActive) return;
+      if (message.revision && message.revision === tradablesRevision) return;
+      tradablesRevision = message.revision ?? tradablesRevision;
+      tradablesList = normalizeTradables(message.tradables);
+      persistedTradablesList = tradablesList.map(item => ({ ...item }));
+      const validPriceKeys = new Set(tradablesList
+        .filter(item => item.appId)
+        .map(item => `${normalizePriceType(item.type ?? 'app')}:${item.appId}`));
+      for (const key of Object.keys(priceData)) {
+        if (!validPriceKeys.has(key) && !validPriceKeys.has(`app:${key}`)) {
+          delete priceData[key];
+        }
+      }
+      tradablesErrorMessage = null;
+      render();
+      updateStats();
     },
   })) return;
   ensureTradablesRuntimeListeners();

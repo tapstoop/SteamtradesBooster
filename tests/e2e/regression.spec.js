@@ -10,8 +10,8 @@ test.describe('B1 - Badge injection', () => {
 
     const page = await navigate('https://www.steamtrades.com/trade/12345/test');
 
-    // Wait for content script injection - look for skeleton badges first
-    await page.waitForSelector('.stpt-skeleton', { state: 'attached', timeout: 10000 });
+    // The content script can replace skeletons with badges before Playwright observes them.
+    await page.waitForSelector('.stpt-skeleton, .stpt-badge', { state: 'attached', timeout: 10000 });
 
     // Skeletons get replaced by badges once resolutions and cached prices are read
     await page.waitForSelector('.stpt-badge', { state: 'attached', timeout: 10000 });
@@ -314,5 +314,50 @@ test.describe('B8 - Excluded pages stay synchronized', () => {
 
     await popup.close();
     await tradePage.close();
+  });
+});
+
+test.describe('S1 - Tradables persistence', () => {
+  test('add and remove persist across popup sessions', async ({ extensionContext, setSettings }) => {
+    const { context, extensionId } = extensionContext;
+
+    await setSettings({
+      apiKey: '',
+      steamId: '',
+      currency: 'EUR',
+      regions: ['eu'],
+      selectiveFetch: true,
+      showSidebar: false,
+      ggdealsAutoScroll: false,
+      dealThresholdPct: 10,
+    });
+
+    const popupUrl = `chrome-extension://${extensionId}/popup/popup.html`;
+    const openTradables = async () => {
+      const page = await context.newPage();
+      await page.goto(`${popupUrl}?tab=tradables`);
+      await expect(page.locator('#t-list')).toBeAttached();
+      return page;
+    };
+
+    const firstSession = await openTradables();
+    await firstSession.locator('#t-add-btn').click();
+    await firstSession.locator('#bulk-input').fill('Test Game');
+    await firstSession.locator('#bulk-preview-btn').click();
+    await expect(firstSession.locator('#bulk-add-btn')).toBeEnabled();
+    await firstSession.locator('#bulk-add-btn').click();
+    await expect(firstSession.locator('.tradables-name')).toContainText('Test Game');
+    await firstSession.close();
+
+    const secondSession = await openTradables();
+    await expect(secondSession.locator('.tradables-name')).toContainText('Test Game');
+    await secondSession.locator('.tradables-remove').click();
+    await expect(secondSession.locator('.tradables-empty')).toContainText('No tradables found');
+    await secondSession.close();
+
+    const thirdSession = await openTradables();
+    await expect(thirdSession.locator('.tradables-empty')).toContainText('No tradables found');
+    await expect(thirdSession.locator('.tradables-name')).toHaveCount(0);
+    await thirdSession.close();
   });
 });

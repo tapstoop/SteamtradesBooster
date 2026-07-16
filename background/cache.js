@@ -1,6 +1,20 @@
 // background/cache.js
 import { DIAGNOSTICS_KEY } from './diagnostics.js';
 
+let revisionSequence = 0;
+
+function createRevision() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  revisionSequence += 1;
+  return `${Date.now()}-${revisionSequence}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function cacheRevision(entry) {
+  if (!entry) return 'missing';
+  if (typeof entry.revision === 'string' && entry.revision) return entry.revision;
+  return `legacy:${Number(entry.cachedAt) || 0}`;
+}
+
 function storageGet(key) {
   return new Promise((resolve, reject) => {
     chrome.storage.local.get(key, result => {
@@ -35,8 +49,10 @@ export async function cacheSet(key, value, ttlSeconds) {
     value,
     cachedAt: Date.now(),
     expiresAt: ttlSeconds === 0 ? 0 : Date.now() + ttlSeconds * 1000,
+    revision: createRevision(),
   };
   await storageSet(key, entry);
+  return entry.revision;
 }
 
 /**
@@ -47,12 +63,25 @@ export async function cacheGet(key) {
   const entry = await storageGet(key);
   if (!entry) return null;
   if (entry.expiresAt !== 0 && Date.now() > entry.expiresAt) return null;
-  return { value: entry.value, cachedAt: entry.cachedAt };
+  return {
+    value: entry.value,
+    cachedAt: entry.cachedAt,
+    revision: cacheRevision(entry),
+  };
+}
+
+export async function safeCacheGet(key) {
+  try {
+    return await cacheGet(key);
+  } catch (err) {
+    console.warn('[cache] Read failed:', key, err?.message ?? err);
+    return null;
+  }
 }
 
 /** @returns {boolean} */
 export async function cacheHas(key) {
-  return (await cacheGet(key)) !== null;
+  return (await safeCacheGet(key)) !== null;
 }
 
 /**
@@ -70,16 +99,37 @@ export async function cacheDelete(key) {
   });
 }
 
-export async function cacheClear() {
-  return new Promise(resolve => {
-    chrome.storage.local.get(DIAGNOSTICS_KEY, preserved => {
+function shouldPreserveKey(key, preserveKeys, preservePrefixes) {
+  return key === DIAGNOSTICS_KEY
+    || preserveKeys.includes(key)
+    || preservePrefixes.some(prefix => key.startsWith(prefix));
+}
+
+export async function cacheClear({ preserveKeys = [], preservePrefixes = [] } = {}) {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.get(null, stored => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      const preserved = Object.fromEntries(Object.entries(stored ?? {})
+        .filter(([key]) => shouldPreserveKey(key, preserveKeys, preservePrefixes)));
       chrome.storage.local.clear(() => {
-        const diagnostics = preserved?.[DIAGNOSTICS_KEY];
-        if (!diagnostics) {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (Object.keys(preserved).length === 0) {
           resolve();
           return;
         }
-        chrome.storage.local.set({ [DIAGNOSTICS_KEY]: diagnostics }, resolve);
+        chrome.storage.local.set(preserved, () => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve();
+        });
       });
     });
   });
@@ -107,8 +157,13 @@ export async function setUndismissed(cacheKey) {
  * @returns {boolean}
  */
 export async function isDismissed(cacheKey) {
-  const entry = await storageGet(`${cacheKey}:dismissed`);
-  return entry?.value === '1';
+  try {
+    const entry = await storageGet(`${cacheKey}:dismissed`);
+    return entry?.value === '1';
+  } catch (err) {
+    console.warn('[cache] Dismissed read failed:', cacheKey, err?.message ?? err);
+    return false;
+  }
 }
 
 /**
@@ -133,6 +188,11 @@ export async function setUndelisted(cacheKey) {
  * @returns {boolean}
  */
 export async function isDelisted(cacheKey) {
-  const entry = await storageGet(`${cacheKey}:delisted`);
-  return entry?.value === '1';
+  try {
+    const entry = await storageGet(`${cacheKey}:delisted`);
+    return entry?.value === '1';
+  } catch (err) {
+    console.warn('[cache] Delisted read failed:', cacheKey, err?.message ?? err);
+    return false;
+  }
 }

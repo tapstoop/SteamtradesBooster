@@ -1,10 +1,11 @@
 // background/ggdeals.js
-import { cacheGet, cacheSet } from './cache.js';
+import { safeCacheGet, cacheSet } from './cache.js';
 import {
   buildApiCallSummary,
   buildQuotaBlockEvent,
   recordGgDealsDiagnostics,
 } from './diagnostics.js';
+import { steamFetch } from './steam-rate-limiter.js';
 
 const PRICE_TTL = 0; // Permanent until manual refresh
 const BASE_URL = 'https://api.gg.deals/v1';
@@ -231,6 +232,13 @@ async function processQueue() {
             status: 'local-wait',
           });
           await safeRecordDiagnostics(() => recordGgDealsDiagnostics({ quotaBlock }));
+          waitingJob.onRateLimited?.({
+            type: waitingJob.type,
+            ids: waitingJob.ids,
+            region: waitingJob.region,
+            resetAt: rateLimitState.resetAt,
+            source: 'local-wait',
+          });
         }
         const wait = rateLimitState.resetAt - Date.now() + 200;
         await new Promise(r => setTimeout(r, Math.max(200, wait)));
@@ -247,6 +255,13 @@ async function processQueue() {
         job.resolve({ region: job.region, type: job.type, data });
       } catch (err) {
         if (err.rateLimited) {
+          job.onRateLimited?.({
+            type: job.type,
+            ids: job.ids,
+            region: job.region,
+            resetAt: err.resetAt ?? rateLimitState.resetAt,
+            source: '429',
+          });
           queue.unshift(job);
           const rawWait = (err.resetAt || Date.now() + 60000) - Date.now() + 200;
           await new Promise(r => setTimeout(r, Math.max(200, rawWait)));
@@ -276,7 +291,7 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
     if (!forceRefresh || subFallbackCache.has(subId)) return;
     const cachedRegions = new Map();
     for (const region of regions) {
-      const cachedSub = await cacheGet(typedPriceKey(subId, 'sub', region));
+      const cachedSub = await safeCacheGet(typedPriceKey(subId, 'sub', region));
       if (cachedSub) cachedRegions.set(region, cachedSub);
     }
     subFallbackCache.set(subId, cachedRegions);
@@ -303,7 +318,7 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
     let allRegionsCached = !forceRefresh && regions.length > 0;
     if (allRegionsCached) {
       for (const region of regions) {
-        const cachedSub = await cacheGet(typedPriceKey(id, 'sub', region));
+        const cachedSub = await safeCacheGet(typedPriceKey(id, 'sub', region));
         if (cachedSub) {
           writePriceResult(results, id, 'sub', region, { ...cachedSub.value, cachedAt: cachedSub.cachedAt });
         } else {
@@ -320,7 +335,7 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
       for (const region of regions) {
         if (!toFetch[region]) toFetch[region] = { app: [], bundle: [] };
         for (const subAppId of subApps) {
-          const cachedApp = !forceRefresh ? await cacheGet(typedPriceKey(subAppId, 'app', region)) : null;
+          const cachedApp = !forceRefresh ? await safeCacheGet(typedPriceKey(subAppId, 'app', region)) : null;
           if (cachedApp) {
             writePriceResult(results, subAppId, 'app', region, { ...cachedApp.value, cachedAt: cachedApp.cachedAt });
           } else if (!toFetch[region].app.includes(subAppId)) {
@@ -344,13 +359,13 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
       const id = item.id;
       // Sub IDs are either aggregated from contained apps or fail closed.
       if (item.type === 'sub') {
-        const cachedSub = !forceRefresh ? await cacheGet(typedPriceKey(id, 'sub', region)) : null;
+        const cachedSub = !forceRefresh ? await safeCacheGet(typedPriceKey(id, 'sub', region)) : null;
         if (cachedSub && !readPriceResult(results, id, 'sub')?.[region]) {
           writePriceResult(results, id, 'sub', region, { ...cachedSub.value, cachedAt: cachedSub.cachedAt });
         }
         continue;
       }
-      const cached = !forceRefresh ? await cacheGet(typedPriceKey(id, item.type, region)) : null;
+      const cached = !forceRefresh ? await safeCacheGet(typedPriceKey(id, item.type, region)) : null;
       if (cached) {
         writePriceResult(results, id, item.type, region, { ...cached.value, cachedAt: cached.cachedAt });
       } else {
@@ -375,7 +390,7 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
         const batch = ids.slice(i, i + 100);
         fetchPromises.push(
           new Promise((resolve, reject) => {
-            queue.push({ apiKey, ids: batch, type, region, resolve, reject });
+            queue.push({ apiKey, ids: batch, type, region, resolve, reject, onRateLimited: options.onRateLimited });
           })
         );
       }
@@ -472,7 +487,7 @@ export async function getCachedPrices(itemsOrIds, regions) {
   const results = {};
   for (const region of regions) {
     for (const item of items) {
-      const cached = await cacheGet(typedPriceKey(item.id, item.type, region));
+      const cached = await safeCacheGet(typedPriceKey(item.id, item.type, region));
       if (cached) {
         writePriceResult(results, item.id, item.type, region, { ...cached.value, cachedAt: cached.cachedAt });
       }
@@ -488,7 +503,7 @@ export async function getCachedPrices(itemsOrIds, regions) {
  */
 export async function getSubApps(subId) {
   try {
-    const resp = await fetch(`https://store.steampowered.com/api/packagedetails?packageids=${subId}&l=english`);
+    const resp = await steamFetch(`https://store.steampowered.com/api/packagedetails?packageids=${subId}&l=english`, {}, { kind: 'packagedetails' });
     if (!resp.ok) return null;
     const data = await resp.json();
     const subData = data[subId];

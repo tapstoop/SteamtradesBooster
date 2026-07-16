@@ -8,6 +8,10 @@ global.chrome = {
   storage: {
     local: {
       get: vi.fn((keys, cb) => {
+        if (keys == null) {
+          cb({ ...store });
+          return;
+        }
         const result = {};
         const keyList = Array.isArray(keys) ? keys : [keys];
         keyList.forEach(k => { if (store[k] !== undefined) result[k] = store[k]; });
@@ -44,6 +48,7 @@ describe('cacheSet / cacheGet', () => {
     const result = await cacheGet('test:key');
     expect(result.value).toEqual({ foo: 'bar' });
     expect(typeof result.cachedAt).toBe('number');
+    expect(typeof result.revision).toBe('string');
   });
 
   it('returns null for missing key', async () => {
@@ -63,6 +68,16 @@ describe('cacheSet / cacheGet', () => {
     const result = await cacheGet('test:perm');
     expect(result.value).toBe('hello');
     expect(typeof result.cachedAt).toBe('number');
+  });
+
+  it('returns a stable legacy revision for entries without revision metadata', async () => {
+    store['test:legacy'] = { value: 'legacy', cachedAt: 1234, expiresAt: 0 };
+
+    const first = await cacheGet('test:legacy');
+    const second = await cacheGet('test:legacy');
+
+    expect(first.revision).toBe('legacy:1234');
+    expect(second.revision).toBe(first.revision);
   });
 });
 

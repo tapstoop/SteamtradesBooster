@@ -1,13 +1,14 @@
 // popup/settings.js
 
 import { getExcludedPagePath, isPageExcluded, isSteamTradesUrl } from '../utils/excluded-pages.js';
+import { runtimeSendMessage } from '../utils/chrome-api.js';
 
 const REGIONS = ['au','be','br','ca','ch','de','dk','es','eu','fi','fr','gb','ie','it','nl','no','pl','se','us'];
 const PLATFORMS = ['Steam','GOG','Epic','EA App','Ubisoft Connect','Battle.net'];
 const KEYSHOPS = ['driffle','eneba','g2a','g2play','gamivo','kinguin'];
 
 function msg(type, data = {}) {
-  return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
+  return runtimeSendMessage(type, data);
 }
 
 function escapeHtml(str) {
@@ -123,12 +124,24 @@ export async function initSettings(container) {
     msg('GET_SETTINGS'),
     storageGet('diagnosticsPanelExpanded'),
   ]);
+  const settingsReadFailed = settings?.storageError === true;
+  let settingsRevision = settings?.settingsRevision ?? 'missing';
+  let settingsSaveDisabled = settingsReadFailed;
+  let settingsSaveChain = Promise.resolve();
   let diagnosticsExpanded = focusErrorLog || Boolean(savedDiagnosticsExpanded);
   let diagnosticsLog = '';
   let diagnosticsGeneratedAt = null;
 
   // Structured settings shell: dynamic form values are escaped before insertion, then event-bound below.
   container.innerHTML = `
+    ${settingsReadFailed ? `
+      <div class="settings-section" data-settings-read-error="true">
+        <div style="color:#b94a4a;font-size:10px;padding:6px;background:#2a1414;border-radius:3px;">
+          ⚠️ Settings could not be loaded from storage. Saving is disabled. Reopen the popup to retry.
+        </div>
+      </div>
+    ` : ''}
+
     <div class="settings-section">
       <div class="settings-label">API</div>
       <input class="settings-input" id="s-apikey" type="password" placeholder="GG.deals API key" value="${escapeHtml(settings.apiKey ?? '')}">
@@ -532,9 +545,21 @@ export async function initSettings(container) {
   container.querySelector('#s-keyshop-chips').addEventListener('click', e => {
     if (e.target.classList.contains('chip')) e.target.classList.toggle('active');
   });
-  container.querySelector('#s-clear').addEventListener('click', async () => {
-    await msg('CLEAR_CACHE');
-    alert('Cache cleared.');
+  container.querySelector('#s-clear').addEventListener('click', async (e) => {
+    const button = e.currentTarget;
+    button.disabled = true;
+    try {
+      const result = await msg('CLEAR_CACHE');
+      if (result?.ok !== true) {
+        alert(`Cache clear failed: ${result?.error || 'Unknown error'}`);
+        return;
+      }
+      alert('Cache cleared.');
+    } catch (err) {
+      alert(`Cache clear failed: ${err?.message || err}`);
+    } finally {
+      button.disabled = false;
+    }
   });
 
   container.addEventListener('change', save);
@@ -542,7 +567,7 @@ export async function initSettings(container) {
 
   // ── Save ─────────────────────────────────────────────────────────────────
 
-  async function save() {
+  function readSettingsForm() {
     const regions = [...container.querySelectorAll('#s-regions .chip.active')].map(c => c.dataset.region);
     const platforms = [...container.querySelectorAll('#s-platforms .chip.active')].map(c => c.dataset.platform);
     const keyshops = [...container.querySelectorAll('#s-keyshop-chips .chip.active')].map(c => c.dataset.shop);
@@ -555,7 +580,7 @@ export async function initSettings(container) {
       keyshopFees[shop][type] = parseInt(input.value) || 0;
     });
 
-    await chrome.runtime.sendMessage({ type: 'SAVE_SETTINGS', settings: {
+    return {
       apiKey: container.querySelector('#s-apikey').value.trim(),
       steamId: container.querySelector('#s-steamid').value.trim(),
       currency: container.querySelector('#s-currency').value,
@@ -569,7 +594,50 @@ export async function initSettings(container) {
       ggdealsAutoScroll: container.querySelector('#s-ggscroll').checked,
       selectiveFetch: container.querySelector('#s-selective').checked,
       dealThresholdPct: parseInt(container.querySelector('#s-dealthreshold').value) || 10,
-    }});
+    };
+  }
+
+  function save() {
+    if (settingsSaveDisabled) return Promise.resolve(false);
+    const nextSettings = readSettingsForm();
+    const queued = settingsSaveChain.then(async () => {
+      if (settingsSaveDisabled) return false;
+      try {
+        const result = await msg('SAVE_SETTINGS', {
+          settings: nextSettings,
+          expectedRevision: settingsRevision,
+        });
+        if (result?.ok !== true || !result.revision) {
+          const message = result?.error || 'Settings could not be saved.';
+          if (result?.code === 'CONFLICT') settingsSaveDisabled = true;
+          showSaveError(message);
+          return false;
+        }
+        settingsRevision = result.revision;
+        Object.assign(settings, nextSettings);
+        container.querySelector('[data-settings-save-error]')?.remove();
+        return true;
+      } catch (err) {
+        showSaveError(err?.message || 'Settings could not be saved.');
+        return false;
+      }
+    });
+    settingsSaveChain = queued.catch(() => {});
+    return queued;
+  }
+
+  function showSaveError(message) {
+    if (!message) message = 'Settings could not be saved.';
+    if (settingsSaveDisabled) {
+      message = `${message} Reopen the popup to reload the latest settings.`;
+    }
+    const existing = container.querySelector('[data-settings-save-error]');
+    if (existing) existing.remove();
+    const banner = document.createElement('div');
+    banner.setAttribute('data-settings-save-error', 'true');
+    banner.style.cssText = 'color:#b94a4a;font-size:10px;padding:6px;background:#2a1414;border-radius:3px;margin-top:6px;';
+    banner.textContent = `⚠️ ${message}`;
+    container.prepend(banner);
   }
 }
 

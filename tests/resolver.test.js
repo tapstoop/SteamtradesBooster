@@ -40,6 +40,21 @@ describe('resolveTitle', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('bypasses cached appId when forceRefresh is enabled', async () => {
+    store['resolve:sekiro'] = { value: '814380', expiresAt: 0 };
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        items: [{ id: 999999, name: 'Sekiro', type: 'app' }]
+      })
+    });
+
+    const result = await resolveTitle('Sekiro', { forceRefresh: true });
+
+    expect(result).toMatchObject({ appId: '999999', status: 'resolved' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('fetches Steam search and returns single match', async () => {
     fetch.mockResolvedValueOnce({
       ok: true,

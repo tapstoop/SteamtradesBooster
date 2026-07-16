@@ -5,6 +5,28 @@ function msg(type, data = {}) {
   return new Promise(resolve => chrome.runtime.sendMessage({ type, ...data }, resolve));
 }
 
+const tradablesDetailedState = {
+  revision: null,
+  tradables: [],
+  cards: [],
+  loading: false,
+  error: null,
+  generation: 0,
+  settings: null,
+};
+
+let detailedListenersRegistered = false;
+let activeDetailedContainer = null;
+
+async function safeGetPriceRange(appId, region, days) {
+  try {
+    if (typeof indexedDB === 'undefined') return null;
+    return await getPriceRange(appId, region, days);
+  } catch {
+    return null;
+  }
+}
+
 function formatPrice(amount, currency = 'EUR') {
   if (amount == null) return '—';
   return new Intl.NumberFormat('en-EU', { style: 'currency', currency }).format(amount / 100);
@@ -44,6 +66,184 @@ export function createDetailedStateElement(type, message, { includeErrorLogLink 
 
   return state;
 }
+
+export function createEmptyTradablesDetailedElement() {
+  const state = document.createElement('div');
+  state.className = 'empty-state';
+  state.append('No tradable games found. Add your tradables in ');
+  const link = document.createElement('a');
+  link.href = 'popup.html?tab=tradables';
+  link.textContent = 'Tradables';
+  link.style.color = 'inherit';
+  link.style.textDecoration = 'underline';
+  state.append(link, '.');
+  return state;
+}
+
+function tradableTitle(item) {
+  return typeof item === 'string' ? item : item?.name;
+}
+
+function normalizeDetailedTradables(value) {
+  const list = Array.isArray(value) ? value : [];
+  return list
+    .map(item => (typeof item === 'string' ? { name: item, type: 'app' } : item))
+    .filter(item => typeof item?.name === 'string' && item.name.trim())
+    .map(item => ({ ...item, name: item.name.trim(), type: normalizePriceType(item.type ?? 'app') }));
+}
+
+function detailedRevisionFromPayload(payload) {
+  return payload?.revision ?? payload?.tradablesRevision ?? null;
+}
+
+function renderDetailedState(container) {
+  if (!container) return;
+  const body = container.querySelector('#tradables-detailed-body');
+  if (!body) return;
+  if (tradablesDetailedState.error) {
+    body.replaceChildren(createDetailedStateElement('error', tradablesDetailedState.error, { includeErrorLogLink: true }));
+    return;
+  }
+  if (tradablesDetailedState.tradables.length === 0 && !tradablesDetailedState.loading) {
+    body.replaceChildren(createEmptyTradablesDetailedElement());
+    return;
+  }
+  if (tradablesDetailedState.cards.length > 0) {
+    const list = document.createElement('div');
+    list.className = 'game-list';
+    list.append(...tradablesDetailedState.cards);
+    body.replaceChildren(list);
+    return;
+  }
+  if (tradablesDetailedState.loading) {
+    const list = document.createElement('div');
+    list.className = 'game-list';
+    const placeholders = tradablesDetailedState.tradables.map(item => {
+      const card = document.createElement('div');
+      card.className = 'game-card';
+      const title = document.createElement('div');
+      title.className = 'game-card-title';
+      title.textContent = item.name;
+      const meta = document.createElement('div');
+      meta.className = 'game-card-meta';
+      meta.textContent = 'Loading price details…';
+      card.append(title, meta);
+      return card;
+    });
+    list.append(...placeholders);
+    body.replaceChildren(list);
+    return;
+  }
+  body.replaceChildren(createDetailedStateElement('empty', 'No tradables data available.'));
+}
+
+async function buildDetailedCards({ settings, tradables, generation, refreshPrices = false }) {
+  const titles = tradables.map(tradableTitle).filter(Boolean);
+  const resolutions = await msg('RESOLVE_TITLES', { titles });
+  if (generation !== tradablesDetailedState.generation) return null;
+  const appIds = resolutions
+    .filter(r => r?.status === 'hit' || r?.status === 'resolved')
+    .map(r => ({ id: r.appId, type: r.type ?? 'app' }));
+  if (appIds.length === 0) return [];
+  const prices = await msg(refreshPrices ? 'REFRESH_PRICES' : 'GET_PRICES', { items: appIds, regions: settings.regions });
+  if (generation !== tradablesDetailedState.generation) return null;
+  const region = settings.regions?.[0] ?? 'eu';
+  const cards = [];
+  for (let i = 0; i < titles.length; i++) {
+    const title = titles[i];
+    const appId = resolutions[i]?.appId;
+    const type = resolutions[i]?.type ?? 'app';
+    if (!appId) continue;
+    const data = readPriceRegion(prices, appId, type, region);
+    if (!data) continue;
+    const currentRetail = data.prices?.currentRetail;
+    const historicalRetail = data.prices?.historicalRetail;
+    const historicalKeyshops = data.prices?.historicalKeyshops;
+    const currentKeyshops = data.prices?.currentKeyshops;
+    const currency = data.prices?.currency ?? 'EUR';
+    if (currentRetail == null) continue;
+    const snapRange = await safeGetPriceRange(appId, region, settings.snapshotWindowDays ?? 180);
+    if (generation !== tradablesDetailedState.generation) return null;
+    const { price: acqPrice } = await msg('GET_ACQ_PRICE', { appId, itemType: type });
+    if (generation !== tradablesDetailedState.generation) return null;
+    cards.push(createTradablesDetailedCardElement({
+      title,
+      currentRetail,
+      historicalRetail,
+      historicalKeyshops,
+      currentKeyshops,
+      currency,
+      snapRange,
+      acqPrice,
+      settings,
+    }));
+  }
+  return cards;
+}
+
+async function loadTradablesDetailed({ container = activeDetailedContainer, force = false, refreshPrices = false } = {}) {
+  const generation = ++tradablesDetailedState.generation;
+  const settings = await msg('GET_SETTINGS');
+  if (generation !== tradablesDetailedState.generation) return;
+  tradablesDetailedState.settings = settings;
+  if (!settings.apiKey || !settings.steamId) {
+    tradablesDetailedState.error = 'Set API key and Steam ID in Settings first.';
+    tradablesDetailedState.loading = false;
+    renderDetailedState(container);
+    return;
+  }
+  const tradablesRead = await msg('GET_TRADABLES');
+  if (generation !== tradablesDetailedState.generation) return;
+  if (tradablesRead?.storageError) {
+    tradablesDetailedState.error = tradablesRead.error || 'Tradables storage read failed';
+    tradablesDetailedState.loading = false;
+    renderDetailedState(container);
+    return;
+  }
+  const revision = detailedRevisionFromPayload(tradablesRead);
+  const tradables = normalizeDetailedTradables(tradablesRead?.tradables ?? tradablesRead);
+  if (!force && !refreshPrices && tradablesDetailedState.revision === revision && tradablesDetailedState.cards.length > 0) {
+    renderDetailedState(container);
+    return;
+  }
+  tradablesDetailedState.revision = revision;
+  tradablesDetailedState.tradables = tradables;
+  tradablesDetailedState.error = null;
+  tradablesDetailedState.loading = tradables.length > 0;
+  if (tradables.length === 0) {
+    tradablesDetailedState.cards = [];
+    tradablesDetailedState.loading = false;
+    renderDetailedState(container);
+    return;
+  }
+  renderDetailedState(container);
+  const cards = await buildDetailedCards({ settings, tradables, generation, refreshPrices });
+  if (cards == null || generation !== tradablesDetailedState.generation) return;
+  tradablesDetailedState.cards = cards;
+  tradablesDetailedState.loading = false;
+  renderDetailedState(container);
+}
+
+function ensureDetailedRuntimeListeners() {
+  if (detailedListenersRegistered) return;
+  if (!globalThis.chrome?.runtime?.onMessage?.addListener) return;
+  detailedListenersRegistered = true;
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type !== 'TRADABLES_UPDATED') return;
+    const tradables = normalizeDetailedTradables(message.tradables);
+    tradablesDetailedState.revision = message.revision ?? null;
+    tradablesDetailedState.tradables = tradables;
+    tradablesDetailedState.cards = [];
+    tradablesDetailedState.error = null;
+    tradablesDetailedState.loading = tradables.length > 0;
+    renderDetailedState(activeDetailedContainer);
+    if (tradables.length > 0) {
+      loadTradablesDetailed({ force: true }).catch(() => {});
+    }
+  });
+}
+
+ensureDetailedRuntimeListeners();
 
 export function createTradablesDetailedCardElement({
   title,
@@ -144,6 +344,8 @@ export function createTradablesDetailedCardElement({
 }
 
 export async function initTradablesDetailed(container) {
+  activeDetailedContainer = container;
+  ensureDetailedRuntimeListeners();
   // Set up persistent wrapper with refresh button on first call
   if (!container.querySelector('#tradables-detailed-header')) {
     // Static shell only: no user or remote data is interpolated here.
@@ -153,84 +355,10 @@ export async function initTradablesDetailed(container) {
       </div>
       <div id="tradables-detailed-body"></div>
     `;
-    container.querySelector('#tradables-detailed-refresh').addEventListener('click', () => initTradablesDetailed(container));
+    container.querySelector('#tradables-detailed-refresh').addEventListener('click', () => {
+      loadTradablesDetailed({ container, force: true, refreshPrices: true }).catch(() => {});
+    });
   }
-  const body = container.querySelector('#tradables-detailed-body');
-
-  body.replaceChildren(createDetailedStateElement('empty', 'Loading tradables detailed…'));
-
-  const settings = await msg('GET_SETTINGS');
-  if (!settings.apiKey || !settings.steamId) {
-    body.replaceChildren(createDetailedStateElement(
-      'error',
-      'Set API key and Steam ID in Settings first.',
-      { includeErrorLogLink: true },
-    ));
-    return;
-  }
-
-  const profile = await msg('GET_PROFILE');
-  if (profile.error) {
-    body.replaceChildren(createDetailedStateElement('error', profile.error, { includeErrorLogLink: true }));
-    return;
-  }
-  const tradables = profile.tradables ?? [];
-  if (!tradables.length) {
-    body.replaceChildren(createDetailedStateElement(
-      'empty',
-      'No tradable games found. Add your tradables in Settings.',
-    ));
-    return;
-  }
-
-  const resolutions = await msg('RESOLVE_TITLES', { titles: tradables });
-  const appIds = resolutions
-    .filter(r => r?.status === 'hit' || r?.status === 'resolved')
-    .map(r => ({ id: r.appId, type: r.type ?? 'app' }));
-
-  const prices = await msg('GET_PRICES', { items: appIds, regions: settings.regions });
-  const region = settings.regions[0];
-
-  const cards = [];
-
-  for (let i = 0; i < tradables.length; i++) {
-    const title = tradables[i];
-    const appId = resolutions[i]?.appId;
-    const type = resolutions[i]?.type ?? 'app';
-    if (!appId) continue;
-
-    const data = readPriceRegion(prices, appId, type, region);
-    if (!data) continue;
-
-    const currentRetail = data.prices?.currentRetail;
-    const historicalRetail = data.prices?.historicalRetail;
-    const historicalKeyshops = data.prices?.historicalKeyshops;
-    const currentKeyshops = data.prices?.currentKeyshops;
-    const currency = data.prices?.currency ?? 'EUR';
-    if (currentRetail == null) continue;
-
-    const snapRange = await getPriceRange(appId, region, settings.snapshotWindowDays ?? 180);
-
-    const { price: acqPrice } = await msg('GET_ACQ_PRICE', { appId, itemType: type });
-    cards.push(createTradablesDetailedCardElement({
-      title,
-      currentRetail,
-      historicalRetail,
-      historicalKeyshops,
-      currentKeyshops,
-      currency,
-      snapRange,
-      acqPrice,
-      settings,
-    }));
-  }
-
-  if (cards.length) {
-    const list = document.createElement('div');
-    list.className = 'game-list';
-    list.append(...cards);
-    body.replaceChildren(list);
-  } else {
-    body.replaceChildren(createDetailedStateElement('empty', 'No tradables data available.'));
-  }
+  renderDetailedState(container);
+  await loadTradablesDetailed({ container });
 }
