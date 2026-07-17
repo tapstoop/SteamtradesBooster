@@ -1,26 +1,26 @@
 // background/resolver.js
-import { safeCacheGet, cacheSet, isDismissed, isDelisted } from './cache.js';
+import { safeCacheGet, cacheSet, cacheDelete, isDismissed, isDelisted } from './cache.js';
 import { normalizeTitle, wordSimilarity, normalizeSteamType } from '../utils/similarity.js';
-import { steamFetch } from './steam-rate-limiter.js';
+import { searchSteamStoreTerm } from './steam-search.js';
+import { upsertResolutionSearchEntry } from './resolution-search-index.js';
+import { discoverSteamBundles } from './steam-bundle-discovery.js';
+import {
+  getSearchTerms,
+  hasBundleSearchKeyword,
+  readResolutionValue,
+} from './resolution-search-utils.js';
 
 // Re-export for backwards compatibility and tests
-export { normalizeTitle, wordSimilarity };
+export { getSearchTerms, hasBundleSearchKeyword, normalizeTitle, readResolutionValue, wordSimilarity };
 
-const STEAM_SEARCH = 'https://store.steampowered.com/api/storesearch/';
 const RESOLVE_TTL = 0; // permanent
-const SIMILARITY_THRESHOLD = 0.85; // 85% word overlap for fuzzy matching
-function resolutionValue(id, type = 'app') {
-  return { appId: String(id), type: normalizeSteamType(type) };
-}
+const DEFAULT_SIMILARITY_THRESHOLD = 0.85;
+const BUNDLE_SIMILARITY_THRESHOLD = 0.75;
+const RESOLVER_VERSION = 2;
+let resolverRequestSequence = 0;
 
-function readResolutionValue(value) {
-  if (!value) return null;
-  if (typeof value === 'object') {
-    const appId = value.appId ?? value.id;
-    if (!appId) return null;
-    return { appId: String(appId), type: normalizeSteamType(value.type) };
-  }
-  return { appId: String(value), type: 'app' };
+function resolutionValue(id, type = 'app', metadata = {}) {
+  return { appId: String(id), type: normalizeSteamType(type), ...metadata };
 }
 
 function resultFromCache(value, status, cacheKey, extra = {}) {
@@ -37,42 +37,42 @@ function candidateFromItem(item) {
   };
 }
 
-function stripEditionNoise(title) {
-  return title
-    .replace(/\s*[-–—:]\s*(deluxe|ultimate|complete|collector'?s|goty|game of the year|definitive|enhanced|gold|premium|standard)\s+edition\b.*$/i, '')
-    .replace(/\s*\b(deluxe|ultimate|complete|collector'?s|goty|game of the year|definitive|enhanced|gold|premium|standard)\s+edition\b.*$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+function automaticResolutionValue(item, match) {
+  return resolutionValue(item.id ?? item.appId, item.type, {
+    resolverVersion: RESOLVER_VERSION,
+    match,
+    source: item.source ?? 'store',
+  });
 }
 
-const BUNDLE_KEYWORDS = /\b(collection|bundle|pack|package|anthology|trilogy|quadrilogy)\b/i;
+async function fetchSteamItems(term, options) {
+  const result = await searchSteamStoreTerm(term, options);
+  return result.items;
+}
 
-function getSearchTerms(title) {
-  const terms = [title, stripEditionNoise(title)];
-  const punctuationLight = title
-    .replace(/[™®]/g, '')
-    .replace(/[–—]/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim();
-  terms.push(punctuationLight, stripEditionNoise(punctuationLight));
+function nextResolverRequestId() {
+  resolverRequestSequence += 1;
+  return `resolver-${Date.now()}-${resolverRequestSequence}`;
+}
 
-  const bundleMatch = title.match(BUNDLE_KEYWORDS);
-  if (bundleMatch) {
-    const withoutKeyword = title.replace(BUNDLE_KEYWORDS, '').replace(/\s+/g, ' ').trim();
-    if (withoutKeyword && withoutKeyword.length >= 3) {
-      terms.push(`${withoutKeyword} bundle`);
-    }
+function similarityThreshold(type) {
+  return normalizeSteamType(type) === 'bundle'
+    ? BUNDLE_SIMILARITY_THRESHOLD
+    : DEFAULT_SIMILARITY_THRESHOLD;
+}
+
+async function indexResolution(title, item, source = 'automatic') {
+  try {
+    await upsertResolutionSearchEntry({
+      normalizedTitle: normalizeTitle(title),
+      displayTitle: item.name || title,
+      id: item.id ?? item.appId,
+      type: item.type,
+      source,
+    });
+  } catch (err) {
+    console.warn('[resolver] Resolution index update failed:', err?.message ?? err);
   }
-
-  return [...new Set(terms.filter(t => t && t.length >= 2))];
-}
-
-async function fetchSteamItems(term) {
-  const url = `${STEAM_SEARCH}?term=${encodeURIComponent(term)}&l=english&cc=us`;
-  const resp = await steamFetch(url, {}, { kind: 'storesearch' });
-  if (!resp.ok) return [];
-  const data = await resp.json();
-  return data.items ?? [];
 }
 
 /**
@@ -83,8 +83,10 @@ async function fetchSteamItems(term) {
  *          |{ status: 'dismissed' }}
  */
 export async function resolveTitle(title, options = {}) {
-  const key = `resolve:${normalizeTitle(title)}`;
+  const normalizedTitle = normalizeTitle(title);
+  const key = `resolve:${normalizedTitle}`;
   const forceRefresh = options.forceRefresh === true;
+  const bundleSearch = hasBundleSearchKeyword(title);
 
   if (!forceRefresh) {
     // Check if user dismissed this title
@@ -116,7 +118,14 @@ export async function resolveTitle(title, options = {}) {
 
     // Check resolved cache
     const cached = await safeCacheGet(key);
-    if (cached?.value) return resultFromCache(cached.value, 'hit', key);
+    if (cached?.value) {
+      const cachedResolution = readResolutionValue(cached.value);
+      const legacyBundleApp = bundleSearch
+        && cachedResolution?.type === 'app'
+        && cached.value?.resolverVersion !== RESOLVER_VERSION;
+      if (!legacyBundleApp) return resultFromCache(cached.value, 'hit', key);
+      await cacheDelete(key);
+    }
   }
 
   let bestExactMatch = null;
@@ -125,23 +134,36 @@ export async function resolveTitle(title, options = {}) {
   let bestAmbiguous = null;
   let bestAmbiguousScore = 0;
   let sawItems = false;
+  const appCandidates = new Map();
+  const searchOptions = {
+    requestId: options.requestId ?? nextResolverRequestId(),
+    locale: options.locale,
+    country: options.country,
+    epoch: options.epoch,
+    isEpochCurrent: options.isEpochCurrent,
+  };
 
   for (const term of getSearchTerms(title)) {
     let items;
     try {
-      items = await fetchSteamItems(term);
+      items = await fetchSteamItems(term, searchOptions);
     } catch {
       continue;
     }
     if (items.length === 0) continue;
     sawItems = true;
+    for (const item of items) {
+      if (normalizeSteamType(item.type) === 'app' && /^\d+$/.test(String(item.id))) {
+        appCandidates.set(String(item.id), item);
+      }
+    }
 
     const normalizedTerm = normalizeTitle(term);
-    const isOriginalTerm = normalizedTerm === normalizeTitle(title);
+    const isOriginalTerm = normalizedTerm === normalizedTitle;
 
     // Exact match for this search term
     const exactMatch = items.find(item => normalizeTitle(item.name) === normalizedTerm);
-    if (exactMatch) {
+    if (exactMatch && (isOriginalTerm || !bundleSearch)) {
       // Prefer exact match on the original title; otherwise keep first found
       if (!bestExactMatch || isOriginalTerm) {
         bestExactMatch = { item: exactMatch, isOriginalTerm };
@@ -152,17 +174,14 @@ export async function resolveTitle(title, options = {}) {
     let termBestMatch = null;
     let termBestScore = 0;
     for (const item of items) {
-      const score = wordSimilarity(term, item.name);
+      const score = wordSimilarity(bundleSearch ? title : term, item.name);
       if (score > termBestScore) {
         termBestScore = score;
         termBestMatch = item;
       }
-    }
-
-    if (termBestMatch && termBestScore >= SIMILARITY_THRESHOLD) {
-      if (termBestScore > bestFuzzyScore || (!bestFuzzyResult && !bestExactMatch)) {
-        bestFuzzyScore = termBestScore;
-        bestFuzzyResult = { item: termBestMatch, score: termBestScore, isOriginalTerm };
+      if (score >= similarityThreshold(item.type) && score > bestFuzzyScore) {
+        bestFuzzyScore = score;
+        bestFuzzyResult = { item, score };
       }
     }
 
@@ -174,19 +193,42 @@ export async function resolveTitle(title, options = {}) {
     }
   }
 
+  if (bundleSearch && appCandidates.size > 0) {
+    const bundles = await discoverSteamBundles(title, [...appCandidates.values()], searchOptions);
+    for (const item of bundles) {
+      const itemTitle = normalizeTitle(item.name);
+      const score = wordSimilarity(normalizedTitle, itemTitle);
+      if (itemTitle === normalizedTitle) {
+        if (!bestExactMatch || normalizeSteamType(bestExactMatch.item.type) !== 'bundle') {
+          bestExactMatch = { item, isOriginalTerm: true };
+        }
+        continue;
+      }
+      if (score >= BUNDLE_SIMILARITY_THRESHOLD && score > bestFuzzyScore) {
+        bestFuzzyScore = score;
+        bestFuzzyResult = { item, score };
+      }
+    }
+  }
+
   // Return best exact match if found (on any term, preferring original)
   if (bestExactMatch) {
-    const value = resolutionValue(bestExactMatch.item.id, bestExactMatch.item.type);
+    const value = automaticResolutionValue(bestExactMatch.item, 'exact');
+    const resolved = readResolutionValue(value);
     await cacheSet(key, value, RESOLVE_TTL);
-    return { ...value, status: 'resolved', cacheKey: key };
+    await indexResolution(title, bestExactMatch.item);
+    return { ...resolved, status: 'resolved', cacheKey: key };
   }
 
   // Return best fuzzy match if found (with sufficient similarity)
   if (bestFuzzyResult) {
-    const value = resolutionValue(bestFuzzyResult.item.id, bestFuzzyResult.item.type);
-    await cacheSet(key, value, RESOLVE_TTL);
+    const value = automaticResolutionValue(bestFuzzyResult.item, 'fuzzy');
+    const resolved = readResolutionValue(value);
+    const requiresConfirmation = bundleSearch || resolved.type === 'bundle';
+    if (!requiresConfirmation) await cacheSet(key, value, RESOLVE_TTL);
+    await indexResolution(title, bestFuzzyResult.item);
     return {
-      ...value,
+      ...resolved,
       status: 'resolved',
       fuzzy: true,
       similarity: Math.round(bestFuzzyResult.score * 100),
@@ -205,8 +247,11 @@ export async function resolveTitle(title, options = {}) {
 
 /** Called when user confirms a candidate from the ? badge dropdown */
 export async function confirmResolution(cacheKey, appId, title, type = 'app') {
-  await cacheSet(`${cacheKey}:confirmed`, resolutionValue(appId, type), 0);
+  const value = resolutionValue(appId, type);
+  await cacheSet(`${cacheKey}:confirmed`, value, 0);
   if (title) {
     await cacheSet(`${cacheKey}:confirmed:title`, title, 0);
   }
+  const normalizedTitle = cacheKey.startsWith('resolve:') ? cacheKey.slice('resolve:'.length) : normalizeTitle(title || '');
+  await indexResolution(normalizedTitle, { ...value, name: title || normalizedTitle }, 'confirmed');
 }

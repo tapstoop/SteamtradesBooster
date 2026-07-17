@@ -8,6 +8,7 @@ global.chrome = {
     local: {
       get: vi.fn((key, cb) => cb({ [key]: store[key] ?? null })),
       set: vi.fn((obj, cb) => { Object.assign(store, obj); if (cb) cb(); }),
+      remove: vi.fn((key, cb) => { delete store[key]; cb?.(); }),
     },
   },
 };
@@ -168,265 +169,89 @@ describe('gg.deals typed prices', () => {
     expect(prices.error).toContain('1 GG.deals price batch failed');
   });
 
-  it('aggregates sub prices from contained apps and caches the aggregate by sub id', async () => {
-    fetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: { get: () => null },
-        json: async () => ({
-          500: {
-            success: true,
-            data: {
-              apps: [{ id: 10 }, { id: 20 }],
-            },
-          },
-        }),
-      })
-      .mockResolvedValueOnce(apiResponse({
-        10: {
-          title: 'Game 10',
-          url: 'https://gg.deals/game/game-10/',
-          prices: { currentRetail: '1.00', currentKeyshops: null, historicalRetail: '0.50', historicalKeyshops: null, currency: 'EUR' },
-        },
-        20: {
-          title: 'Game 20',
-          url: 'https://gg.deals/game/game-20/',
-          prices: { currentRetail: '2.00', currentKeyshops: null, historicalRetail: '1.00', historicalKeyshops: null, currency: 'EUR' },
-        },
-      }));
-
-    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu']);
-    expect(fetch.mock.calls[0][0]).toContain('/api/packagedetails?packageids=500');
-    expect(fetch.mock.calls[1][0]).toContain('/prices/by-steam-app-id/');
-    expect(getPriceResult(prices, '500', 'sub').eu.prices.currentRetail).toBe(300);
-    expect(store['sub-price:500:eu']).toBeTruthy();
-
-    const cached = await getCachedPrices([{ id: '500', type: 'sub' }], ['eu']);
-    expect(getPriceResult(cached, '500', 'sub').eu.prices.historicalRetail).toBe(150);
-  });
-
-  it('uses cached sub aggregates without expanding packagedetails again', async () => {
-    store['sub-price:500:eu'] = {
-      value: {
-        title: 'Cached Sub',
-        url: 'https://gg.deals/game/cached-sub/',
-        prices: { currentRetail: 300, currentKeyshops: null, historicalRetail: 150, historicalKeyshops: null, currency: 'EUR' },
-        isSub: true,
-        containedApps: ['10', '20'],
+  it('fetches sub prices directly and preserves the pack URL', async () => {
+    fetch.mockResolvedValueOnce(apiResponse({
+      132479: {
+        title: 'METAL GEAR SOLID V: The Definitive Experience',
+        url: 'https://gg.deals/pack/metal-gear-solid-v-the-definitive-experience/',
+        prices: { currentRetail: '16.10', currentKeyshops: null, historicalRetail: '9.99', historicalKeyshops: null, currency: 'EUR' },
       },
-      cachedAt: 222,
-    };
+    }));
 
-    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu']);
-
-    expect(fetch).not.toHaveBeenCalled();
-    expect(getPriceResult(prices, '500', 'sub').eu.title).toBe('Cached Sub');
-  });
-
-  it('falls back to cached sub aggregates when force refresh cannot expand packagedetails', async () => {
-    store['sub-price:500:eu'] = {
-      value: {
-        title: 'Cached Sub',
-        url: 'https://gg.deals/game/cached-sub/',
-        prices: { currentRetail: 300, currentKeyshops: null, historicalRetail: 150, historicalKeyshops: null, currency: 'EUR' },
-        isSub: true,
-        containedApps: ['10', '20'],
-      },
-      cachedAt: 222,
-    };
-    fetch.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      headers: { get: () => null },
-      json: async () => ({ 500: { success: false } }),
-    });
-
-    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu'], { forceRefresh: true });
+    const prices = await getPrices('key', [{ id: '132479', type: 'sub' }], ['eu']);
+    const sub = getPriceResult(prices, '132479', 'sub').eu;
 
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0][0]).toContain('/api/packagedetails?packageids=500');
-    expect(getPriceResult(prices, '500', 'sub').eu.title).toBe('Cached Sub');
-    expect(getPriceResult(prices, '500', 'sub').eu.cachedAt).toBe(222);
-    expect(prices.error).toContain('could not be fully refreshed');
-    expect(store['sub-price:500:eu'].value.title).toBe('Cached Sub');
+    expect(fetch.mock.calls[0][0]).toContain('/prices/by-steam-sub-id/');
+    expect(sub.prices.currentRetail).toBe(1610);
+    expect(sub.url).toContain('/pack/metal-gear-solid-v-the-definitive-experience/');
+    expect(sub.priceOrigin).toBe('ggdeals-sub-api-v1');
+    expect(store['sub-price:132479:eu'].value.priceOrigin).toBe('ggdeals-sub-api-v1');
   });
 
-  it('falls back to cached sub aggregates when contained app refresh fails', async () => {
+  it('invalidates legacy calculated sub caches and replaces them from the API', async () => {
     store['sub-price:500:eu'] = {
-      value: {
-        title: 'Cached Complete Sub',
-        url: 'https://gg.deals/game/cached-sub/',
-        prices: { currentRetail: 300, currentKeyshops: null, historicalRetail: 150, historicalKeyshops: null, currency: 'EUR' },
-        isSub: true,
-        containedApps: ['10', '20'],
-      },
+      value: { title: 'Calculated total', isSub: true, containedApps: ['10'], prices: { currentRetail: 4498 } },
       cachedAt: 222,
     };
-    fetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: { get: () => null },
-        json: async () => ({
-          500: { success: true, data: { apps: [{ id: 10 }, { id: 20 }] } },
-        }),
-      })
-      .mockRejectedValueOnce(new Error('contained app batch failed'));
+    fetch.mockResolvedValueOnce(apiResponse({
+      500: {
+        title: 'Official Package',
+        url: 'https://gg.deals/pack/official-package/',
+        prices: { currentRetail: '16.10', currentKeyshops: null, historicalRetail: '10.00', historicalKeyshops: null, currency: 'EUR' },
+      },
+    }));
 
-    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu'], { forceRefresh: true });
-    const subPrice = getPriceResult(prices, '500', 'sub').eu;
+    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu']);
 
-    expect(subPrice.title).toBe('Cached Complete Sub');
-    expect(subPrice.refreshFallback).toBe(true);
-    expect(subPrice.refreshWarning).toContain('could not be fully refreshed');
-    expect(prices.error).toContain('could not be fully refreshed');
-    expect(store['sub-price:500:eu'].value.title).toBe('Cached Complete Sub');
+    expect(chrome.storage.local.remove).toHaveBeenCalledWith('sub-price:500:eu', expect.any(Function));
+    expect(getPriceResult(prices, '500', 'sub').eu.title).toBe('Official Package');
   });
 
-  it('does not overwrite cached sub aggregates with partial contained app prices', async () => {
+  it('uses only an official sub cache as a failed refresh fallback', async () => {
     store['sub-price:500:eu'] = {
       value: {
-        title: 'Cached Complete Sub',
-        url: 'https://gg.deals/game/cached-sub/',
-        prices: { currentRetail: 300, currentKeyshops: null, historicalRetail: 150, historicalKeyshops: null, currency: 'EUR' },
-        isSub: true,
-        containedApps: ['10', '20'],
+        title: 'Last Official Package',
+        url: 'https://gg.deals/pack/last-official-package/',
+        priceOrigin: 'ggdeals-sub-api-v1',
+        prices: { currentRetail: 1610, currentKeyshops: null, historicalRetail: 999, historicalKeyshops: null, currency: 'EUR' },
       },
       cachedAt: 222,
+      expiresAt: 0,
     };
-    fetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: { get: () => null },
-        json: async () => ({
-          500: { success: true, data: { apps: [{ id: 10 }, { id: 20 }] } },
-        }),
-      })
-      .mockResolvedValueOnce(apiResponse({
-        10: {
-          title: 'Game 10',
-          url: 'https://gg.deals/game/game-10/',
-          prices: { currentRetail: '1.00', currentKeyshops: null, historicalRetail: '0.50', historicalKeyshops: null, currency: 'EUR' },
-        },
-      }));
+    fetch.mockRejectedValueOnce(new Error('sub endpoint unavailable'));
 
     const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu'], { forceRefresh: true });
-    const subPrice = getPriceResult(prices, '500', 'sub').eu;
+    const sub = getPriceResult(prices, '500', 'sub').eu;
 
-    expect(subPrice.title).toBe('Cached Complete Sub');
-    expect(subPrice.prices.currentRetail).toBe(300);
-    expect(subPrice.refreshFallback).toBe(true);
-    expect(store['sub-price:500:eu'].value.title).toBe('Cached Complete Sub');
-    expect(store['sub-price:500:eu'].value.prices.currentRetail).toBe(300);
+    expect(sub.title).toBe('Last Official Package');
+    expect(sub.refreshFallback).toBe(true);
+    expect(sub.cachedAt).toBe(222);
+    expect(prices.error).toContain('last official cached response');
   });
 
-  it('fails closed for uncached subs when contained app refresh is partial', async () => {
-    fetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: { get: () => null },
-        json: async () => ({
-          500: { success: true, data: { apps: [{ id: 10 }, { id: 20 }] } },
-        }),
-      })
-      .mockResolvedValueOnce(apiResponse({
-        10: {
-          title: 'Game 10',
-          url: 'https://gg.deals/game/game-10/',
-          prices: { currentRetail: '1.00', currentKeyshops: null, historicalRetail: '0.50', historicalKeyshops: null, currency: 'EUR' },
-        },
-      }));
+  it('returns an empty typed result when a sub has no API response or official cache', async () => {
+    fetch.mockResolvedValueOnce(apiResponse({}));
 
-    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu'], { forceRefresh: true });
+    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu']);
 
     expect(prices['sub:500']).toEqual({});
     expect(store['sub-price:500:eu']).toBeFalsy();
   });
 
-  it('uses cached contained app prices when aggregating subs', async () => {
-    store['price:10:eu'] = {
-      value: {
-        title: 'Cached Contained Game',
-        url: 'https://gg.deals/game/cached-contained-game/',
-        prices: { currentRetail: 100, currentKeyshops: null, historicalRetail: 50, historicalKeyshops: null, currency: 'EUR' },
-      },
-      cachedAt: 222,
-    };
-    fetch.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      headers: { get: () => null },
-      json: async () => ({
-        500: {
-          success: true,
-          data: {
-            apps: [{ id: 10 }],
-          },
-        },
-      }),
-    });
-
-    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu']);
-
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(getPriceResult(prices, '500', 'sub').eu.prices.currentRetail).toBe(100);
-  });
-
-  it('keeps same numeric app and sub requests independent in one call', async () => {
+  it('keeps same numeric app and sub requests independent', async () => {
     fetch
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        headers: { get: () => null },
-        json: async () => ({
-          500: {
-            success: true,
-            data: {
-              apps: [{ id: 10 }],
-            },
-          },
-        }),
-      })
       .mockResolvedValueOnce(apiResponse({
-        500: {
-          title: 'App 500',
-          url: 'https://gg.deals/game/app-500/',
-          prices: { currentRetail: '4.00', currentKeyshops: null, historicalRetail: '3.00', historicalKeyshops: null, currency: 'EUR' },
-        },
-        10: {
-          title: 'Contained Game',
-          url: 'https://gg.deals/game/contained-game/',
-          prices: { currentRetail: '1.00', currentKeyshops: null, historicalRetail: '0.50', historicalKeyshops: null, currency: 'EUR' },
-        },
+        500: { title: 'App 500', url: 'https://gg.deals/game/app-500/', prices: { currentRetail: '4.00', currency: 'EUR' } },
+      }))
+      .mockResolvedValueOnce(apiResponse({
+        500: { title: 'Sub 500', url: 'https://gg.deals/pack/sub-500/', prices: { currentRetail: '1.00', currency: 'EUR' } },
       }));
 
-    const prices = await getPrices('key', [
-      { id: '500', type: 'sub' },
-      { id: '500', type: 'app' },
-    ], ['eu']);
+    const prices = await getPrices('key', [{ id: '500', type: 'app' }, { id: '500', type: 'sub' }], ['eu']);
 
     expect(getPriceResult(prices, '500', 'app').eu.title).toBe('App 500');
-    expect(getPriceResult(prices, '500', 'sub').eu.title).toBe('Bundle (1 games)');
-    expect(getPriceResult(prices, '500', 'sub').eu.prices.currentRetail).toBe(100);
-  });
-
-  it('fails closed for sub ids when packagedetails cannot be expanded', async () => {
-    fetch.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      headers: { get: () => null },
-      json: async () => ({ 500: { success: false } }),
-    });
-
-    const prices = await getPrices('key', [{ id: '500', type: 'sub' }], ['eu']);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch.mock.calls[0][0]).not.toContain('/prices/by-steam-app-id/');
-    expect(prices['500']).toBeUndefined();
-    expect(prices['sub:500']).toEqual({});
-    expect(store['sub-price:500:eu']).toBeFalsy();
+    expect(getPriceResult(prices, '500', 'sub').eu.title).toBe('Sub 500');
   });
 
   it('returns typed refresh cache keys', () => {

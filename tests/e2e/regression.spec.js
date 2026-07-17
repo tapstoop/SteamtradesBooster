@@ -361,3 +361,82 @@ test.describe('S1 - Tradables persistence', () => {
     await thirdSession.close();
   });
 });
+
+test.describe('S2 - Exact Steam bundle resolution', () => {
+  test('adds an exact bundle without manual resolution', async ({ extensionContext, setSettings }) => {
+    const { context, extensionId } = extensionContext;
+    await setSettings({
+      apiKey: '',
+      steamId: '',
+      currency: 'EUR',
+      regions: ['eu'],
+      selectiveFetch: true,
+      showSidebar: false,
+      ggdealsAutoScroll: false,
+      dealThresholdPct: 10,
+    });
+
+    await context.route('**/store.steampowered.com/**', async route => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/api/storesearch/') {
+        const term = url.searchParams.get('term');
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            items: term === 'Asterix & Obelix XXL'
+              ? [{ id: 887060, name: 'Asterix & Obelix XXL 2', type: 'app' }]
+              : [],
+          }),
+        });
+        return;
+      }
+      if (url.pathname.startsWith('/app/887060/')) {
+        await route.fulfill({
+          contentType: 'text/html',
+          body: '<a href="/bundle/16628/Asterix__Obelix_XXL_Collection/">Bundle</a>',
+        });
+        return;
+      }
+      if (url.pathname.startsWith('/bundle/16628/')) {
+        await route.fulfill({
+          contentType: 'text/html',
+          body: '<div class="pageheader">Asterix &amp; Obelix XXL Collection</div>',
+        });
+        return;
+      }
+      await route.fulfill({ status: 404, body: '' });
+    });
+
+    const popupUrl = `chrome-extension://${extensionId}/popup/popup.html?tab=tradables`;
+    const page = await context.newPage();
+    await page.goto(popupUrl);
+    await expect(page.locator('#t-list')).toBeAttached();
+    await page.locator('#t-add-btn').click();
+    await page.locator('#bulk-input').fill('Asterix & Obelix XXL Collection');
+    await page.locator('#bulk-preview-btn').click();
+
+    const preview = page.locator('.preview-item');
+    await expect(preview).toContainText('Asterix & Obelix XXL Collection', { timeout: 15000 });
+    await expect(preview.locator('.preview-appid')).toHaveText('#16628');
+    await expect(preview.locator('.preview-resolve-btn')).toHaveCount(0);
+    await expect(preview.locator('.preview-bundle-hint')).toHaveCount(0);
+
+    await page.locator('#bulk-add-btn').click();
+    await expect(page.locator('.tradables-name')).toContainText('Asterix & Obelix XXL Collection');
+
+    const sw = context.serviceWorkers()[0];
+    const tradables = await sw.evaluate(async () => {
+      const stored = await chrome.storage.local.get('tradables_list');
+      return stored.tradables_list?.value ?? [];
+    });
+    expect(tradables).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'Asterix & Obelix XXL Collection',
+        appId: '16628',
+        type: 'bundle',
+      }),
+    ]));
+
+    await page.close();
+  });
+});

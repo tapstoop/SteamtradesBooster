@@ -145,6 +145,19 @@ describe('toggleAllVisible', () => {
 });
 
 describe('duplicate tradables', () => {
+  it('keeps the original import title long enough to confirm a resolved selection', () => {
+    const prepared = prepareTradablesToAdd([
+      { raw: 'Original Collection', matchedName: 'Resolved Collection', appId: '99', type: 'bundle' },
+    ], [], 'skip');
+
+    expect(prepared.additions[0]).toMatchObject({
+      name: 'Resolved Collection',
+      appId: '99',
+      type: 'bundle',
+      _resolutionTitle: 'Original Collection',
+    });
+  });
+
   it('dedupes same-batch typed entries before preparing additions', () => {
     const entries = [
       { matchedName: 'Hollow Knight', appId: '367520', type: 'app' },

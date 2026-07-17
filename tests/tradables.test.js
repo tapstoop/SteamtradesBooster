@@ -21,6 +21,7 @@ const {
   buildTradablesSnapshotOptions,
   bindTradablesRuntimeStateForInit,
   computeTradablesTotalValue,
+  confirmSavedResolution,
   createTradablesInitGuard,
   initTradables,
   normalizeTradableItem,
@@ -270,11 +271,11 @@ describe('tradables persistence', () => {
     sendMessage.mockImplementation((message, callback) => {
       let response = {};
       if (message.type === 'GET_SETTINGS') response = settings;
-      if (message.type === 'GET_TRADABLES') response = savedTradables;
+      if (message.type === 'GET_TRADABLES') response = { tradables: savedTradables, tradablesRevision: 'r1' };
       if (message.type === 'GET_TRADABLES_SNAPSHOTS') response = [];
       if (message.type === 'SAVE_TRADABLES') {
         savedTradables = message.tradables;
-        response = { ok: true };
+        response = { ok: true, revision: 'r2' };
       }
       callback?.(response);
     });
@@ -305,6 +306,33 @@ describe('tradables persistence', () => {
       await initTradables(reopenedContainer);
       expect(reopenedContainer.querySelector('.tradables-qty-input').value).toBe('3');
       document.body.replaceChildren();
+    } finally {
+      sendMessage.mockReset();
+    }
+  });
+
+  it('remembers a selected bundle under the unresolved original title', async () => {
+    const sendMessage = chrome.runtime.sendMessage;
+    const messages = [];
+    sendMessage.mockImplementation((message, callback) => {
+      messages.push(message);
+      callback?.({ ok: true });
+    });
+
+    try {
+      await confirmSavedResolution('Asterix & Obelix XXL Collection', {
+        appId: '16628',
+        name: 'Asterix & Obelix XXL Collection',
+        type: 'bundle',
+      });
+
+      expect(messages).toContainEqual({
+        type: 'CONFIRM_RESOLUTION',
+        cacheKey: 'resolve:asterix & obelix xxl collection',
+        appId: '16628',
+        title: 'Asterix & Obelix XXL Collection',
+        type: 'bundle',
+      });
     } finally {
       sendMessage.mockReset();
     }

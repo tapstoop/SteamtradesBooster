@@ -3,6 +3,7 @@ import { cacheSet, cacheDelete, safeCacheGet } from './cache.js';
 import { normalizeTitle } from './resolver.js';
 import { normalizeSteamType } from '../utils/similarity.js';
 import { steamFetch, mapSteamTasks } from './steam-rate-limiter.js';
+import { upsertResolutionSearchEntry } from './resolution-search-index.js';
 
 const WISHLIST_FINAL_TTL = 1800;
 const WISHLIST_PROGRESS_TTL = 86400;
@@ -208,6 +209,16 @@ async function cacheTradableResolution(item, shouldCommit = () => true) {
 
   if (!shouldCommit()) return;
   await cacheSet(key, value, 0);
+  if (!shouldCommit()) return;
+  await bestEffortIndexResolution(item.name, item.appId, item.type, 'tradable');
+}
+
+async function bestEffortIndexResolution(displayTitle, id, type = 'app', source = 'profile') {
+  try {
+    await upsertResolutionSearchEntry({ displayTitle, id, type, source });
+  } catch (err) {
+    console.warn('[profile] Resolution index update failed:', err?.message ?? err);
+  }
 }
 
 async function fetchWishlist(steamId, { onProgress, shouldCommit = () => true, forceRefresh = false } = {}) {
@@ -374,6 +385,7 @@ async function fetchAppNames(appIds, { onProgress, steamId, progress = null, sho
           if (!resolutionCacheNames.has(resolutionKey)) {
             resolutionCacheNames.add(resolutionKey);
             await bestEffortCacheSet(`resolve:${resolutionKey}`, String(result.appId), 0, shouldCommit);
+            if (shouldCommit()) await bestEffortIndexResolution(result.name, result.appId, 'app', 'profile');
           }
         }
         await persistProgress(completedAt);

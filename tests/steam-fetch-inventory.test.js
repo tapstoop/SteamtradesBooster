@@ -11,11 +11,7 @@ describe('Steam fetch inventory', () => {
     }
 
     const ggDealsSource = readFileSync(new URL('../background/ggdeals.js', import.meta.url), 'utf8');
-    const subExpansion = ggDealsSource.slice(
-      ggDealsSource.indexOf('export async function getSubApps'),
-      ggDealsSource.indexOf('export async function getBundles'),
-    );
-    expect(subExpansion).toContain('steamFetch(');
-    expect(subExpansion).not.toMatch(/\bfetch\s*\(/);
+    expect(ggDealsSource).toContain("sub: 'prices/by-steam-sub-id'");
+    expect(ggDealsSource).not.toContain('export async function getSubApps');
   });
 });

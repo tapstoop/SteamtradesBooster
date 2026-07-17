@@ -1,11 +1,26 @@
 // popup/tradables.js
 import { createBulkImportModal } from './tradables-bulk-modal.js';
-import { getDisplayRegion } from '../utils/similarity.js';
+import { getDisplayRegion, normalizeTitle } from '../utils/similarity.js';
 import { parseSteamStoreUrl } from './tradables-parser.js';
 import { runtimeSendMessage } from '../utils/chrome-api.js';
 
 function msg(type, data = {}) {
   return runtimeSendMessage(type, data);
+}
+
+export async function confirmSavedResolution(originalTitle, item) {
+  const normalized = normalizeTitle(String(originalTitle ?? ''));
+  if (!normalized || !item?.appId) return;
+  try {
+    await msg('CONFIRM_RESOLUTION', {
+      cacheKey: `resolve:${normalized}`,
+      appId: String(item.appId),
+      title: item.name || originalTitle,
+      type: item.type ?? 'app',
+    });
+  } catch (error) {
+    console.warn('[tradables] Failed to remember resolution:', error?.message ?? error);
+  }
 }
 
 function escapeHtml(str) {
@@ -932,15 +947,21 @@ export async function initTradables(container) {
       if (tradablesMutationActive || tradablesWriteDisabled) return;
       if (modal) modal.destroy();
       modal = createBulkImportModal(async ({ additions, increments }) => {
+        const confirmations = (additions ?? []).map(item => ({
+          originalTitle: item._resolutionTitle,
+          item: { ...item },
+        })).filter(item => item.originalTitle && item.item.appId);
+        const cleanAdditions = (additions ?? []).map(({ _resolutionTitle, ...item }) => item);
         const saved = await runTradablesMutation(() => {
           for (const inc of increments ?? []) {
             if (tradablesList[inc.index]) {
               tradablesList[inc.index].qty = Math.max(1, parseInt(tradablesList[inc.index].qty) || 1) + inc.amount;
             }
           }
-          tradablesList = [...tradablesList, ...(additions ?? [])];
+          tradablesList = [...tradablesList, ...cleanAdditions];
         });
         if (!saved) throw new Error(tradablesErrorMessage || 'Tradables could not be saved.');
+        await Promise.allSettled(confirmations.map(({ originalTitle, item }) => confirmSavedResolution(originalTitle, item)));
         fetchPrices().then(() => {
           if (isCurrentInit()) {
             render();
@@ -1052,6 +1073,7 @@ export async function initTradables(container) {
         const origIdx = parseInt(link.dataset.origIndex);
         const item = tradablesList[origIdx];
         if (!item) return;
+        const originalTitle = item.name;
 
         cancelActiveResolveSearch();
         container.querySelectorAll('.tradables-resolve-popover').forEach(existing => existing.remove());
@@ -1093,7 +1115,8 @@ export async function initTradables(container) {
             resultItem.addEventListener('click', async () => {
               item.appId = steamUrl.id;
               item.type = steamUrl.type;
-              await save();
+              if (!await save()) return;
+              await confirmSavedResolution(originalTitle, item);
               closePopover();
               await fetchPrices();
               render();
@@ -1131,7 +1154,8 @@ export async function initTradables(container) {
                 item.name = r.name;
                 item.appId = String(r.id);
                 item.type = r.type ?? 'app';
-                await save();
+                if (!await save()) return;
+                await confirmSavedResolution(originalTitle, item);
                 closePopover();
                 await fetchPrices();
                 render();

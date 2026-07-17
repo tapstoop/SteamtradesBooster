@@ -8,6 +8,7 @@ import { scrapeGame, scrapeBatch, handleScrapedResult, getScrapedData } from './
 import { getExcludedPageKey, getExcludedPagePath, isSteamTradesUrl } from '../utils/excluded-pages.js';
 import { writeSnapshot, pruneOldSnapshots } from './snapshots.js';
 import { steamFetch, mapSteamTasks, steamRequestScheduler } from './steam-rate-limiter.js';
+import { cancelAllSteamSearches, cancelSteamSearch, searchSteam } from './steam-search.js';
 import {
   buildDiagnosticLog as renderDiagnosticLog,
   DEFAULT_RESOLUTION_STATS,
@@ -25,11 +26,6 @@ const DEALS_CACHE_KEY = 'deals_cards_cache';
 const DEALS_REFRESH_OPTIONS_KEY = 'dealsRefreshOptions';
 const DIAGNOSTICS_PANEL_EXPANDED_KEY = 'diagnosticsPanelExpanded';
 const ALARM_NAME = 'daily-snapshot';
-const pendingSteamSearches = new Map();
-const steamSearchSubscribers = new Map();
-const cancelledSteamSearchRequests = new Map();
-const CANCELLED_SEARCH_TTL_MS = 60_000;
-const CANCELLED_SEARCH_LIMIT = 500;
 const inFlightProfiles = new Map();
 const latestProfileRuns = new Map();
 let profileGeneration = 0;
@@ -512,133 +508,6 @@ function priceUpdatedMessage(target, region, priceData) {
   };
   if (itemType === 'app') message.appId = target.id;
   return message;
-}
-
-function pruneCancelledSteamSearchRequests() {
-  const now = Date.now();
-  for (const [requestId, cancelledAt] of cancelledSteamSearchRequests) {
-    if (now - cancelledAt > CANCELLED_SEARCH_TTL_MS) {
-      cancelledSteamSearchRequests.delete(requestId);
-    }
-  }
-  while (cancelledSteamSearchRequests.size > CANCELLED_SEARCH_LIMIT) {
-    const oldest = cancelledSteamSearchRequests.keys().next().value;
-    if (oldest == null) break;
-    cancelledSteamSearchRequests.delete(oldest);
-  }
-}
-
-function createSearchRequestId() {
-  try {
-    return crypto.randomUUID();
-  } catch {
-    return `steam-search-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  }
-}
-
-function steamSearchCacheKey(query) {
-  return `steam-search:v1:${encodeURIComponent(query.toLocaleLowerCase())}:english:us`;
-}
-
-function cancelSteamSearch(requestId) {
-  const id = String(requestId ?? '');
-  if (!id) return;
-  pruneCancelledSteamSearchRequests();
-  cancelledSteamSearchRequests.set(id, Date.now());
-  const entry = steamSearchSubscribers.get(id);
-  if (!entry) return;
-  entry.subscribers.delete(id);
-  steamSearchSubscribers.delete(id);
-  if (entry.subscribers.size === 0) {
-    entry.cancelled = true;
-    entry.controller.abort();
-  }
-}
-
-function cancelAllSteamSearches() {
-  for (const entry of pendingSteamSearches.values()) {
-    entry.cancelled = true;
-    entry.controller.abort();
-  }
-  pendingSteamSearches.clear();
-  steamSearchSubscribers.clear();
-  cancelledSteamSearchRequests.clear();
-}
-
-function normalizeSteamSearchItems(data) {
-  if (!Array.isArray(data?.items)) return null;
-  return data.items.slice(0, 10).map(item => ({
-    ...item,
-    id: String(item.id ?? item.appid ?? ''),
-    type: normalizeSteamType(item.type ?? 'app'),
-  })).filter(item => item.id);
-}
-
-function getSteamSearchEntry(query, cacheKey, epoch) {
-  let entry = pendingSteamSearches.get(cacheKey);
-  if (entry && entry.epoch === epoch) return entry;
-
-  const controller = new AbortController();
-  entry = {
-    cacheKey,
-    query,
-    epoch,
-    controller,
-    subscribers: new Set(),
-    cancelled: false,
-    promise: null,
-  };
-  entry.promise = (async () => {
-    try {
-      const url = `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(query)}&l=english&cc=us`;
-      const resp = await steamFetch(url, { signal: controller.signal }, { kind: 'storesearch' });
-      if (!resp.ok || entry.cancelled || entry.epoch !== lifecycleEpoch) return { items: [], cancelled: entry.cancelled };
-      const data = await resp.json();
-      const items = normalizeSteamSearchItems(data);
-      if (!items || entry.cancelled || entry.epoch !== lifecycleEpoch) return { items: [] };
-      try {
-        await cacheSet(cacheKey, items, 45);
-      } catch {
-        // Search cache persistence is best-effort.
-      }
-      return { items };
-    } catch (err) {
-      if (controller.signal.aborted || err?.name === 'AbortError') return { items: [], cancelled: true };
-      return { items: [] };
-    } finally {
-      if (pendingSteamSearches.get(cacheKey) === entry) pendingSteamSearches.delete(cacheKey);
-      for (const requestId of entry.subscribers) steamSearchSubscribers.delete(requestId);
-      entry.subscribers.clear();
-    }
-  })();
-  pendingSteamSearches.set(cacheKey, entry);
-  return entry;
-}
-
-async function searchSteam(msg, epoch) {
-  if (!msg.query || String(msg.query).trim().length < 2) return { items: [] };
-  pruneCancelledSteamSearchRequests();
-  const requestId = String(msg.requestId ?? createSearchRequestId());
-  if (cancelledSteamSearchRequests.has(requestId)) {
-    cancelledSteamSearchRequests.delete(requestId);
-    return { items: [], cancelled: true };
-  }
-
-  const query = String(msg.query).trim();
-  const cacheKey = steamSearchCacheKey(query);
-  const cachedSearch = await safeCacheGet(cacheKey);
-  if (cachedSearch?.value && Array.isArray(cachedSearch.value)) return { items: cachedSearch.value };
-
-  const entry = getSteamSearchEntry(query, cacheKey, epoch);
-  entry.subscribers.add(requestId);
-  steamSearchSubscribers.set(requestId, entry);
-
-  const result = await entry.promise;
-  if (entry.epoch !== lifecycleEpoch || cancelledSteamSearchRequests.has(requestId)) {
-    cancelledSteamSearchRequests.delete(requestId);
-    return { items: [], cancelled: true };
-  }
-  return result?.cancelled ? { items: [], cancelled: true } : { items: result?.items ?? [] };
 }
 
 // --- Alarm: Daily Snapshot ---
@@ -1128,7 +997,10 @@ async function handleMessageAdmitted(msg, sender, operationEpoch) {
     }
 
     case 'SEARCH_STEAM': {
-      return searchSteam(msg, operationEpoch);
+      return searchSteam(msg, {
+        epoch: operationEpoch,
+        isEpochCurrent: epoch => epoch === lifecycleEpoch,
+      });
     }
 
     // --- Cached Profile (fast, no API call if cache exists) ---

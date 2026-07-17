@@ -11,6 +11,19 @@ function makeStorage(initial = {}) {
 }
 
 describe('Steam request scheduler', () => {
+  it('paces store page discovery at no more than two request starts per second', async () => {
+    let clock = 0;
+    const sleep = vi.fn(async ms => { clock += ms; });
+    const fetchImpl = vi.fn(async () => ({ status: 200, ok: true, headers: { get: () => null } }));
+    const scheduler = createSteamRequestScheduler({ fetchImpl, storage: makeStorage(), now: () => clock, sleep });
+
+    await scheduler.steamFetch('https://store.steampowered.com/app/1', {}, { kind: 'storepage' });
+    await scheduler.steamFetch('https://store.steampowered.com/bundle/2', {}, { kind: 'storepage' });
+
+    expect(sleep).toHaveBeenCalledWith(500);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('caps global in-flight requests and preserves map ordering', async () => {
     const storage = makeStorage();
     let clock = 0;

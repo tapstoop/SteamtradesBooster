@@ -4,6 +4,7 @@ const RETRY_JOB = Symbol('retry-job');
 
 const DEFAULT_POLICIES = {
   storesearch: { bucket: 'store', minIntervalMs: 200 },
+  storepage: { bucket: 'store', minIntervalMs: 500 },
   appdetails: { bucket: 'store', minIntervalMs: 200 },
   packagedetails: { bucket: 'store', minIntervalMs: 200 },
   wishlist: { bucket: 'api', minIntervalMs: 200 },

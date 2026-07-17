@@ -1,15 +1,15 @@
 // background/ggdeals.js
-import { safeCacheGet, cacheSet } from './cache.js';
+import { safeCacheGet, cacheSet, cacheDelete } from './cache.js';
 import {
   buildApiCallSummary,
   buildQuotaBlockEvent,
   recordGgDealsDiagnostics,
 } from './diagnostics.js';
-import { steamFetch } from './steam-rate-limiter.js';
 
 const PRICE_TTL = 0; // Permanent until manual refresh
 const BASE_URL = 'https://api.gg.deals/v1';
 const RATE_LIMIT_STORAGE_KEY = 'ggdeals_rate_limit_state';
+const SUB_PRICE_ORIGIN = 'ggdeals-sub-api-v1';
 
 const rateLimitState = {
   remaining: 100,
@@ -131,7 +131,12 @@ function buildCurrentQuotaBlock({ kind, type, ids, region, status, message }) {
 }
 
 async function fetchBatch(apiKey, ids, region, type = 'app') {
-  const path = type === 'bundle' ? 'prices/by-steam-bundle-id' : 'prices/by-steam-app-id';
+  const paths = {
+    app: 'prices/by-steam-app-id',
+    bundle: 'prices/by-steam-bundle-id',
+    sub: 'prices/by-steam-sub-id',
+  };
+  const path = paths[normalizePriceType(type)];
   const url = `${BASE_URL}/${path}/?ids=${ids.join(',')}&key=${encodeURIComponent(apiKey)}&region=${encodeURIComponent(region)}`;
   const resp = await fetch(url);
 
@@ -179,6 +184,7 @@ async function fetchBatch(apiKey, ids, region, type = 'app') {
       converted[id] = {
         title: priceData.title,
         url: priceData.url,
+        ...(type === 'sub' ? { priceOrigin: SUB_PRICE_ORIGIN } : {}),
         prices: {
           currentRetail: parsePriceToCents(priceData.prices.currentRetail),
           currentKeyshops: parsePriceToCents(priceData.prices.currentKeyshops),
@@ -280,25 +286,29 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
   const forceRefresh = Boolean(options.forceRefresh);
   const results = {};
   const toFetch = {};
-  const subAppMap = {}; // Map Sub ID -> contained App IDs
-  const subFailedIds = new Set();
-  const subIncompleteIds = new Set();
   const subFallbackIds = new Set();
   const subFallbackCache = new Map();
-  const subFallbackWarning = 'Steam package could not be fully refreshed; showing cached price data';
+  const subFallbackWarning = 'GG.deals package price could not be refreshed; showing the last official cached response';
 
-  async function captureSubFallback(subId) {
-    if (!forceRefresh || subFallbackCache.has(subId)) return;
-    const cachedRegions = new Map();
-    for (const region of regions) {
-      const cachedSub = await safeCacheGet(typedPriceKey(subId, 'sub', region));
-      if (cachedSub) cachedRegions.set(region, cachedSub);
-    }
-    subFallbackCache.set(subId, cachedRegions);
+  function isOfficialSubPrice(value) {
+    return value?.priceOrigin === SUB_PRICE_ORIGIN && value?.prices && typeof value.prices === 'object';
+  }
+
+  async function readCachedItem(item, region) {
+    const key = typedPriceKey(item.id, item.type, region);
+    const cached = await safeCacheGet(key);
+    if (!cached || item.type !== 'sub') return cached;
+    if (isOfficialSubPrice(cached.value)) return cached;
+    await cacheDelete(key);
+    return null;
+  }
+
+  function fallbackKey(subId, region) {
+    return `${subId}:${region}`;
   }
 
   function writeSubFallback(subId, region) {
-    const cachedSub = subFallbackCache.get(subId)?.get(region);
+    const cachedSub = subFallbackCache.get(fallbackKey(subId, region));
     if (!cachedSub) return false;
     writePriceResult(results, subId, 'sub', region, {
       ...cachedSub.value,
@@ -310,72 +320,23 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
     return true;
   }
 
-  // First, check for Sub IDs and resolve them to their contained apps
-  for (const item of items) {
-    if (item.type !== 'sub') continue;
-    const id = item.id;
-    await captureSubFallback(id);
-    let allRegionsCached = !forceRefresh && regions.length > 0;
-    if (allRegionsCached) {
-      for (const region of regions) {
-        const cachedSub = await safeCacheGet(typedPriceKey(id, 'sub', region));
-        if (cachedSub) {
-          writePriceResult(results, id, 'sub', region, { ...cachedSub.value, cachedAt: cachedSub.cachedAt });
-        } else {
-          allRegionsCached = false;
-        }
-      }
-      if (allRegionsCached) continue;
-    }
-    // Try to get apps contained in this sub/bundle
-    const subApps = await getSubApps(id);
-    if (subApps && subApps.length > 0) {
-      subAppMap[id] = subApps;
-      // Add contained apps to the fetch list (we'll use their prices for the sub)
-      for (const region of regions) {
-        if (!toFetch[region]) toFetch[region] = { app: [], bundle: [] };
-        for (const subAppId of subApps) {
-          const cachedApp = !forceRefresh ? await safeCacheGet(typedPriceKey(subAppId, 'app', region)) : null;
-          if (cachedApp) {
-            writePriceResult(results, subAppId, 'app', region, { ...cachedApp.value, cachedAt: cachedApp.cachedAt });
-          } else if (!toFetch[region].app.includes(subAppId)) {
-            toFetch[region].app.push(subAppId);
-          }
-        }
-      }
-    } else {
-      subFailedIds.add(id);
-      if (forceRefresh) {
-        for (const region of regions) {
-          writeSubFallback(id, region);
-        }
-      }
-    }
-  }
-
   for (const region of regions) {
     const missing = [];
     for (const item of items) {
-      const id = item.id;
-      // Sub IDs are either aggregated from contained apps or fail closed.
-      if (item.type === 'sub') {
-        const cachedSub = !forceRefresh ? await safeCacheGet(typedPriceKey(id, 'sub', region)) : null;
-        if (cachedSub && !readPriceResult(results, id, 'sub')?.[region]) {
-          writePriceResult(results, id, 'sub', region, { ...cachedSub.value, cachedAt: cachedSub.cachedAt });
-        }
-        continue;
-      }
-      const cached = !forceRefresh ? await safeCacheGet(typedPriceKey(id, item.type, region)) : null;
-      if (cached) {
-        writePriceResult(results, id, item.type, region, { ...cached.value, cachedAt: cached.cachedAt });
+      const cached = await readCachedItem(item, region);
+      if (cached && !forceRefresh) {
+        writePriceResult(results, item.id, item.type, region, { ...cached.value, cachedAt: cached.cachedAt });
       } else {
         missing.push(item);
+        if (forceRefresh && item.type === 'sub' && cached) {
+          subFallbackCache.set(fallbackKey(item.id, region), cached);
+        }
       }
     }
     if (missing.length > 0) {
-      if (!toFetch[region]) toFetch[region] = { app: [], bundle: [] };
+      if (!toFetch[region]) toFetch[region] = { app: [], bundle: [], sub: [] };
       for (const item of missing) {
-        const type = item.type === 'bundle' ? 'bundle' : 'app';
+        const type = normalizePriceType(item.type);
         if (!toFetch[region][type].includes(item.id)) {
           toFetch[region][type].push(item.id);
         }
@@ -388,11 +349,10 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
     for (const [type, ids] of Object.entries(groups)) {
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
-        fetchPromises.push(
-          new Promise((resolve, reject) => {
+        const promise = new Promise((resolve, reject) => {
             queue.push({ apiKey, ids: batch, type, region, resolve, reject, onRateLimited: options.onRateLimited });
-          })
-        );
+          }).catch(error => Promise.reject({ error, region, type, ids: batch }));
+        fetchPromises.push(promise);
       }
     }
   }
@@ -413,66 +373,21 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
     results.error = `${failedBatches.length} GG.deals price batch${failedBatches.length === 1 ? '' : 'es'} failed`;
   }
 
-  // For Sub IDs, aggregate prices from contained apps
-  for (const [subId, containedApps] of Object.entries(subAppMap)) {
+  for (const item of items.filter(item => item.type === 'sub')) {
     for (const region of regions) {
-      const containedPrices = containedApps
-        .map(appId => readPriceResult(results, appId, 'app')?.[region])
-        .filter(Boolean);
-
-      if (containedPrices.length === containedApps.length) {
-        // Sum prices for the bundle (simple aggregation)
-        const currency = containedPrices[0].prices?.currency ?? 'EUR';
-        const sumPrice = (field) => {
-          const vals = containedPrices.map(p => p.prices?.[field]).filter(v => v != null);
-          return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) : null;
-        };
-
-        // Use first app's URL as the bundle URL (GG.deals doesn't have bundle-specific URLs via API)
-        const firstUrl = containedPrices[0].url;
-
-        const aggregate = {
-          title: `Bundle (${containedApps.length} games)`,
-          url: firstUrl,
-          prices: {
-            currentRetail: sumPrice('currentRetail'),
-            currentKeyshops: sumPrice('currentKeyshops'),
-            historicalRetail: sumPrice('historicalRetail'),
-            historicalKeyshops: sumPrice('historicalKeyshops'),
-            currency,
-          },
-          cachedAt: Date.now(),
-          isSub: true,
-          containedApps,
-        };
-        writePriceResult(results, subId, 'sub', region, aggregate);
-        try {
-          await cacheSet(typedPriceKey(subId, 'sub', region), aggregate, PRICE_TTL);
-        } catch (err) {
-          console.warn('[ggdeals] Failed to cache sub aggregate:', err?.message ?? err);
-        }
-      } else if (forceRefresh) {
-        if (!writeSubFallback(subId, region)) subIncompleteIds.add(subId);
-      }
+      if (readPriceResult(results, item.id, 'sub')?.[region]) continue;
+      writeSubFallback(item.id, region);
+      if (!results[typedResultKey(item.id, 'sub')]) results[typedResultKey(item.id, 'sub')] = {};
     }
   }
 
   if (subFallbackIds.size > 0) {
-    const warning = `${subFallbackIds.size} Steam package${subFallbackIds.size === 1 ? '' : 's'} could not be fully refreshed; showing cached price data`;
+    const warning = `${subFallbackIds.size} Steam package${subFallbackIds.size === 1 ? '' : 's'}: ${subFallbackWarning}`;
     results.error = results.error ? `${results.error}\n${warning}` : warning;
   }
   if (failedBatches.length > 0 && settledBatchResults.every(result => result.status === 'rejected') && subFallbackIds.size === 0) {
-    throw failedBatches[0].reason;
-  }
-
-  // Mark sub IDs that could not be expanded as missing (fail closed).
-  for (const subId of new Set([...subFailedIds, ...subIncompleteIds])) {
-    for (const region of regions) {
-      if (!readPriceResult(results, subId, 'sub')?.[region]) {
-        // Keep explicit empty object for typed key consumers.
-        if (!results[typedResultKey(subId, 'sub')]) results[typedResultKey(subId, 'sub')] = {};
-      }
-    }
+    const onlySubsFailed = failedBatches.every(result => result.reason?.type === 'sub');
+    if (!onlySubsFailed) throw failedBatches[0].reason?.error ?? failedBatches[0].reason;
   }
 
   return results;
@@ -488,31 +403,14 @@ export async function getCachedPrices(itemsOrIds, regions) {
   for (const region of regions) {
     for (const item of items) {
       const cached = await safeCacheGet(typedPriceKey(item.id, item.type, region));
-      if (cached) {
+      if (cached && (item.type !== 'sub' || cached.value?.priceOrigin === SUB_PRICE_ORIGIN)) {
         writePriceResult(results, item.id, item.type, region, { ...cached.value, cachedAt: cached.cachedAt });
+      } else if (cached && item.type === 'sub') {
+        await cacheDelete(typedPriceKey(item.id, item.type, region));
       }
     }
   }
   return results;
-}
-
-/**
- * Get price data for Steam Sub IDs (bundles/packages).
- * GG.deals doesn't directly support Sub IDs, so we need to fetch the contained app IDs
- * and get prices for those individual apps.
- */
-export async function getSubApps(subId) {
-  try {
-    const resp = await steamFetch(`https://store.steampowered.com/api/packagedetails?packageids=${subId}&l=english`, {}, { kind: 'packagedetails' });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    const subData = data[subId];
-    if (!subData?.success) return null;
-    const apps = subData.data?.apps ?? [];
-    return apps.map(a => String(a.id));
-  } catch {
-    return null;
-  }
 }
 
 export async function getBundles(apiKey, appIds) {

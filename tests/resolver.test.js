@@ -8,6 +8,7 @@ global.chrome = {
     local: {
       get: vi.fn((key, cb) => cb({ [key]: store[key] ?? null })),
       set: vi.fn((obj, cb) => { Object.assign(store, obj); if (cb) cb(); }),
+      remove: vi.fn((key, cb) => { delete store[key]; cb?.(); }),
     }
   }
 };
@@ -15,7 +16,7 @@ global.chrome = {
 // Mock fetch for Steam search API
 global.fetch = vi.fn();
 
-import { resolveTitle, normalizeTitle, confirmResolution } from '../background/resolver.js';
+import { confirmResolution, getSearchTerms, normalizeTitle, readResolutionValue, resolveTitle } from '../background/resolver.js';
 
 beforeEach(() => {
   Object.keys(store).forEach(k => delete store[k]);
@@ -32,7 +33,127 @@ describe('normalizeTitle', () => {
   });
 });
 
+describe('resolver search helpers', () => {
+  it('deduplicates title variants while retaining useful expansions', () => {
+    const terms = getSearchTerms('Example™ Deluxe Edition');
+    expect(terms[0]).toBe('Example™ Deluxe Edition');
+    expect(terms).toContain('Example');
+    expect(new Set(terms).size).toBe(terms.length);
+  });
+
+  it('searches the base title before replacing a bundle keyword', () => {
+    const terms = getSearchTerms('Asterix & Obelix XXL Collection');
+
+    expect(terms).toContain('Asterix & Obelix XXL');
+    expect(terms.indexOf('Asterix & Obelix XXL')).toBeLessThan(terms.indexOf('Asterix & Obelix XXL bundle'));
+  });
+
+  it('decodes scalar and typed resolution values and rejects malformed values', () => {
+    expect(readResolutionValue('42')).toEqual({ appId: '42', type: 'app' });
+    expect(readResolutionValue({ appId: 7, type: 'bundle' })).toEqual({ appId: '7', type: 'bundle' });
+    expect(readResolutionValue({ id: '9', type: 'sub' })).toEqual({ appId: '9', type: 'sub' });
+    expect(readResolutionValue({ appId: 'invalid', type: 'bundle' })).toBeNull();
+    expect(readResolutionValue(null)).toBeNull();
+  });
+});
+
 describe('resolveTitle', () => {
+  function mockAsterixBundlePages(searchTerm = 'Asterix & Obelix XXL') {
+    fetch.mockImplementation(async url => {
+      if (url.includes('/api/storesearch/')) {
+        const term = new URL(url).searchParams.get('term');
+        if (term !== searchTerm) return { ok: true, json: async () => ({ items: [] }) };
+        return { ok: true, json: async () => ({ items: [
+          { id: '777777', name: searchTerm, type: 'app' },
+          { id: '887060', name: 'Asterix & Obelix XXL 2', type: 'app' },
+          { id: '1261520', name: 'Asterix & Obelix XXL: Romastered', type: 'app' },
+        ] }) };
+      }
+      if (url.includes('/app/')) {
+        return { ok: true, text: async () => '<a href="https://store.steampowered.com/bundle/16628/Asterix__Obelix_XXL_Collection/">Bundle</a>' };
+      }
+      if (url.includes('/bundle/16628/')) {
+        return { ok: true, text: async () => '<div class="pageheader">Asterix &amp; Obelix XXL Collection</div>' };
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+  }
+
+  it('automatically resolves an exact bundle discovered through app pages', async () => {
+    mockAsterixBundlePages();
+
+    const result = await resolveTitle('Asterix & Obelix XXL Collection');
+
+    expect(result).toEqual({
+      appId: '16628',
+      type: 'bundle',
+      status: 'resolved',
+      cacheKey: 'resolve:asterix & obelix xxl collection',
+    });
+    expect(store['resolve:asterix & obelix xxl collection'].value).toMatchObject({
+      appId: '16628',
+      type: 'bundle',
+      resolverVersion: 2,
+      match: 'exact',
+      source: 'steam-related-bundle',
+    });
+  });
+
+  it('returns a 75% bundle match as fuzzy without persisting a direct resolution', async () => {
+    mockAsterixBundlePages('Asterix & Obelix');
+
+    const result = await resolveTitle('Asterix & Obelix Collection');
+
+    expect(result).toMatchObject({
+      appId: '16628',
+      type: 'bundle',
+      status: 'resolved',
+      fuzzy: true,
+      similarity: 75,
+      title: 'Asterix & Obelix XXL Collection',
+    });
+    expect(store['resolve:asterix & obelix collection']).toBeUndefined();
+  });
+
+  it('revalidates a legacy automatic app cache for a bundle title', async () => {
+    store['resolve:asterix & obelix xxl collection'] = {
+      value: { appId: '887060', type: 'app' },
+      cachedAt: Date.now(),
+      expiresAt: 0,
+    };
+    mockAsterixBundlePages();
+
+    const result = await resolveTitle('Asterix & Obelix XXL Collection');
+
+    expect(chrome.storage.local.remove).toHaveBeenCalledWith('resolve:asterix & obelix xxl collection', expect.any(Function));
+    expect(result).toMatchObject({ appId: '16628', type: 'bundle' });
+    expect(result.fuzzy).toBeUndefined();
+  });
+
+  it('keeps a confirmed choice ahead of legacy automatic bundle-title caches', async () => {
+    store['resolve:asterix & obelix xxl collection'] = { value: { appId: '887060', type: 'app' }, expiresAt: 0 };
+    store['resolve:asterix & obelix xxl collection:confirmed'] = { value: { appId: '16628', type: 'bundle' }, expiresAt: 0 };
+    store['resolve:asterix & obelix xxl collection:confirmed:title'] = { value: 'Asterix & Obelix XXL Collection', expiresAt: 0 };
+
+    const result = await resolveTitle('Asterix & Obelix XXL Collection');
+
+    expect(result).toMatchObject({ appId: '16628', type: 'bundle', status: 'hit', confirmed: true });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(chrome.storage.local.remove).not.toHaveBeenCalled();
+  });
+
+  it('keeps the 85% threshold for non-bundle app matches', async () => {
+    fetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{ id: '10', name: 'Alpha Beta Gamma Delta', type: 'app' }] }),
+    });
+
+    const result = await resolveTitle('Alpha Beta Gamma');
+
+    expect(result.status).toBe('ambiguous');
+    expect(result.fuzzy).toBeUndefined();
+  });
+
   it('returns cached appId without fetching', async () => {
     store['resolve:sekiro'] = { value: '814380', expiresAt: 0 };
     const result = await resolveTitle('Sekiro');

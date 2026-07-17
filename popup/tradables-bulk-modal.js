@@ -360,6 +360,7 @@ export function prepareTradablesToAdd(entries, existingTradables, duplicateActio
       appId: e.appId,
       type: e.type ?? 'app',
       qty: 1,
+      ...(e.appId && e.raw ? { _resolutionTitle: e.raw } : {}),
     }));
   const increments = duplicateAction === 'increment'
     ? duplicates.map(d => ({ index: d.index, amount: 1, name: d.existing.name }))

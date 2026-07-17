@@ -142,6 +142,43 @@ describe('normalizePriceMessageItems', () => {
   });
 });
 
+describe('bundle title resolution contract', () => {
+  it('returns an exact discovered bundle through RESOLVE_TITLES', async () => {
+    fetch.mockImplementation(async url => {
+      if (url.includes('/api/storesearch/')) {
+        const term = new URL(url).searchParams.get('term');
+        return {
+          ok: true,
+          json: async () => ({
+            items: term === 'Asterix & Obelix XXL'
+              ? [{ id: '887060', name: 'Asterix & Obelix XXL 2', type: 'app' }]
+              : [],
+          }),
+        };
+      }
+      if (url.includes('/app/887060/')) {
+        return { ok: true, text: async () => '<a href="/bundle/16628/Asterix__Obelix_XXL_Collection/">Bundle</a>' };
+      }
+      if (url.includes('/bundle/16628/')) {
+        return { ok: true, text: async () => '<div class="pageheader">Asterix &amp; Obelix XXL Collection</div>' };
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+
+    const result = await handleMessage({
+      type: 'RESOLVE_TITLES',
+      titles: ['Asterix & Obelix XXL Collection'],
+    });
+
+    expect(result).toEqual([{
+      appId: '16628',
+      type: 'bundle',
+      status: 'resolved',
+      cacheKey: 'resolve:asterix & obelix xxl collection',
+    }]);
+  });
+});
+
 describe('deals refresh transactions', () => {
   it('writes an incomplete marker at refresh start and commits only the matching token', async () => {
     const begin = await handleMessage({
