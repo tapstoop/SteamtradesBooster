@@ -226,6 +226,9 @@
 .stpt-badge[data-type="delisted"] .stpt-badge-label { background: #ff4444; color: #111; }
 .stpt-badge[data-type="delisted"] .stpt-badge-price { background: #2a1414; color: #ff6666; }
 
+.stpt-badge[data-type="rate-limited"] .stpt-badge-label { background: #d99a27; color: #111; }
+.stpt-badge[data-type="rate-limited"] .stpt-badge-price { background: #2c2413; color: #f4c867; }
+
 /* Secondary badges (dual-badge mode) — compact, label only, no price */
 .stpt-badge[data-secondary="1"] {
   margin-left: 3px;

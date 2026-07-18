@@ -88,6 +88,25 @@ describe('SidebarWorkstation all games count', () => {
     expect(row.querySelector('.stpt-game-price').textContent).toBe('€12.34');
   });
 
+  it('applies progressive patches in one call while preserving unrelated games', () => {
+    workstation.setPageGames([
+      { stptId: 'a', title: 'Alpha', section: 'have', appId: null, type: 'app', price: null },
+      { stptId: 'b', title: 'Beta', section: 'have', appId: null, type: 'app', price: null },
+      { stptId: 'c', title: 'Gamma', section: 'have', appId: '3', type: 'app', price: 300 },
+    ]);
+
+    workstation.updateResolvedPageGames([
+      { stptId: 'a', update: { appId: '1', title: 'Alpha Resolved', price: 100, currency: 'EUR' } },
+      { stptId: 'b', update: { appId: '2', title: 'Beta Resolved', price: 200, currency: 'EUR' } },
+    ]);
+
+    expect(workstation.pageGames.map(game => [game.stptId, game.title, game.appId, game.price])).toEqual([
+      ['a', 'Alpha Resolved', '1', 100],
+      ['b', 'Beta Resolved', '2', 200],
+      ['c', 'Gamma', '3', 300],
+    ]);
+  });
+
   it('clears price when update explicitly passes null, and recalculates simulator totals', () => {
     workstation.setPageGames([
       { stptId: 'a', title: 'Game A', section: 'have', appId: '1', type: 'app', price: 1234, currency: 'EUR' },
