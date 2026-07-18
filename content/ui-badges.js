@@ -311,3 +311,24 @@ export function injectDelistedBadge(el, cacheKey, title, priceData = null, gameI
 
   el.appendChild(badge);
 }
+
+export function injectRateLimitedBadge(el, resetAt = null) {
+  el.querySelectorAll('.stpt-skeleton, .stpt-badge').forEach(existing => existing.remove());
+  const badge = document.createElement('span');
+  badge.className = 'stpt-badge';
+  badge.dataset.type = 'rate-limited';
+
+  const label = document.createElement('span');
+  label.className = 'stpt-badge-label';
+  label.textContent = 'WAIT';
+  badge.appendChild(label);
+
+  const detail = document.createElement('span');
+  detail.className = 'stpt-badge-price';
+  detail.textContent = resetAt
+    ? `GG.deals limit · ${new Date(resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : 'GG.deals limit';
+  badge.appendChild(detail);
+  el.appendChild(badge);
+  return badge;
+}

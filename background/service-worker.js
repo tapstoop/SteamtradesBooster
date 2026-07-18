@@ -16,6 +16,7 @@ import {
   getDiagnostics,
   sanitizeSteamTradesUrl,
   updateDiagnostics,
+  updateResolutionSession,
 } from './diagnostics.js';
 
 const SETTINGS_KEY = 'settings';
@@ -373,6 +374,54 @@ async function getCacheBatch(titles, prefix) {
   return result;
 }
 
+/**
+ * Cache-only counterpart of resolveTitle(). Unlike GET_CACHED_RESOLUTIONS,
+ * this retains the resolver status and metadata content needs to render a row
+ * without issuing a second resolution request.
+ */
+async function getCachedResolutionStates(titles) {
+  const { normalizeTitle } = await import('../utils/similarity.js');
+  const { readResolutionValue } = await import('./resolution-search-utils.js');
+  const list = Array.isArray(titles) ? titles : [];
+  const keys = list.map(title => `resolve:${normalizeTitle(title)}`);
+  const requestedKeys = keys.flatMap(key => [
+    key,
+    `${key}:confirmed`,
+    `${key}:confirmed:title`,
+    `${key}:dismissed`,
+    `${key}:delisted`,
+  ]);
+  const stored = await new Promise(resolve => chrome.storage.local.get(requestedKeys, resolve));
+
+  return list.map((title, index) => {
+    const cacheKey = keys[index];
+    if (stored[`${cacheKey}:dismissed`]?.value === '1') {
+      return { status: 'dismissed', cacheKey };
+    }
+
+    const confirmedEntry = stored[`${cacheKey}:confirmed`];
+    const resolvedEntry = stored[cacheKey];
+    const raw = confirmedEntry?.value ?? resolvedEntry?.value;
+    const resolved = readResolutionValue(raw);
+    const confirmed = !!confirmedEntry?.value;
+    const titleEntry = stored[`${cacheKey}:confirmed:title`]?.value;
+    const status = stored[`${cacheKey}:delisted`]?.value === '1'
+      ? 'delisted'
+      : 'hit';
+
+    if (!resolved) {
+      return status === 'delisted' ? { status, cacheKey } : null;
+    }
+    return {
+      ...resolved,
+      status,
+      cacheKey,
+      ...(confirmed ? { confirmed: true } : {}),
+      ...(titleEntry ? { title: titleEntry } : {}),
+    };
+  });
+}
+
 async function getSettings() {
   let saved;
   try {
@@ -427,6 +476,22 @@ function countResolutions(titles, resolutions) {
     if (res?.fuzzy) stats.fuzzy++;
     if (status === 'ambiguous' || status === 'not-found') {
       failures.push({ title: titles[i], status, at: Date.now() });
+    }
+  });
+  return { stats, failures };
+}
+
+function countResolutionRows(titles, resolutions, multiplicities = []) {
+  const stats = { ...DEFAULT_RESOLUTION_STATS, total: 0 };
+  const failures = [];
+  resolutions.forEach((res, index) => {
+    const count = Math.max(1, Number(multiplicities[index]) || 1);
+    const status = res?.status ?? 'not-found';
+    stats.total += count;
+    if (status in stats) stats[status] += count;
+    if (res?.fuzzy) stats.fuzzy += count;
+    if (status === 'ambiguous' || status === 'not-found') {
+      failures.push({ title: titles[index], status, at: Date.now(), count });
     }
   });
   return { stats, failures };
@@ -832,13 +897,32 @@ async function handleMessageAdmitted(msg, sender, operationEpoch) {
       const results = await mapSteamTasks(titles, async title => {
         try { return await resolveTitle(title, { forceRefresh }); } catch { return { status: 'not-found' }; }
       }, { concurrency: 2 });
-      const { stats, failures } = countResolutions(titles, results);
-      const current = await getDiagnostics();
-      await updateDiagnostics({
-        resolutionStats: stats,
-        recentFailures: [...failures, ...(current.recentFailures ?? [])].slice(0, DIAGNOSTICS_RETENTION.maxResolutionFailures),
-      });
+      if (msg.resolutionSessionId) {
+        const { stats, failures } = countResolutionRows(titles, results, msg.rowMultiplicities);
+        await updateResolutionSession({
+          sessionId: String(msg.resolutionSessionId),
+          batchId: msg.resolutionBatchId,
+          stats,
+          failures,
+        });
+      } else {
+        const { stats, failures } = countResolutions(titles, results);
+        const current = await getDiagnostics();
+        await updateDiagnostics({
+          resolutionStats: stats,
+          recentFailures: [...failures, ...(current.recentFailures ?? [])].slice(0, DIAGNOSTICS_RETENTION.maxResolutionFailures),
+        });
+      }
       return results;
+    }
+
+    case 'BEGIN_RESOLUTION_SESSION': {
+      await updateResolutionSession({
+        sessionId: String(msg.resolutionSessionId ?? ''),
+        activeUrl: sanitizeSteamTradesUrl(msg.url ?? ''),
+        totalRows: msg.totalRows,
+      });
+      return { ok: true };
     }
 
     case 'GET_CACHED_RESOLUTIONS': {
@@ -846,6 +930,10 @@ async function handleMessageAdmitted(msg, sender, operationEpoch) {
       // Avoids N individual reads via message-passing
       const cachedResolutions = await getCacheBatch(msg.titles, 'resolve');
       return cachedResolutions;
+    }
+
+    case 'GET_CACHED_RESOLUTION_STATES': {
+      return getCachedResolutionStates(msg.titles);
     }
 
     case 'CONFIRM_RESOLUTION': {

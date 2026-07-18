@@ -706,10 +706,23 @@ export class SidebarWorkstation {
   }
 
   updateResolvedPageGame(stptId, update) {
-    if (stptId == null) return;
-    const id = String(stptId);
+    this.updateResolvedPageGames([{ stptId, update }]);
+  }
+
+  /**
+   * Applies multiple identity/price patches before rendering once. Progressive
+   * content batches use this to avoid rebuilding the virtual list for every
+   * resolved title.
+   */
+  updateResolvedPageGames(patches) {
+    const updates = new Map((patches ?? [])
+      .filter(patch => patch?.stptId != null && patch?.update)
+      .map(patch => [String(patch.stptId), patch.update]));
+    if (updates.size === 0) return;
+
     const apply = game => {
-      if (String(game.stptId ?? '') !== id) return game;
+      const update = updates.get(String(game.stptId ?? ''));
+      if (!update) return game;
       return {
         ...game,
         title: update.title ?? game.title,

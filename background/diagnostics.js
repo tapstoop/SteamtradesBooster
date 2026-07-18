@@ -138,6 +138,60 @@ export async function updateDiagnostics(patch) {
   return diagnosticsLock;
 }
 
+/**
+ * Serialize page-resolution diagnostics by session and batch so concurrent
+ * content batches cannot reset or double-count each other.
+ */
+export async function updateResolutionSession({
+  sessionId,
+  batchId = null,
+  stats = null,
+  failures = [],
+  activeUrl = null,
+  totalRows = null,
+} = {}) {
+  if (!sessionId) return null;
+  let snapshot = null;
+  diagnosticsLock = diagnosticsLock.then(async () => {
+    const current = await getDiagnostics();
+    const sessions = { ...(current.resolutionSessions ?? {}) };
+    const existing = sessions[sessionId] ?? {
+      stats: { ...DEFAULT_RESOLUTION_STATS },
+      failures: [],
+      batchIds: [],
+      totalRows: Number(totalRows) || 0,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const knownBatch = batchId != null && existing.batchIds.includes(String(batchId));
+    if (!knownBatch && stats) {
+      Object.entries(stats).forEach(([key, value]) => {
+        existing.stats[key] = (existing.stats[key] ?? 0) + (Number(value) || 0);
+      });
+      existing.failures = [...failures, ...existing.failures]
+        .slice(0, DIAGNOSTICS_RETENTION.maxResolutionFailures);
+      if (batchId != null) existing.batchIds = [...existing.batchIds, String(batchId)].slice(-100);
+    }
+    existing.updatedAt = Date.now();
+    sessions[sessionId] = existing;
+    const retained = Object.entries(sessions)
+      .sort(([, a], [, b]) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .slice(0, 5);
+    const nextSessions = Object.fromEntries(retained);
+    snapshot = existing;
+    await setDiagnostics({
+      ...current,
+      ...(activeUrl ? { activeUrl } : {}),
+      resolutionSessions: nextSessions,
+      resolutionStats: existing.stats,
+      recentFailures: existing.failures,
+      updatedAt: Date.now(),
+    });
+  }).catch(() => {});
+  await diagnosticsLock;
+  return snapshot;
+}
+
 export function sanitizeSteamTradesUrl(rawUrl) {
   if (!rawUrl) return '';
   try {

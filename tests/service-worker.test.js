@@ -179,6 +179,48 @@ describe('bundle title resolution contract', () => {
   });
 });
 
+describe('cached resolution state contract', () => {
+  it('returns input-aligned dismissed, delisted, confirmed, and unresolved states', async () => {
+    storageStore['resolve:dismissed:dismissed'] = { value: '1' };
+    storageStore['resolve:delisted'] = { value: { appId: '22', type: 'bundle' } };
+    storageStore['resolve:delisted:delisted'] = { value: '1' };
+    storageStore['resolve:confirmed:confirmed'] = { value: { appId: '33', type: 'sub' } };
+    storageStore['resolve:confirmed:confirmed:title'] = { value: 'Confirmed Steam Title' };
+
+    const result = await handleMessage({
+      type: 'GET_CACHED_RESOLUTION_STATES',
+      titles: ['Dismissed', 'Delisted', 'Confirmed', 'Missing'],
+    });
+
+    expect(result).toEqual([
+      { status: 'dismissed', cacheKey: 'resolve:dismissed' },
+      { appId: '22', type: 'bundle', status: 'delisted', cacheKey: 'resolve:delisted' },
+      { appId: '33', type: 'sub', status: 'hit', cacheKey: 'resolve:confirmed', confirmed: true, title: 'Confirmed Steam Title' },
+      null,
+    ]);
+  });
+
+  it('aggregates a resolution session by page-row multiplicity without replay double counts', async () => {
+    storageStore['resolve:alpha'] = { value: '11' };
+    const { getDiagnostics } = await import('../background/diagnostics.js');
+    await handleMessage({ type: 'BEGIN_RESOLUTION_SESSION', resolutionSessionId: 'page-a', totalRows: 3 });
+    const message = {
+      type: 'RESOLVE_TITLES',
+      titles: ['Alpha'],
+      resolutionSessionId: 'page-a',
+      resolutionBatchId: 'batch-1',
+      rowMultiplicities: [3],
+    };
+
+    await handleMessage(message);
+    await handleMessage(message);
+    const diagnostics = await getDiagnostics();
+
+    expect(diagnostics.resolutionStats).toMatchObject({ total: 3, hit: 3 });
+    expect(diagnostics.resolutionSessions['page-a'].batchIds).toEqual(['batch-1']);
+  });
+});
+
 describe('deals refresh transactions', () => {
   it('writes an incomplete marker at refresh start and commits only the matching token', async () => {
     const begin = await handleMessage({
