@@ -26,7 +26,8 @@ Badges combine several independent facts:
 - whether it is in the user's Tradables list;
 - whether GG.deals reports it in a bundle;
 - whether its current price is close to its all-time low (ATL);
-- whether title resolution is pending, uncertain, dismissed, not found, or delisted;
+- whether title resolution is pending, uncertain, dismissed, or not found;
+- whether steam-tracker.com classifies the row title or resolved app as delisted, purchase-disabled, or banned;
 - the selected region, keyshop preference, cached timestamp, and Steam entity type.
 
 The central rule is that priority chooses the **primary presentation**, not necessarily the only visible label. Normal resolved games may display one full primary badge followed by compact secondary badges.
@@ -35,7 +36,7 @@ The central rule is that priority chooses the **primary presentation**, not nece
 
 ### `content/parser.js`
 
-The parser discovers game rows in `.have` and `.want`, cleans titles, records the section, and assigns profile tiers through `prioritize()`.
+The parser discovers game rows in `.have` and `.want`, cleans titles, records the section, and assigns profile tiers through `prioritize()`. Steam Store and SteamDB identities are preserved only as disambiguation hints; rows without links use the same Steam Tracker title index.
 
 Current tier assignment is exclusive:
 
@@ -66,12 +67,12 @@ This module owns badge composition and DOM construction:
 - `injectSkeleton()` and `setSkeletonLoading()` represent pending work;
 - `resolveBadges()` converts price and row facts into ordered badge descriptors;
 - `replaceBadge()` atomically replaces the normal badge set;
-- dedicated injectors render ambiguous, fuzzy, not-found, dismissed, and delisted states;
+- dedicated injectors render ambiguous, fuzzy, not-found, and dismissed states;
 - `resolveBadgeType()` remains as a backward-compatible primary-badge-only helper.
 
 ### `content/ui-pickers.js`
 
-Badge clicks dynamically load picker/popover behavior. This module owns candidate selection, manual Steam search, dismissal/delisting controls, acquisition-price editing, and manual price refresh.
+Badge clicks dynamically load picker/popover behavior. This module owns candidate selection, manual Steam search, dismissal controls, acquisition-price editing, and manual price refresh.
 
 ### `content/content-handlers.js`
 
@@ -94,6 +95,7 @@ Normal badge composition receives `priceData` plus a `gameInfo` object. The impo
 | `tier` | Exclusive profile tier used for `WISH` or `TRADE` |
 | `inBundle` | True for a Steam bundle entity or a game with bundle history |
 | `resolution` | Resolver result and status metadata |
+| `removal` | Optional read-only steam-tracker.com classification; same-status duplicate titles may carry it without an AppID |
 | `cacheKey` | Resolution cache identity used by manual actions |
 | `settings` | Regions, keyshop preference, deal threshold, timestamp preference |
 | `acqPrice` | Optional acquisition price used by the popover/workstation |
@@ -149,7 +151,7 @@ For a normally resolved row, `resolveBadges()` collects every applicable label a
 Primary priority is:
 
 ```text
-DEAL > WISH > TRADE > BUNDLE > plain/NA
+REMOVAL > DEAL > WISH > TRADE > BUNDLE > plain/NA
 ```
 
 The primary badge shows its label when applicable, the formatted price, and the cache timestamp. Other applicable labels remain visible as compact secondary badges without duplicated price or timestamp text.
@@ -158,6 +160,8 @@ Examples:
 
 | Facts | Primary badge | Secondary badges |
 | --- | --- | --- |
+| Banned, Deal, Wishlist | `BANNED` | `DEAL`, `WISH` |
+| Purchase-disabled and Tradable | `NO PURCHASE` | `TRADE` |
 | Deal, Wishlist, bundle history | `DEAL` | `WISH`, `BUNDLE` |
 | Wishlist and bundle history | `WISH` | `BUNDLE` |
 | Tradable and bundle history | `TRADE` | `BUNDLE` |
@@ -186,7 +190,7 @@ When no current price exists, `formatPrice()` produces the unavailable display a
 
 Only the primary badge shows `cachedAt`. `showFullTimestamp` selects between the full timestamp and the compact timestamp with the full value in a tooltip.
 
-## Resolution and Status Badges
+## Resolution and Removal Status Badges
 
 Resolution/status badges are distinct from the normal multi-label composition path.
 
@@ -198,11 +202,13 @@ Resolution/status badges are distinct from the normal multi-label composition pa
 | Fuzzy | `≈` and similarity percentage | Opens fuzzy-match explanation/actions |
 | `not-found` | Clickable `N/A ▾` | Opens manual Steam search |
 | `dismissed` | Dimmed `×` | Clears dismissal and dispatches `stpt-recheck` |
-| `delisted` | Red `DELISTED`, optionally with price | Opens priced popover or clears delisted state and rechecks |
+| steam-tracker category 1 | Red `DELISTED`, optionally with price | Read-only upstream fact; opens the normal priced popover |
+| steam-tracker category 3 | Orange `NO PURCHASE`, optionally with price | Read-only upstream fact; opens the normal priced popover |
+| steam-tracker category 20 | Dark red `BANNED`, optionally with price | Read-only upstream fact; opens the normal priced popover |
 
-These states use `injectQuestionBadge()`, `injectFuzzyBadge()`, `injectNotFoundBadge()`, `injectDismissedBadge()`, or `injectDelistedBadge()` instead of `resolveBadges()`.
+Uncertain resolution states use `injectQuestionBadge()`, `injectFuzzyBadge()`, `injectNotFoundBadge()`, or `injectDismissedBadge()` instead of `resolveBadges()`. Removal facts participate in normal `resolveBadges()` composition because they must preserve and reorder price/tier/bundle labels.
 
-They are intended to be exclusive row states. When transitioning a row that may already have a primary and secondary set, callers must remove the complete old set. `replaceBadge()` already removes every `.stpt-badge` and skeleton; dedicated status injectors currently remove the first matching badge/skeleton, so future multi-label transition work must take care not to leave a stale secondary badge behind.
+Uncertain resolution states are exclusive row states. A fuzzy match is not decorated until the user confirms a stable Steam identity. Every normal or special transition removes the complete old badge/skeleton set, preventing stale secondary labels.
 
 The normal no-price `NA` and the resolution `not-found` badge share `data-type="NA"`, but their behavior differs: normal `NA` displays `N/A`, while not-found displays `N/A ▾` and opens resolution controls.
 
@@ -225,11 +231,11 @@ Badge clicks stop propagation so they do not trigger unrelated row controls. Nor
 
 ### Initial rendering
 
-The current `main` implementation loads the profile, parses rows, resolves all page titles, and then applies resolution states. It reads cached prices before scheduling remote pricing. Issue #14 plans to make title resolution and badge injection progressive; that behavior is not yet part of the current implementation described here.
+The progressive page lifecycle parses stable rows first, hydrates cached resolution/pricing facts, and applies completed resolver batches independently. Steam Tracker refresh begins concurrently and never gates Steam title resolution, profile work, GG.deals pricing, or the first badge paint.
 
 ### Selective pricing
 
-In selective mode, rows receive checkboxes. The user chooses which resolved rows should fetch prices. Successful results call `replaceBadge()` with current row, bundle, price, and settings state.
+In selective mode, rows receive checkboxes. The user chooses which resolved rows should fetch prices, including removed rows even when automatic removed-game fetching is disabled. Successful results call `replaceBadge()` with current row, bundle, price, and settings state. Completed rows are unchecked; unresolved or failed rows remain selected, and the floating button shows success, partial, timeout, or error feedback.
 
 ### Automatic pricing
 
@@ -248,6 +254,12 @@ Manual recheck currently has a separate path in `content.js`. Any refactor must 
 ### Price broadcasts
 
 `PRICE_UPDATED` finds rows by typed identity. When older senders omit the type, it falls back to App ID matching for backward compatibility. Matching rows are rerendered and corresponding workstation prices are updated.
+
+### Steam Tracker reconciliation
+
+`GET_REMOVAL_STATUSES` is cache-only and batches typed identities. A separate `ENSURE_STEAM_TRACKER_DATA` refresh updates the durable global cache; when its revision changes, `STEAM_TRACKER_UPDATED` asks each active page to reconcile its current rows. A late removal fact calls `replaceBadge()` with the row's existing price/tier/bundle state, so the removal badge becomes primary and applicable badges move right as secondaries without flicker or data loss.
+
+The extension ships a generated, reviewed baseline snapshot, then accepts a remote replacement only after the [Steam Tracker security pipeline](./progressive-badge-architecture.md#steam-tracker-data-security-and-cache-lifecycle). A refused update leaves the last safe snapshot active and creates one dismissible alert in the extension popup. Provider strings are always inserted with `textContent`; neither the feed nor the alert can inject markup.
 
 ## Dynamic Profile and Badge Reconciliation
 
@@ -281,7 +293,8 @@ Content-side row state may live in memory for the lifetime of the page. Anything
 - A Tradables storage error must not be interpreted as an authoritative empty list.
 - Missing GG.deals data renders a controlled unavailable state and must not erase resolution identity.
 - Rate-limited pricing should preserve a known cached badge or show an explicit rate-limit state instead of an indefinite active skeleton.
-- Late settings, profile, resolution, and price responses must not repaint newer state.
+- Late settings, profile, resolution, price, and removal responses must not repaint newer state.
+- Steam Tracker facts apply only to confirmed typed `app` identities; bundles, subs, fuzzy matches, disconnected rows, and identities changed during the request are ignored.
 - App IDs alone are not globally unique; all price and update paths should preserve `app`/`sub`/`bundle` type.
 - Unsafe or malformed titles remain text and never become executable DOM.
 - Badge clicks must not trigger checkbox, workstation, or parent-row actions.
@@ -293,14 +306,14 @@ The relevant test areas are:
 - parser tier assignment and title cleanup;
 - `resolveBadges()` primary/secondary combinations;
 - missing-price and timestamp behavior;
-- ambiguous, fuzzy, not-found, dismissed, and delisted interactions;
+- ambiguous, fuzzy, not-found, dismissed, and automatic removal interactions;
 - typed App/Sub/Bundle identity propagation;
 - manual-resolution row and workstation synchronization;
 - `SETTINGS_UPDATED` revision/region stale-response guards;
 - `PRICE_UPDATED` typed matching;
 - selective and automatic fetch behavior;
 - dynamic reconciliation preserving secondary labels;
-- cache-clear and profile-generation races for progressive implementations;
+- cache-clear, tracker-generation, row-identity, and profile-generation races;
 - Chrome and Firefox extension builds after content/style changes.
 
 ## Maintenance Rules

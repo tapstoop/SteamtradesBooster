@@ -189,7 +189,11 @@ async function buildDetailedCards({ settings, tradables, generation, refreshPric
     .filter(r => r?.status === 'hit' || r?.status === 'resolved')
     .map(r => ({ id: r.appId, type: r.type ?? 'app' }));
   if (appIds.length === 0) return [];
-  const prices = await msg(refreshPrices ? 'REFRESH_PRICES' : 'GET_PRICES', { items: appIds, regions: settings.regions });
+  const prices = await msg(refreshPrices ? 'REFRESH_PRICES' : 'GET_PRICES', {
+    items: appIds,
+    regions: settings.regions,
+    fetchIntent: refreshPrices ? 'manual-refresh' : 'automatic',
+  });
   if (generation !== tradablesDetailedState.generation) return null;
   const region = settings.regions?.[0] ?? 'eu';
   const cards = [];

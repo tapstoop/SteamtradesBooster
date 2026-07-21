@@ -2,7 +2,7 @@
 // Candidate pickers, fuzzy pickers, not-found pickers, and the popover
 
 import { sendMessage, formatPrice, formatTimestamp, formatFullTimestamp, closeAll, positionNear } from './ui-helpers.js';
-import { injectSkeleton, injectNotFoundBadge, injectDismissedBadge, injectDelistedBadge, replaceBadge } from './ui-badges.js';
+import { injectSkeleton, injectNotFoundBadge, injectDismissedBadge, replaceBadge } from './ui-badges.js';
 import { getDisplayRegion, normalizeSteamType } from '../utils/similarity.js';
 
 function normalizeGgDealsUrl(rawUrl) {
@@ -31,6 +31,14 @@ function formatPickerItemType(type) {
   if (type === 'bundle') return 'Bundle';
   if (type === 'sub') return 'Sub';
   return 'App';
+}
+
+function formatRemovalStatus(status) {
+  return ({
+    removed_delisted: 'Delisted',
+    removed_disabled: 'Purchase disabled',
+    removed_banned: 'Banned',
+  })[status] ?? null;
 }
 
 export function createPickerResultRow({
@@ -81,7 +89,11 @@ export function buildPopoverRefreshRequest(gameInfo, settings) {
   const itemType = gameInfo.type ?? gameInfo.resolution?.type ?? 'app';
   return {
     type: 'REFRESH_PRICES',
-    payload: { items: [{ id: gameInfo.appId, type: itemType }], regions: settings.regions },
+    payload: {
+      items: [{ id: gameInfo.appId, type: itemType }],
+      regions: settings.regions,
+      fetchIntent: 'manual-refresh',
+    },
     itemType,
   };
 }
@@ -112,9 +124,10 @@ export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
   picker.appendChild(header);
 
   candidates.forEach(c => {
+    const removalLabel = formatRemovalStatus(c.removalStatus);
     const item = createPickerResultRow({
       name: c.name,
-      meta: `${formatPickerItemType(c.type)} ${c.id}`,
+      meta: `${formatPickerItemType(c.type)} ${c.id}${removalLabel ? ` · ${removalLabel}` : ''}`,
     });
     item.addEventListener('click', () => {
       picker.remove();
@@ -303,22 +316,6 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
   });
   picker.appendChild(dismiss);
 
-  const delisted = document.createElement('div');
-  delisted.className = 'stpt-cand-item';
-  delisted.textContent = 'Delisted game';
-  delisted.style.cssText = 'color:#ff4444;border-top:1px solid #1e1e2e;margin-top:2px;padding-top:5px;';
-  delisted.addEventListener('click', async () => {
-    closePicker();
-    await sendMessage('SET_DELISTED', { cacheKey });
-    const existing = rowEl.querySelector('.stpt-badge');
-    if (existing) existing.remove();
-    const checkbox = rowEl.previousElementSibling?.classList?.contains('stpt-game-checkbox')
-      ? rowEl.previousElementSibling
-      : null;
-    if (checkbox) checkbox.remove();
-    injectDelistedBadge(rowEl, cacheKey, title);
-  });
-  picker.appendChild(delisted);
   appendErrorLogLink(picker);
 
   positionNear(picker, anchorEl);
@@ -484,7 +481,7 @@ export function openPopover(anchorEl, priceData, gameInfo) {
   if (gameInfo.appId) {
     const refreshBtn = document.createElement('button');
     refreshBtn.className = 'stpt-popover-refresh';
-    refreshBtn.textContent = '↻ Refresh price';
+    refreshBtn.textContent = gameInfo.ggDealsNoData ? '↻ Retry GG.deals' : '↻ Refresh price';
     refreshBtn.addEventListener('click', async () => {
       refreshBtn.textContent = '↻ Loading…';
       refreshBtn.disabled = true;
@@ -534,39 +531,6 @@ export function openPopover(anchorEl, priceData, gameInfo) {
     });
     pop.appendChild(changeBtn);
 
-    // Mark as delisted / Undo delisted button
-    const isCurrentlyDelisted = gameInfo.resolution?.status === 'delisted';
-    const delistBtn = document.createElement('button');
-    delistBtn.className = 'stpt-popover-refresh';
-    delistBtn.style.marginTop = '4px';
-    delistBtn.style.color = isCurrentlyDelisted ? '#4ecdc4' : '#ff6666';
-    delistBtn.textContent = isCurrentlyDelisted ? 'Undo delisted' : 'Mark as delisted';
-    delistBtn.addEventListener('click', async e => {
-      e.stopPropagation();
-      pop.remove();
-      activePopover = null;
-      const gameItem = anchorEl.closest('.stpt-game-item');
-      if (!gameItem) return;
-
-      if (isCurrentlyDelisted) {
-        if (gameInfo.cacheKey) {
-          await sendMessage('SET_UNDELISTED', { cacheKey: gameInfo.cacheKey });
-        }
-        const existing = gameItem.querySelector('.stpt-badge');
-        if (existing) existing.remove();
-        injectSkeleton(gameItem, true);
-        gameItem.dispatchEvent(new CustomEvent('stpt-recheck', { bubbles: true, detail: { title: gameInfo.title, cacheKey: gameInfo.cacheKey } }));
-      } else {
-        if (gameInfo.cacheKey && gameInfo.appId) {
-          await sendMessage('CONFIRM_RESOLUTION', { cacheKey: gameInfo.cacheKey, appId: gameInfo.appId, type: gameInfo.type ?? gameInfo.resolution?.type ?? 'app' });
-        }
-        if (gameInfo.cacheKey) {
-          await sendMessage('SET_DELISTED', { cacheKey: gameInfo.cacheKey });
-        }
-        injectDelistedBadge(gameItem, gameInfo.cacheKey, gameInfo.title, priceData, gameInfo);
-      }
-    });
-    pop.appendChild(delistBtn);
   }
   setTimeout(() => document.addEventListener('click', () => { pop.remove(); activePopover = null; }, { once: true }), 0);
 }

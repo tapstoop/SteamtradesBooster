@@ -1,74 +1,87 @@
-# Issue #17 - Steam/GG.deals links in Tradables views
+# Issue #15 - Automatic removed-game status via steam-tracker.com
 
-## Goal and dependencies
+## Goal
 
-Add safe, consistent external links to the compact Tradables list and Tradables Detailed cards. This issue is popup-only and may be implemented immediately after #20. It must reuse the URL validation and link-building behavior already owned by `popup/deals.js`; no second URL sanitizer should be introduced.
+Classify trade-row titles as delisted, purchase-disabled, or banned from the global steam-tracker.com list, including removed games that Steam search and GG.deals cannot resolve. The provider runs independently from Steam title/profile work and GG.deals pricing, so no provider delays another badge lane.
 
-## Current architecture and constraints
+Manual delisted state is removed. Dismissed and uncertain title-resolution states remain separate. Automatic removal facts are read-only and disappear only after a later successful authoritative tracker refresh omits the app.
 
-- `steamStoreUrl(id, type)` exists in `popup/deals.js` but is not exported.
-- `renderGgDealsLink(url)` is exported but returns an HTML string. The tradables views build DOM nodes with `document.createElement`, so injecting that string with `innerHTML` would weaken the existing XSS protections.
-- `buildTradablesListItemElement()` already receives the typed tradable and region-specific `priceData`.
-- `createTradablesDetailedCardElement()` does not currently receive `appId`, `type`, or the GG.deals URL; its caller has all three and must pass them explicitly.
-- Existing Steam IDs are numeric and types are normalized to `app`, `sub`, or `bundle`. Invalid IDs must continue to render as unresolved/plain text rather than producing malformed links.
+## Provider and cache architecture
 
-## Design
+Add an injectable `background/steam-tracker.js` client around `GetAppListV3`:
 
-### Shared external-link helpers (`popup/deals.js`)
+- keep a compact versioned `appId -> { categoryId, name }` map plus normalized `title -> appIds` index in `chrome.storage.local` for one hour;
+- map only `type: game` category 1 (delisted), 3 (purchase disabled), and 20 (banned);
+- ignore invalid/unknown records and resolve duplicates deterministically as banned > disabled > delisted;
+- reject malformed, empty, or unsupported successful responses without replacing the last good cache;
+- expose a cache-only batched lookup for typed apps and a separate refresh operation;
+- single-flight concurrent refreshes across page messages;
+- use a ten-second budget, at most two attempts, `Retry-After`, and bounded exponential cooldown;
+- persist cooldown/failure state so MV3 worker restart cannot reset rate limiting;
+- abort/invalidate in-flight refreshes during cache clear so late responses cannot repopulate storage;
+- never send titles, Steam IDs, settings, API keys, or other user data to the provider.
 
-1. Export `steamStoreUrl(id, type)` without changing its validation or typed URL behavior.
-2. Add/export a DOM-oriented GG.deals helper, for example `createGgDealsLinkElement(url, options)`, implemented on top of `normalizeGgDealsUrl()` and the existing safe external-link creation path.
-3. Keep `renderGgDealsLink()` for existing string-rendering call sites, but make both helpers share URL normalization, text (`GG.deals ↗`), `target="_blank"`, and `rel="noopener noreferrer"` rules.
-4. Do not parse the HTML returned by `renderGgDealsLink()` and do not duplicate hostname/protocol checks in either tradables module.
+Harden every refresh as untrusted data: exact HTTPS endpoint with redirects refused, credentials/referrer omitted, `application/json` required, attachments rejected, fatal UTF-8 and JSON parsing, and a 4.5 MiB maximum response body. Validate numeric AppIDs, bounded well-formed titles, duplicate candidate limits, total counts, supported counts, and per-category changes against the packaged baseline. On any security failure, keep the last safe snapshot, persist a baseline-scoped refresh lock, and show a popup-only dismissible banner.
 
-### Compact Tradables (`popup/tradables.js`)
+Add the provider host permission, an independent hourly alarm, install/startup warming, aggregate diagnostics, and one-time cleanup of obsolete `resolve:*:delisted` flags.
 
-1. In `buildTradablesListItemElement()`:
-   - Compute the Steam URL from the already-normalized `appId` and `item.type`.
-   - Render `.tradables-name` as an anchor only when the URL is valid; otherwise retain the current span and text behavior.
-   - Preserve the class name so current layout and tests remain stable.
-   - Set `target`, `rel`, and a useful title. Stop propagation only if current delegated row handling would otherwise open the resolver popover when the link is clicked.
-2. Append the DOM GG.deals link in `.tradables-item-meta` only when `priceData?.url` passes validation. Keep the app/sub/bundle ID and price badge unchanged.
-3. Missing price data, missing URL, unsafe URL, unresolved item, zero price, and stale-cache price data must all render without exceptions.
+## Concurrent progressive integration
 
-### Tradables Detailed (`popup/tradables-detailed.js`)
+The page starts `ENSURE_STEAM_TRACKER_DATA` without awaiting it. Steam profile/title schedulers and GG.deals pricing continue at the same time.
 
-1. Extend `createTradablesDetailedCardElement()` with optional `appId`, `type`, and `ggDealsUrl` inputs.
-2. Render the title inside a Steam anchor only when `steamStoreUrl()` returns a valid URL; retain plain text otherwise.
-3. Replace the literal `GG.deals:` prefix with the shared DOM link when valid. If no valid GG.deals URL exists, omit the link without leaving a dangling separator or empty label.
-4. Pass `appId`, resolved type, and `data.url` from `initTradablesDetailed()` when constructing each card.
-5. Do not change price selection, ATL calculations, acquisition-price calculations, or card filtering in this issue.
+Batch-read cached tracker matches by normalized row title immediately, while the Steam resolver runs independently. When a tracker refresh changes revision, broadcast `STEAM_TRACKER_UPDATED` and reconcile active rows against the authoritative cache.
 
-## Edge cases and failure behavior
+Hyperlinks are hints only: rows without links follow the same title-index path. A linked Steam/SteamDB AppID may disambiguate duplicate tracker names, but it never replaces title matching as the primary architecture.
 
-- Typed links must use `/app/`, `/sub/`, or `/bundle/` correctly; unknown types fall back consistently with existing normalization.
-- Invalid/non-numeric IDs produce no Steam link.
-- Reject HTTP, credentialed, lookalike, javascript/data URLs, and non-GG.deals hosts.
-- Titles containing markup remain text, never executable DOM.
-- External-link clicks must not trigger quantity controls, removal, row selection, or resolver popovers.
-- Multiple cards with the same appId remain independent DOM nodes.
-- Link rendering must not alter list sorting, quantities, acquisition inputs, or price refresh rerenders.
+Matching is deterministic: one exact candidate resolves; same-status duplicates show the removal status without assigning an AppID; conflicting duplicates remain ambiguous; a link may select only inside an exact duplicate group; fuzzy matches require at least 85% similarity and confirmation; and a Steam/tracker AppID disagreement remains ambiguous.
 
-## Tests
+Every late reconciliation verifies:
 
-### Unit tests
+- the page run is still current;
+- the row is still connected;
+- the row revision/typed identity still matches the request;
+- the identity/status is not fuzzy, dismissed, or stale after an authoritative refresh.
 
-- `tests/deals.test.js`: export behavior; app/sub/bundle Steam URL generation; invalid IDs/types; DOM GG.deals helper acceptance and rejection; `target`/`rel`; malicious URLs and text.
-- `tests/tradables.test.js`: resolved item gets Steam title link and optional GG.deals link; unresolved item keeps plain title; invalid price URL is omitted; bundle/sub paths are correct; malicious title remains inert; existing quantity/removal/acquisition assertions remain green.
-- `tests/tradables-detailed.test.js`: card receives and renders Steam/GG.deals links; missing/invalid values fall back cleanly; title safety; no dangling `GG.deals:` text; all range and acquisition calculations remain unchanged.
+Update the stable row and workstation in one path, then call `replaceBadge()` to rebuild the complete descriptor set. Do not edit one DOM badge in isolation. If a later authoritative revision removes a tracker-only match, invalidate that row and suppress stale in-flight resolver results.
 
-### Integration/no-regression tests
+## Badge composition
 
-- Exercise a render followed by a price update to ensure links survive rerendering and use the new region's URL.
-- Verify settings/region changes do not duplicate links.
-- Run the complete popup unit suite, not only the three modified test files.
+Removal status is the primary presentation:
 
-### E2E/manual smoke
+```text
+REMOVAL > DEAL > WISH > TRADE > BUNDLE > plain/NA
+```
 
-- Add a Playwright popup scenario with one app, one sub/bundle, one unresolved item, and one invalid GG.deals URL fixture.
-- Confirm links open the expected HTTPS URL in a new tab and do not open the resolve popover.
-- Run `npm test`, `npm run build`, and `npm run test:e2e`; manually inspect both Tradables tabs at popup width and pop-out-tab width.
+Labels and styles:
+
+- category 1: red `DELISTED`;
+- category 3: orange `NO PURCHASE`;
+- category 20: dark red `BANNED`.
+
+If a removal result arrives after an existing price/tier badge, recompute atomically: removal moves to the left as primary while applicable `DEAL`, `WISH`, `TRADE`, and `BUNDLE` labels move right as compact secondaries. Preserve price, timestamp, acquisition data, title identity, and workstation state. Fuzzy identities are never decorated before confirmation.
+
+## GG.deals relief and negative results
+
+Add `Automatically fetch prices for removed Steam games`, default off. Disabled blocks scheduler-originated price/bundle requests for tracker-classified AppIDs before the GG.deals queue, but explicit checkbox selection, manual resolution, and manual refresh remain available.
+
+When enabled, only a successful GG.deals response that omits a removed AppID creates a permanent typed/region negative cache entry. Failures, timeouts, and rate limits never create it. Render `NO GG.DEALS DATA` last with tooltip `GG.deals returned no data for this Steam AppID.` Clear it on identity confirmation/change, explicit retry, a later positive response, or global cache clear.
+
+Settings changes are cache-only. Enabling removed-game pricing must never switch selective mode into automatic behavior. In automatic mode the toggle schedules only removed rows; in selective mode it schedules none. Automatic price messages are tagged and rejected again by the service worker while selective mode is enabled, while a user-selected fetch remains allowed.
+
+## Tests and verification
+
+Add or update:
+
+- tracker client unit tests for schema mapping, no-link title matching, homogeneous/conflicting duplicates, link disambiguation, fuzzy confirmation, malformed data, cache-only lookup, single-flight, cooldown persistence, stale preservation, and reset races;
+- badge unit tests for all labels, priority composition, fuzzy exclusion, and late atomic reordering;
+- picker/resolver/service-worker tests proving manual-delisted controls are gone, legacy flags are ignored/cleaned, and only typed apps are classified;
+- content/coordinator coverage for late removal lookup, identity guards, authoritative invalidation, and stale-response suppression;
+- GG.deals tests for disabled admission, permanent successful no-data caching, reset paths, and failure exclusion;
+- manifest tests for both packaged targets;
+- an extension E2E scenario in which GG.deals renders first and a delayed Steam Tracker response becomes primary without losing the existing secondary badge;
+- an extension E2E regression that enables removed-game pricing in selective mode, proves zero global GG.deals requests, then proves one explicitly selected row can still fetch;
+- full unit suite and Chrome/Firefox builds.
 
 ## Completion criteria
 
-Both tradables views use the same validated link services as Deals, all unsafe/missing inputs fail closed, existing controls still work, and all unit/build/E2E verification is green.
+The tracker lane is cached, rate-limited, race-safe, privacy-safe, and non-blocking. Both API-provider paths can render in either order, and the same dynamic full-state reconciliation architecture described in the badge and progressive-badge documents determines the final clean badge order.

@@ -1,14 +1,19 @@
 // background/service-worker.js
-import { getPrices, getCachedPrices, getBundles, getPriceResult, isRefreshFallbackPrice } from './ggdeals.js';
+import { clearGgDealsNoData, getPrices, getCachedPrices, getBundles, getPriceResult, isRefreshFallbackPrice } from './ggdeals.js';
 import { resolveTitle, confirmResolution } from './resolver.js';
 import { fetchProfile, getCachedProfile } from './profile.js';
-import { cacheGet, safeCacheGet, cacheSet, cacheClear, cacheRevision, setDismissed, setUndismissed, isDismissed, setDelisted, setUndelisted } from './cache.js';
+import { cacheGet, safeCacheGet, cacheSet, cacheClear, cacheRevision, setDismissed, setUndismissed, isDismissed } from './cache.js';
 import { getDisplayRegion, normalizeSteamType } from '../utils/similarity.js';
 import { scrapeGame, scrapeBatch, handleScrapedResult, getScrapedData } from './ggdeals-scraper.js';
 import { getExcludedPageKey, getExcludedPagePath, isSteamTradesUrl } from '../utils/excluded-pages.js';
 import { writeSnapshot, pruneOldSnapshots } from './snapshots.js';
 import { steamFetch, mapSteamTasks, steamRequestScheduler } from './steam-rate-limiter.js';
 import { cancelAllSteamSearches, cancelSteamSearch, searchSteam } from './steam-search.js';
+import {
+  steamTrackerClient,
+  STEAM_TRACKER_SECURITY_ALERT_KEY,
+  STEAM_TRACKER_SECURITY_STATE_KEY,
+} from './steam-tracker.js';
 import {
   buildDiagnosticLog as renderDiagnosticLog,
   DEFAULT_RESOLUTION_STATS,
@@ -27,6 +32,8 @@ const DEALS_CACHE_KEY = 'deals_cards_cache';
 const DEALS_REFRESH_OPTIONS_KEY = 'dealsRefreshOptions';
 const DIAGNOSTICS_PANEL_EXPANDED_KEY = 'diagnosticsPanelExpanded';
 const ALARM_NAME = 'daily-snapshot';
+const STEAM_TRACKER_ALARM_NAME = 'steam-tracker-refresh';
+const LEGACY_DELISTED_MIGRATION_KEY = 'migration_manual_delisted_removed_v1';
 const inFlightProfiles = new Map();
 const latestProfileRuns = new Map();
 let profileGeneration = 0;
@@ -38,6 +45,52 @@ let lifecycleAdmissionClosed = false;
 let lifecycleDrainResolver = null;
 let cacheClearPromise = null;
 let storageWriteChain = Promise.resolve();
+let legacyDelistedMigrationPromise = null;
+
+function ensureLegacyDelistedMigration() {
+  if (legacyDelistedMigrationPromise) return legacyDelistedMigrationPromise;
+  legacyDelistedMigrationPromise = new Promise((resolve, reject) => {
+    chrome.storage.local.get([LEGACY_DELISTED_MIGRATION_KEY], markerResult => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (markerResult?.[LEGACY_DELISTED_MIGRATION_KEY] === true) {
+        resolve({ removed: 0, migrated: false });
+        return;
+      }
+      chrome.storage.local.get(null, stored => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        const legacyKeys = Object.keys(stored ?? {})
+          .filter(key => key.startsWith('resolve:') && key.endsWith(':delisted'));
+        const writeMarker = () => {
+          chrome.storage.local.set({ [LEGACY_DELISTED_MIGRATION_KEY]: true }, () => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else resolve({ removed: legacyKeys.length, migrated: true });
+          });
+        };
+        if (legacyKeys.length === 0) {
+          writeMarker();
+          return;
+        }
+        chrome.storage.local.remove(legacyKeys, () => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          writeMarker();
+        });
+      });
+    });
+  }).catch(err => {
+    legacyDelistedMigrationPromise = null;
+    throw err;
+  });
+  return legacyDelistedMigrationPromise;
+}
 
 function withStorageWriteLock(task) {
   const result = storageWriteChain.then(task, task);
@@ -111,6 +164,57 @@ function broadcastCacheCleared() {
       });
     });
   } catch {}
+}
+
+function broadcastSteamTrackerUpdated(revision) {
+  const message = { type: 'STEAM_TRACKER_UPDATED', revision };
+  try { chrome.runtime.sendMessage(message).catch(() => {}); } catch {}
+  try {
+    chrome.tabs.query({}, tabs => {
+      tabs?.forEach(tab => {
+        if (tab.id == null) return;
+        try { chrome.tabs.sendMessage(tab.id, message).catch(() => {}); } catch {}
+      });
+    });
+  } catch {}
+}
+
+function broadcastSteamTrackerSecurityAlert(alert) {
+  if (!alert) return;
+  const message = { type: 'STEAM_TRACKER_SECURITY_ALERT', alert };
+  try { chrome.runtime.sendMessage(message).catch(() => {}); } catch {}
+}
+
+async function refreshSteamTracker({ forceRefresh = false } = {}) {
+  const result = await steamTrackerClient.ensureSteamTrackerData({ forceRefresh });
+  const snapshot = result?.snapshot;
+  const requestState = steamTrackerClient.getRequestState();
+  await updateDiagnostics({
+    steamTracker: {
+      fetchedAt: snapshot?.fetchedAt ?? null,
+      itemCount: snapshot?.itemCount ?? 0,
+      unknownCategoryCount: snapshot?.unknownCategoryCount ?? 0,
+      categoryCounts: snapshot?.categoryCounts ?? {},
+      revision: snapshot?.revision ?? null,
+      lastStatus: result?.ok ? 'ok' : result?.status ?? (result?.cooldown ? 'cooldown' : 'unavailable'),
+      nextAllowedAt: result?.nextAllowedAt ?? null,
+      failureCount: requestState?.failureCount ?? 0,
+      lastFailureAt: requestState?.lastFailureAt || null,
+      securityLocked: result?.securityLocked === true,
+      securityReason: result?.securityAlert?.reasonCode ?? null,
+      updatedAt: Date.now(),
+    },
+  });
+  if (result?.changed && snapshot?.revision) broadcastSteamTrackerUpdated(snapshot.revision);
+  if (result?.securityAlert) broadcastSteamTrackerSecurityAlert(result.securityAlert);
+  return {
+    ok: result?.ok === true,
+    refreshed: result?.refreshed === true,
+    changed: result?.changed === true,
+    revision: snapshot?.revision ?? null,
+    nextAllowedAt: result?.nextAllowedAt ?? null,
+    securityLocked: result?.securityLocked === true,
+  };
 }
 
 function broadcastGgDealsRateLimited(event) {
@@ -336,6 +440,7 @@ const DEFAULT_SETTINGS = {
   showSidebar: true,
   showFullTimestamp: false,
   selectiveFetch: true,
+  fetchRemovedGamePrices: false,
   dealThresholdPct: 10,
   rangeLowRatio: 1.5,
   rangeHighRatio: 3.0,
@@ -343,6 +448,33 @@ const DEFAULT_SETTINGS = {
   currency: 'EUR',
   ggdealsAutoScroll: true,
 };
+
+const MANUAL_GGDEALS_INTENTS = new Set(['selected', 'manual-resolution', 'manual-refresh']);
+const INTERACTIVE_GGDEALS_MAX_WAIT_MS = 15000;
+
+function normalizeGgDealsFetchIntent(intent) {
+  return MANUAL_GGDEALS_INTENTS.has(intent) ? intent : 'automatic';
+}
+
+function blocksAutomaticGgDeals(settings, intent) {
+  return normalizeGgDealsFetchIntent(intent) === 'automatic' && settings.selectiveFetch !== false;
+}
+
+async function admitGgDealsItems(items, settings, intent = 'automatic') {
+  const removalRead = await steamTrackerClient.getRemovalStatuses(items);
+  const removedKeys = new Set(Object.keys(removalRead.statuses ?? {}));
+  const manual = MANUAL_GGDEALS_INTENTS.has(normalizeGgDealsFetchIntent(intent));
+  const allowed = settings.fetchRemovedGamePrices || manual
+    ? items
+    : items.filter(item => !removedKeys.has(`${normalizeSteamType(item.type)}:${item.id}`));
+  const skipped = items.filter(item => !allowed.includes(item)).map(item => ({
+    id: item.id,
+    type: normalizeSteamType(item.type),
+    reason: 'removed-fetch-disabled',
+    removal: removalRead.statuses?.[`app:${item.id}`] ?? null,
+  }));
+  return { allowed, removedKeys, skipped };
+}
 
 /**
  * Bulk-read resolution cache entries in a single chrome.storage.local.get() call.
@@ -389,7 +521,6 @@ async function getCachedResolutionStates(titles) {
     `${key}:confirmed`,
     `${key}:confirmed:title`,
     `${key}:dismissed`,
-    `${key}:delisted`,
   ]);
   const stored = await new Promise(resolve => chrome.storage.local.get(requestedKeys, resolve));
 
@@ -405,16 +536,10 @@ async function getCachedResolutionStates(titles) {
     const resolved = readResolutionValue(raw);
     const confirmed = !!confirmedEntry?.value;
     const titleEntry = stored[`${cacheKey}:confirmed:title`]?.value;
-    const status = stored[`${cacheKey}:delisted`]?.value === '1'
-      ? 'delisted'
-      : 'hit';
-
-    if (!resolved) {
-      return status === 'delisted' ? { status, cacheKey } : null;
-    }
+    if (!resolved) return null;
     return {
       ...resolved,
-      status,
+      status: 'hit',
       cacheKey,
       ...(confirmed ? { confirmed: true } : {}),
       ...(titleEntry ? { title: titleEntry } : {}),
@@ -577,12 +702,18 @@ function priceUpdatedMessage(target, region, priceData) {
 
 // --- Alarm: Daily Snapshot ---
 chrome.alarms.create(ALARM_NAME, { periodInMinutes: 1440 });
+chrome.alarms.create(STEAM_TRACKER_ALARM_NAME, { periodInMinutes: 60 });
 
 chrome.alarms.onAlarm.addListener(async alarm => {
+  if (alarm.name === STEAM_TRACKER_ALARM_NAME) {
+    await withLifecycleOperation(() => refreshSteamTracker({ forceRefresh: true }));
+    return;
+  }
   if (alarm.name !== ALARM_NAME) return;
   await withLifecycleOperation(async (operationEpoch) => {
   const settings = await getSettings();
   if (!settings.apiKey || !settings.steamId) return;
+  if (settings.selectiveFetch !== false) return;
 
   const tradablesRead = await readProfileTradables(settings);
   if (!tradablesRead.ok) {
@@ -602,9 +733,14 @@ chrome.alarms.onAlarm.addListener(async alarm => {
 
   if (appIds.length === 0) return;
 
-  const prices = await getPrices(settings.apiKey, appIds, settings.regions);
+  const admission = await admitGgDealsItems(appIds, settings);
+  const prices = admission.allowed.length
+    ? await getPrices(settings.apiKey, admission.allowed, settings.regions, {
+      negativeCacheItems: [...admission.removedKeys],
+    })
+    : {};
   for (const region of settings.regions) {
-    for (const item of appIds) {
+    for (const item of admission.allowed) {
       if ((item.type ?? 'app') !== 'app') continue;
       const appId = item.id;
       const data = getPriceResult(prices, appId, item.type)?.[region];
@@ -619,6 +755,20 @@ chrome.alarms.onAlarm.addListener(async alarm => {
   }
   await pruneOldSnapshots(settings.snapshotWindowDays);
   });
+});
+
+chrome.runtime.onStartup?.addListener(() => {
+  withLifecycleOperation(async () => {
+    await ensureLegacyDelistedMigration();
+    await refreshSteamTracker();
+  }).catch(() => {});
+});
+
+chrome.runtime.onInstalled?.addListener(() => {
+  withLifecycleOperation(async () => {
+    await ensureLegacyDelistedMigration();
+    await refreshSteamTracker();
+  }).catch(() => {});
 });
 
 // --- Message Router ---
@@ -642,6 +792,7 @@ async function clearCacheWithBarrier() {
     let error = null;
     try {
       await steamRequestScheduler.reset();
+      await steamTrackerClient.reset();
       await waitForLifecycleDrain();
       await Promise.allSettled(pendingProfiles);
       await cacheClear({
@@ -652,6 +803,9 @@ async function clearCacheWithBarrier() {
           EXCLUDED_PAGES_KEY,
           DEALS_REFRESH_OPTIONS_KEY,
           DIAGNOSTICS_PANEL_EXPANDED_KEY,
+          LEGACY_DELISTED_MIGRATION_KEY,
+          STEAM_TRACKER_SECURITY_ALERT_KEY,
+          STEAM_TRACKER_SECURITY_STATE_KEY,
         ],
         preservePrefixes: [
           'tradables_snapshot:',
@@ -683,6 +837,7 @@ export async function handleMessage(msg, sender) {
 }
 
 async function handleMessageAdmitted(msg, sender, operationEpoch) {
+  await ensureLegacyDelistedMigration();
   const settings = await getSettings();
 
   switch (msg.type) {
@@ -936,8 +1091,34 @@ async function handleMessageAdmitted(msg, sender, operationEpoch) {
       return getCachedResolutionStates(msg.titles);
     }
 
+    case 'GET_REMOVAL_STATUSES': {
+      return steamTrackerClient.getRemovalStatuses(Array.isArray(msg.items) ? msg.items : []);
+    }
+
+    case 'GET_STEAM_TRACKER_SECURITY_ALERT': {
+      return steamTrackerClient.getActiveSecurityAlert();
+    }
+
+    case 'DISMISS_STEAM_TRACKER_SECURITY_ALERT': {
+      return steamTrackerClient.dismissSecurityAlert(msg.alertId);
+    }
+
+    case 'GET_REMOVAL_MATCHES': {
+      return steamTrackerClient.getRemovalMatches(Array.isArray(msg.items) ? msg.items : [], {
+        includeFuzzy: msg.includeFuzzy !== false,
+      });
+    }
+
+    case 'ENSURE_STEAM_TRACKER_DATA': {
+      return refreshSteamTracker({ forceRefresh: msg.forceRefresh === true });
+    }
+
     case 'CONFIRM_RESOLUTION': {
       await confirmResolution(msg.cacheKey, msg.appId, msg.title, msg.type);
+      await clearGgDealsNoData(
+        [{ id: msg.appId, type: msg.type ?? 'app' }],
+        settings.regions ?? []
+      );
       return { ok: true };
     }
 
@@ -951,20 +1132,10 @@ async function handleMessageAdmitted(msg, sender, operationEpoch) {
       return { ok: true };
     }
 
-    case 'SET_UNDELISTED': {
-      await setUndelisted(msg.cacheKey);
-      return { ok: true };
-    }
-
-    case 'SET_DELISTED': {
-      await setDelisted(msg.cacheKey);
-      return { ok: true };
-    }
-
     case 'CLEAR_RESOLUTION': {
-      // Clear confirmed resolution, cached resolution, and delisted flag
+      // Clear confirmed and cached resolution.
       const key = msg.cacheKey;
-      await chrome.storage.local.remove([`${key}:confirmed`, `${key}:confirmed:title`, key, `${key}:delisted`]);
+      await chrome.storage.local.remove([`${key}:confirmed`, `${key}:confirmed:title`, key]);
       return { ok: true };
     }
 
@@ -973,8 +1144,30 @@ async function handleMessageAdmitted(msg, sender, operationEpoch) {
       const regions = msg.regions ?? settings.regions;
       if (!settings.apiKey) return { error: 'No API key set' };
       const items = normalizePriceMessageItems(msg);
-      const targets = priceMessageTargets(msg);
-      const prices = await getPrices(settings.apiKey, items, regions, { onRateLimited: broadcastGgDealsRateLimited });
+      const fetchIntent = normalizeGgDealsFetchIntent(msg.fetchIntent);
+      if (blocksAutomaticGgDeals(settings, fetchIntent)) {
+        return {
+          _meta: {
+            skipped: items.map(item => ({
+              id: item.id,
+              type: item.type,
+              reason: 'selective-mode',
+            })),
+          },
+        };
+      }
+      const admission = await admitGgDealsItems(items, settings, fetchIntent);
+      const targets = admission.allowed.map(item => ({ id: item.id, type: item.type }));
+      const prices = admission.allowed.length
+        ? await getPrices(settings.apiKey, admission.allowed, regions, {
+          onRateLimited: broadcastGgDealsRateLimited,
+          negativeCacheItems: [...admission.removedKeys],
+          maxWaitMs: MANUAL_GGDEALS_INTENTS.has(fetchIntent) ? INTERACTIVE_GGDEALS_MAX_WAIT_MS : null,
+        })
+        : {};
+      if (admission.skipped.length) {
+        prices._meta = { ...(prices._meta ?? {}), skipped: admission.skipped };
+      }
       // Broadcast PRICE_UPDATED to all tabs for each app that got fresh data
       if (prices) {
         const region = getDisplayRegion({ ...settings, regions });
@@ -1007,7 +1200,15 @@ async function handleMessageAdmitted(msg, sender, operationEpoch) {
 
     case 'GET_BUNDLES': {
       if (!settings.apiKey) return {};
-      return getBundles(settings.apiKey, msg.appIds);
+      const items = (msg.appIds ?? []).map(id => ({ id: String(id), type: 'app' }));
+      const fetchIntent = normalizeGgDealsFetchIntent(msg.fetchIntent);
+      if (blocksAutomaticGgDeals(settings, fetchIntent)) {
+        return { _meta: { skipped: items.map(item => ({ ...item, reason: 'selective-mode' })) } };
+      }
+      const admission = await admitGgDealsItems(items, settings, fetchIntent);
+      return admission.allowed.length ? getBundles(settings.apiKey, admission.allowed.map(item => item.id), {
+        timeoutMs: MANUAL_GGDEALS_INTENTS.has(fetchIntent) ? INTERACTIVE_GGDEALS_MAX_WAIT_MS : undefined,
+      }) : {};
     }
 
     case 'REPORT_PAGE_DIAGNOSTICS': {
@@ -1102,12 +1303,23 @@ async function handleMessageAdmitted(msg, sender, operationEpoch) {
       if (!settings.apiKey) return { error: 'No API key set' };
       const regions = msg.regions ?? settings.regions;
       const items = normalizePriceMessageItems(msg);
-      const targets = priceMessageTargets(msg);
+      const fetchIntent = normalizeGgDealsFetchIntent(msg.fetchIntent);
+      if (blocksAutomaticGgDeals(settings, fetchIntent)) {
+        return { _meta: { skipped: items.map(item => ({ ...item, reason: 'selective-mode' })) } };
+      }
+      const admission = await admitGgDealsItems(items, settings, fetchIntent);
+      const targets = admission.allowed.map(item => ({ id: item.id, type: item.type }));
       if (items.length === 0) return {};
-      const prices = await getPrices(settings.apiKey, items, regions, {
+      if (admission.removedKeys.size > 0) {
+        await clearGgDealsNoData(admission.allowed.filter(item => admission.removedKeys.has(`app:${item.id}`)), regions);
+      }
+      const prices = admission.allowed.length ? await getPrices(settings.apiKey, admission.allowed, regions, {
         forceRefresh: true,
         onRateLimited: broadcastGgDealsRateLimited,
-      });
+        negativeCacheItems: [...admission.removedKeys],
+        maxWaitMs: MANUAL_GGDEALS_INTENTS.has(fetchIntent) ? INTERACTIVE_GGDEALS_MAX_WAIT_MS : null,
+      }) : {};
+      if (admission.skipped.length) prices._meta = { ...(prices._meta ?? {}), skipped: admission.skipped };
       // Broadcast PRICE_UPDATED for each app (same as GET_PRICES)
       if (prices) {
         const region = getDisplayRegion({ ...settings, regions });

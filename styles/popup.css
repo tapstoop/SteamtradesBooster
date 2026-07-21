@@ -627,3 +627,40 @@ body {
 .progress-status .warn { color: #f1c40f; }
 .progress-status .error { color: #ff8888; }
 .progress-status .info { color: #66c0f4; }
+.steam-tracker-security-alert {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin: 8px;
+  padding: 10px 12px;
+  border: 1px solid #f38ba8;
+  border-radius: 5px;
+  background: #3b1f29;
+  color: #f8d7df;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.steam-tracker-security-alert > div { flex: 1; min-width: 0; }
+.steam-tracker-security-alert strong,
+.steam-tracker-security-alert small { display: block; }
+.steam-tracker-security-alert small { margin-top: 4px; color: #e6a9b8; }
+.steam-tracker-alert-details {
+  margin-top: 7px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #89b4fa;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.steam-tracker-alert-close {
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: #f8d7df;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+.steam-tracker-alert-close:focus-visible,
+.steam-tracker-alert-details:focus-visible { outline: 2px solid #89b4fa; outline-offset: 2px; }

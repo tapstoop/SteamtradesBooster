@@ -11,6 +11,15 @@ function msg(type, data = {}) {
   return runtimeSendMessage(type, data);
 }
 
+export async function generateDiagnosticLog() {
+  const response = await msg('GET_DIAGNOSTIC_LOG');
+  if (response?.error) throw new Error(response.error);
+  return {
+    log: response?.log ?? 'No diagnostics available.',
+    generatedAt: Date.now(),
+  };
+}
+
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -118,8 +127,8 @@ function storageSet(obj) {
   return new Promise(resolve => chrome.storage.local.set(obj, resolve));
 }
 
-export async function initSettings(container) {
-  const focusErrorLog = new URLSearchParams(location.search).get('focus') === 'error-log';
+export async function initSettings(container, { generateDiagnostics = false } = {}) {
+  const focusErrorLog = generateDiagnostics || new URLSearchParams(location.search).get('focus') === 'error-log';
   const [settings, savedDiagnosticsExpanded] = await Promise.all([
     msg('GET_SETTINGS'),
     storageGet('diagnosticsPanelExpanded'),
@@ -235,6 +244,13 @@ export async function initSettings(container) {
       <div style="color:#856404;font-size:9px;margin-top:4px;padding:4px;background:#2a2214;border-radius:3px;">
         ⚠️ Automatic mode fetches prices for ALL games as you scroll, which can exhaust your API rate limits quickly.
       </div>
+      <div class="toggle-row" style="margin-top:8px;">
+        <label>Automatically fetch prices for removed Steam games</label>
+        <input type="checkbox" class="toggle" id="s-fetch-removed" ${settings.fetchRemovedGamePrices === true ? 'checked' : ''}>
+      </div>
+      <div style="color:#856404;font-size:9px;margin-top:4px;">
+        Manual checkbox and refresh actions remain available when disabled. Automatic requests may consume GG.deals API quota without returning data.
+      </div>
     </div>
 
     <div class="settings-section">
@@ -320,10 +336,9 @@ export async function initSettings(container) {
 
   async function refreshDiagnosticLog() {
     renderDiagnosticsPanel({ loading: true });
-    const response = await msg('GET_DIAGNOSTIC_LOG');
-    if (response?.error) throw new Error(response.error);
-    diagnosticsLog = response?.log ?? 'No diagnostics available.';
-    diagnosticsGeneratedAt = Date.now();
+    const generated = await generateDiagnosticLog();
+    diagnosticsLog = generated.log;
+    diagnosticsGeneratedAt = generated.generatedAt;
     renderDiagnosticsPanel();
   }
 
@@ -602,6 +617,7 @@ export async function initSettings(container) {
       showFullTimestamp: container.querySelector('#s-fullts').checked,
       ggdealsAutoScroll: container.querySelector('#s-ggscroll').checked,
       selectiveFetch: container.querySelector('#s-selective').checked,
+      fetchRemovedGamePrices: container.querySelector('#s-fetch-removed').checked,
       dealThresholdPct: parseInt(container.querySelector('#s-dealthreshold').value) || 10,
     };
   }

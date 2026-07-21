@@ -599,7 +599,7 @@ async function refreshDealsPrices(container) {
   const regions = settings.regions ?? [getDisplayRegion(settings)];
   if (summary) summary.textContent = `${cards.length} games on wishlist — refreshing prices…`;
   try {
-    const prices = await msg('REFRESH_PRICES', { items, regions });
+    const prices = await msg('REFRESH_PRICES', { items, regions, fetchIntent: 'manual-refresh' });
     if (refreshSequence !== dealsPriceRefreshSequence) return;
     applyPriceResponseToCards(cards, prices);
     applySettingsToCards(cards, settings);
@@ -676,7 +676,11 @@ async function loadProgressPrices(priceItems, profileLoad, isCurrentProgress) {
     const missingPriceKeys = profileLoad.forceReloadAll ? keys : getStaleAppIds(keys, prices, regions, Infinity);
     if (missingPriceKeys.length === 0) return;
     const liveItems = priceItems.filter(item => missingPriceKeys.includes(progressPriceKey(item)));
-    const livePrices = await msg(profileLoad.forceReloadAll ? 'REFRESH_PRICES' : 'GET_PRICES', { items: liveItems, regions });
+    const livePrices = await msg(profileLoad.forceReloadAll ? 'REFRESH_PRICES' : 'GET_PRICES', {
+      items: liveItems,
+      regions,
+      fetchIntent: profileLoad.forceReloadAll ? 'manual-refresh' : 'automatic',
+    });
     if (!isCurrentProgress()) return;
     const merged = mergePriceResponse(prices, livePrices);
     applyPrices(merged.prices);
@@ -1238,7 +1242,11 @@ async function loadDealsInternal(container, {
       const itemsToFetch = priceItems.filter(item => itemKeysToFetch.includes(itemKey(item)));
       for (const chunk of chunkArray(itemsToFetch, FINAL_PRICE_CHUNK_SIZE)) {
         try {
-          const livePrices = await msg((manualRefresh || forceReloadAll) ? 'REFRESH_PRICES' : 'GET_PRICES', { items: chunk, regions });
+          const livePrices = await msg((manualRefresh || forceReloadAll) ? 'REFRESH_PRICES' : 'GET_PRICES', {
+            items: chunk,
+            regions,
+            fetchIntent: (manualRefresh || forceReloadAll) ? 'manual-refresh' : 'automatic',
+          });
           if (!isCurrentLoad(cacheIdentity)) return;
           const merged = mergePriceResponse(prices, livePrices);
           prices = merged.prices;

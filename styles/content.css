@@ -223,8 +223,16 @@
 
 .stpt-badge[data-type="NA"] .stpt-badge-price { background: #1a1a1a; color: #555; }
 
-.stpt-badge[data-type="delisted"] .stpt-badge-label { background: #ff4444; color: #111; }
-.stpt-badge[data-type="delisted"] .stpt-badge-price { background: #2a1414; color: #ff6666; }
+.stpt-badge[data-type="removed_delisted"] .stpt-badge-label { background: #ff4444; color: #111; }
+.stpt-badge[data-type="removed_delisted"] .stpt-badge-price { background: #2a1414; color: #ff7777; }
+
+.stpt-badge[data-type="removed_banned"] .stpt-badge-label { background: #9f1239; color: #fff; }
+.stpt-badge[data-type="removed_banned"] .stpt-badge-price { background: #2b0a16; color: #fda4af; }
+
+.stpt-badge[data-type="removed_disabled"] .stpt-badge-label { background: #f97316; color: #111; }
+.stpt-badge[data-type="removed_disabled"] .stpt-badge-price { background: #2c1608; color: #fdba74; }
+
+.stpt-badge[data-type="no-ggdeals-data"] .stpt-badge-label { background: #4b5563; color: #f3f4f6; }
 
 .stpt-badge[data-type="rate-limited"] .stpt-badge-label { background: #d99a27; color: #111; }
 .stpt-badge[data-type="rate-limited"] .stpt-badge-price { background: #2c2413; color: #f4c867; }

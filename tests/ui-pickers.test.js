@@ -7,6 +7,7 @@ import {
   createPickerStatusMessage,
   createPopoverBody,
   openCandidatePicker,
+  openNotFoundPicker,
   openPopover,
 } from '../content/ui-pickers.js';
 
@@ -246,6 +247,23 @@ describe('openPopover', () => {
     }, expect.any(Function));
     expect(document.querySelector('.stpt-popover')).toBeNull();
   });
+
+  it('does not expose legacy manual-delisted controls', () => {
+    const anchor = document.createElement('button');
+    document.body.appendChild(anchor);
+    openPopover(anchor, null, { title: 'Game', appId: '123', type: 'app', tier: 4, settings: {} });
+    expect(document.querySelector('.stpt-popover')?.textContent).not.toMatch(/mark as delisted|undo delisted/i);
+  });
+});
+
+describe('openNotFoundPicker', () => {
+  it('does not offer a manual delisted action', () => {
+    const anchor = document.createElement('button');
+    const row = document.createElement('span');
+    document.body.append(anchor, row);
+    openNotFoundPicker(anchor, 'resolve:missing', '', row);
+    expect(document.querySelector('.stpt-candidates')?.textContent).not.toMatch(/delisted game/i);
+  });
 });
 
 describe('buildPopoverRefreshRequest', () => {
@@ -258,6 +276,7 @@ describe('buildPopoverRefreshRequest', () => {
     expect(req.payload).toEqual({
       items: [{ id: '232', type: 'bundle' }],
       regions: ['eu', 'us'],
+      fetchIntent: 'manual-refresh',
     });
   });
 

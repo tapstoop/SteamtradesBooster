@@ -165,34 +165,3 @@ export async function isDismissed(cacheKey) {
     return false;
   }
 }
-
-/**
- * Mark a title resolution as delisted.
- * @param {string} cacheKey — The resolution cache key
- */
-export async function setDelisted(cacheKey) {
-  await storageSet(`${cacheKey}:delisted`, { value: '1', cachedAt: Date.now() });
-}
-
-/**
- * Mark a title resolution as not delisted (undo delisted).
- * @param {string} cacheKey — The resolution cache key
- */
-export async function setUndelisted(cacheKey) {
-  await storageSet(`${cacheKey}:delisted`, { value: '0', cachedAt: Date.now() });
-}
-
-/**
- * Check if a title resolution was marked as delisted.
- * @param {string} cacheKey — The resolution cache key
- * @returns {boolean}
- */
-export async function isDelisted(cacheKey) {
-  try {
-    const entry = await storageGet(`${cacheKey}:delisted`);
-    return entry?.value === '1';
-  } catch (err) {
-    console.warn('[cache] Delisted read failed:', cacheKey, err?.message ?? err);
-    return false;
-  }
-}

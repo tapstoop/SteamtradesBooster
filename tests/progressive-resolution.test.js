@@ -69,4 +69,26 @@ describe('ProgressiveResolutionCoordinator', () => {
     expect(onResolved).toHaveBeenCalledTimes(1);
     expect(onResolved.mock.calls[0][1]).toMatchObject({ status: 'not-found', failed: true });
   });
+
+  it('ignores a stale in-flight result after provider invalidation and permits a new lookup', async () => {
+    const item = row('Changed Game');
+    const deferred = [];
+    const onResolved = vi.fn();
+    const coordinator = new ProgressiveResolutionCoordinator({
+      rows: [item],
+      resolveTitles: titles => new Promise(resolve => deferred.push({ titles, resolve })),
+      onResolved,
+    });
+
+    coordinator.enqueue([item]);
+    coordinator.invalidate([item]);
+    coordinator.enqueue([item], { priority: true });
+    deferred[0].resolve([{ status: 'resolved', appId: 'old' }]);
+    await vi.waitFor(() => expect(deferred).toHaveLength(2));
+    deferred[1].resolve([{ status: 'resolved', appId: 'new' }]);
+    await coordinator.whenIdle();
+
+    expect(onResolved).toHaveBeenCalledTimes(1);
+    expect(onResolved.mock.calls[0][1].appId).toBe('new');
+  });
 });

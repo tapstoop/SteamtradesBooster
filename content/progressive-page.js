@@ -1,15 +1,16 @@
 import { parseGameRows, prioritize, injectCheckboxes } from './parser.js';
-import { getDisplayRegion, normalizeSteamType, typedPriceKey } from '../utils/similarity.js';
+import { getDisplayRegion, normalizeSteamType, normalizeTitle, typedPriceKey } from '../utils/similarity.js';
 import { TradeSimulator } from './trade-logic.js';
 import {
   injectSkeleton, replaceBadge, injectQuestionBadge, injectFuzzyBadge, injectNotFoundBadge,
-  injectDismissedBadge, injectDelistedBadge, injectRateLimitedBadge, SidebarWorkstation, setSkeletonLoading,
+  injectDismissedBadge, injectRateLimitedBadge, SidebarWorkstation, setSkeletonLoading,
 } from './ui.js';
 import { applyResolvedRow } from './resolution-helpers.js';
 import { handleRuntimeMessage, bindManualResolutionListener } from './content-handlers.js';
 import { _getBadgePrice, setWorkstationPrice } from './price-helpers.js';
 import { isPageExcluded } from '../utils/excluded-pages.js';
 import { ProgressiveResolutionCoordinator } from './progressive-resolution.js';
+import { sameRemoval } from '../utils/removal-status.js';
 
 function sendMessage(type, data = {}) {
   return new Promise((resolve, reject) => {
@@ -33,13 +34,17 @@ function readPriceRegion(prices, appId, type = 'app', region) {
   return typed ?? (normalizedType === 'app' ? prices[String(appId)]?.[region] ?? null : null);
 }
 
+function readGgDealsNoData(prices, appId, type = 'app', region) {
+  return Boolean(prices?._meta?.noData?.[`${normalizeSteamType(type)}:${String(appId)}`]?.[region]);
+}
+
 function priceItem(row) {
   return { id: row.appId, type: row.type ?? row.resolution?.type ?? 'app' };
 }
 
 function canPrice(resolution) {
   return !!resolution?.appId
-    && ['hit', 'resolved', 'delisted'].includes(resolution.status)
+    && ['hit', 'resolved'].includes(resolution.status)
     && !resolution.fuzzy;
 }
 
@@ -57,6 +62,8 @@ function workstationGame(row, settings) {
     inWishlist: row.tier === 1,
     inTradables: row.tier === 2,
     currency: settings.regions?.[0] || 'EUR',
+    removalStatus: row.removal?.status ?? null,
+    ggDealsNoData: row.ggDealsNoData === true,
   };
 }
 
@@ -75,6 +82,7 @@ function applyResolution(row, resolution) {
   row.fuzzy = !!resolution?.fuzzy;
   row.similarity = resolution?.similarity ?? null;
   row.resolution = resolution;
+  row.removal = resolution?.removal ?? null;
   row.resolutionStatus = status === 'not-found' && resolution?.failed ? 'failed' : 'resolved';
   row.el.dataset.stptTitle = row.title;
 
@@ -84,10 +92,208 @@ function applyResolution(row, resolution) {
   if (checkbox) checkbox.dataset.stptTitle = row.title;
 
   if (status === 'dismissed') injectDismissedBadge(row.el, row.cacheKey, row.title);
-  else if (status === 'delisted') injectDelistedBadge(row.el, row.cacheKey, row.title);
   else if (status === 'ambiguous') injectQuestionBadge(row.el, resolution.candidates, row.cacheKey);
   else if (status === 'not-found') injectNotFoundBadge(row.el, row.cacheKey, row.title);
   else if (row.fuzzy) injectFuzzyBadge(row.el, resolution);
+}
+
+function trackerPickerCandidates(match) {
+  return (match?.candidates ?? []).map(candidate => ({
+    id: candidate.appId,
+    name: candidate.title,
+    type: 'app',
+    removalStatus: candidate.removal?.status ?? null,
+  }));
+}
+
+function renderTrackerOnlyRow(state, run, row) {
+  replaceBadge(row.el, row.priceData, {
+    ...row,
+    settings: run.settings,
+    cacheKey: row.cacheKey,
+    acqPrice: row.acqPrice ?? null,
+  });
+  state.workstation.updateResolvedPageGames([{
+    stptId: row.el.dataset.stptId,
+    update: {
+      appId: row.appId,
+      type: row.type,
+      removalStatus: row.removal?.status ?? null,
+    },
+  }]);
+}
+
+function applyTrackerMatch(state, run, row, match) {
+  if (!match || !isCurrent(state, run) || !row.el?.isConnected) return false;
+  if (row.resolution?.confirmed || row.resolution?.status === 'dismissed') return false;
+  row.trackerFuzzy = match.kind === 'fuzzy' ? match : null;
+  if (match.kind === 'fuzzy') return false;
+
+  const existingAppId = row.appId ? String(row.appId) : null;
+  const candidates = match.candidates ?? [];
+  if (existingAppId) {
+    const same = candidates.find(candidate => String(candidate.appId) === existingAppId);
+    if (same) {
+      row.removal = same.removal;
+      renderTrackerOnlyRow(state, run, row);
+      return true;
+    }
+    applyResolution(row, {
+      status: 'ambiguous',
+      candidates: trackerPickerCandidates(match),
+      cacheKey: `resolve:${normalizeTitle(row.originalTitle)}`,
+      source: 'provider-conflict',
+    });
+    return true;
+  }
+
+  if (match.kind === 'resolved') {
+    applyResolution(row, {
+      status: 'resolved',
+      appId: match.appId,
+      type: 'app',
+      title: match.title ?? row.title,
+      removal: match.removal,
+      cacheKey: `resolve:${normalizeTitle(row.originalTitle)}`,
+      source: 'steam-tracker',
+    });
+    renderTrackerOnlyRow(state, run, row);
+    return true;
+  }
+
+  if (match.kind === 'status-only') {
+    row.rowRevision = (row.rowRevision ?? 0) + 1;
+    row.resolutionStatus = 'resolved';
+    row.resolution = {
+      status: 'removed-unresolved',
+      source: 'steam-tracker',
+      candidates: trackerPickerCandidates(match),
+    };
+    row.removal = match.removal;
+    renderTrackerOnlyRow(state, run, row);
+    return true;
+  }
+
+  if (match.kind === 'ambiguous') {
+    applyResolution(row, {
+      status: 'ambiguous',
+      candidates: trackerPickerCandidates(match),
+      cacheKey: `resolve:${normalizeTitle(row.originalTitle)}`,
+      source: 'steam-tracker',
+    });
+    return true;
+  }
+  return false;
+}
+
+function applySteamResolution(state, run, row, resolution) {
+  const trackerResolution = row.resolution?.source === 'steam-tracker' ? row.resolution : null;
+  if (!trackerResolution) {
+    if (resolution?.status === 'not-found' && row.trackerFuzzy) {
+      applyResolution(row, {
+        status: 'ambiguous',
+        candidates: trackerPickerCandidates(row.trackerFuzzy),
+        cacheKey: `resolve:${normalizeTitle(row.originalTitle)}`,
+        source: 'steam-tracker-fuzzy',
+      });
+      return;
+    }
+    applyResolution(row, resolution);
+    return;
+  }
+  if (!resolution?.appId || resolution.status === 'not-found') return;
+  const sameCandidate = trackerResolution.candidates?.find(candidate => String(candidate.id) === String(resolution.appId));
+  if (String(trackerResolution.appId ?? '') === String(resolution.appId) || sameCandidate) {
+    applyResolution(row, { ...resolution, removal: row.removal });
+    return;
+  }
+  applyResolution(row, {
+    status: 'ambiguous',
+    candidates: [
+      { id: String(resolution.appId), name: resolution.title ?? row.title, type: resolution.type ?? 'app' },
+      ...(trackerResolution.candidates ?? []),
+    ],
+    cacheKey: resolution.cacheKey ?? `resolve:${normalizeTitle(row.originalTitle)}`,
+    source: 'provider-conflict',
+  });
+}
+
+async function reconcileRemovalTitleMatches(state, run, rows = state.rows, { includeFuzzy = true, authoritative = false } = {}) {
+  if (!isCurrent(state, run) || rows.length === 0) return [];
+  const response = await sendMessage('GET_REMOVAL_MATCHES', {
+    items: rows.map(row => ({
+      title: row.originalTitle,
+      linkedAppId: row.linkedType === 'app' ? row.linkedAppId : null,
+    })),
+    includeFuzzy,
+  }).catch(() => null);
+  if (!response || !isCurrent(state, run)) return [];
+  const hydrated = [];
+  const invalidated = [];
+  rows.forEach((row, index) => {
+    const match = response.matches?.[index];
+    if (applyTrackerMatch(state, run, row, match)) {
+      hydrated.push(row);
+    } else if (authoritative && response.hasCache && !match && row.resolution?.source === 'steam-tracker') {
+      row.rowRevision = (row.rowRevision ?? 0) + 1;
+      row.appId = null;
+      row.type = 'app';
+      row.removal = null;
+      row.priceData = null;
+      row.ggDealsNoData = false;
+      row.resolution = { status: 'pending' };
+      row.el.querySelectorAll('.stpt-badge, .stpt-skeleton').forEach(el => el.remove());
+      injectSkeleton(row.el, false);
+      invalidated.push(row);
+    }
+  });
+  if (invalidated.length) {
+    run.coordinator?.invalidate(invalidated);
+    run.coordinator?.enqueue(invalidated, { priority: true });
+  }
+  return hydrated;
+}
+
+async function reconcileRemovalRows(state, run, rows = state.rows) {
+  if (!isCurrent(state, run)) return;
+  const candidates = rows
+    .filter(row => row?.appId && normalizeSteamType(row.type) === 'app' && !row.fuzzy)
+    .map(row => {
+      const removalLookupRevision = (row.removalLookupRevision ?? 0) + 1;
+      row.removalLookupRevision = removalLookupRevision;
+      return {
+        row,
+        appId: String(row.appId),
+        rowRevision: row.rowRevision,
+        removalLookupRevision,
+      };
+    });
+  if (candidates.length === 0) return;
+  const uniqueItems = [...new Map(candidates.map(item => [`app:${item.appId}`, { id: item.appId, type: 'app' }])).values()];
+  const response = await sendMessage('GET_REMOVAL_STATUSES', { items: uniqueItems }).catch(() => null);
+  if (!response || !isCurrent(state, run)) return;
+
+  const patches = [];
+  for (const candidate of candidates) {
+    const { row, appId, rowRevision, removalLookupRevision } = candidate;
+    if (!row.el?.isConnected || row.rowRevision !== rowRevision) continue;
+    if (row.removalLookupRevision !== removalLookupRevision) continue;
+    if (String(row.appId) !== appId || normalizeSteamType(row.type) !== 'app') continue;
+    const nextRemoval = response.statuses?.[`app:${appId}`] ?? null;
+    if (sameRemoval(row.removal, nextRemoval)) continue;
+    row.removal = nextRemoval;
+    replaceBadge(row.el, row.priceData, {
+      ...row,
+      settings: run.settings,
+      cacheKey: row.cacheKey,
+      acqPrice: row.acqPrice ?? null,
+    });
+    patches.push({
+      stptId: row.el.dataset.stptId,
+      update: { removalStatus: nextRemoval?.status ?? null },
+    });
+  }
+  if (patches.length) state.workstation.updateResolvedPageGames(patches);
 }
 
 async function hydratePriceBatch(state, run, items) {
@@ -97,21 +303,32 @@ async function hydratePriceBatch(state, run, items) {
   const itemsByKey = new Map(rows.map(row => [`${row.type}:${row.appId}`, priceItem(row)]));
   const [cachedPrices, bundles] = await Promise.all([
     sendMessage('GET_CACHED_PRICES', { items: [...itemsByKey.values()], regions: run.settings.regions }).catch(() => ({})),
-    run.settings.apiKey
-      ? sendMessage('GET_BUNDLES', { appIds: [...new Set(rows.map(row => row.appId))] }).catch(() => ({}))
+    run.settings.apiKey && run.settings.selectiveFetch === false
+      ? sendMessage('GET_BUNDLES', {
+        appIds: [...new Set(rows.map(row => row.appId))],
+        fetchIntent: 'automatic',
+      }).catch(() => ({}))
       : Promise.resolve({}),
   ]);
   if (!isCurrent(state, run)) return;
 
   const patches = [];
   for (const row of rows) {
-    const priceData = readPriceRegion(cachedPrices, row.appId, row.type, getDisplayRegion(run.settings));
+    const displayRegion = getDisplayRegion(run.settings);
+    const priceData = readPriceRegion(cachedPrices, row.appId, row.type, displayRegion);
+    row.ggDealsNoData = readGgDealsNoData(cachedPrices, row.appId, row.type, displayRegion);
     row.inBundle = row.type === 'bundle' || !!bundles?.[row.appId]?.length;
     if (priceData) {
       row.priceData = priceData;
       const gameInfo = { ...row, settings: run.settings, cacheKey: row.cacheKey, acqPrice: row.acqPrice ?? null };
-      if (row.resolution.status === 'delisted') injectDelistedBadge(row.el, row.cacheKey, row.title, priceData, gameInfo);
-      else replaceBadge(row.el, priceData, gameInfo);
+      replaceBadge(row.el, priceData, gameInfo);
+    } else if (row.removal) {
+      replaceBadge(row.el, row.priceData, {
+        ...row,
+        settings: run.settings,
+        cacheKey: row.cacheKey,
+        acqPrice: row.acqPrice ?? null,
+      });
     }
     patches.push({
       stptId: row.el.dataset.stptId,
@@ -124,6 +341,7 @@ async function hydratePriceBatch(state, run, items) {
         manuallyResolved: row.manuallyResolved ?? false,
         price: priceData ? _getBadgePrice(priceData, run.settings) : null,
         currency: priceData?.prices?.currency ?? run.settings.currency ?? 'EUR',
+        ggDealsNoData: row.ggDealsNoData,
       },
     });
   }
@@ -136,32 +354,51 @@ async function hydratePriceBatch(state, run, items) {
   }
 }
 
-async function fetchRemotePrices(state, run, rows) {
-  if (!isCurrent(state, run) || rows.length === 0) return;
+async function fetchRemotePrices(state, run, rows, fetchIntent = 'automatic') {
+  if (!isCurrent(state, run) || rows.length === 0) return { completedRows: [], failedRows: rows };
   setSkeletonLoading(rows.map(row => row.el));
   const [prices, bundles, acquisitionEntries] = await Promise.all([
-    sendMessage('GET_PRICES', { items: rows.map(priceItem), regions: run.settings.regions }),
-    sendMessage('GET_BUNDLES', { appIds: [...new Set(rows.map(row => row.appId))] }).catch(() => ({})),
+    sendMessage('GET_PRICES', {
+      items: rows.map(priceItem),
+      regions: run.settings.regions,
+      fetchIntent,
+    }),
+    sendMessage('GET_BUNDLES', {
+      appIds: [...new Set(rows.map(row => row.appId))],
+      fetchIntent,
+    }).catch(() => ({})),
     Promise.all(rows.filter(row => row.tier === 2).map(async row => [
       `${row.type}:${row.appId}`,
       await sendMessage('GET_ACQ_PRICE', { appId: row.appId, itemType: row.type }).then(result => result?.price ?? null).catch(() => null),
     ])),
   ]);
-  if (!isCurrent(state, run)) return;
+  if (!isCurrent(state, run)) return { completedRows: [], failedRows: rows, stale: true };
   const acquisitionPrices = Object.fromEntries(acquisitionEntries);
   const patches = [];
+  const completedRows = [];
+  const failedRows = [];
+  const skippedKeys = new Set((prices?._meta?.skipped ?? []).map(item => `${item.type ?? 'app'}:${item.id}`));
   for (const row of rows) {
-    const priceData = readPriceRegion(prices, row.appId, row.type, getDisplayRegion(run.settings));
+    const displayRegion = getDisplayRegion(run.settings);
+    const priceData = readPriceRegion(prices, row.appId, row.type, displayRegion);
     row.inBundle = row.type === 'bundle' || !!bundles?.[row.appId]?.length;
     row.priceData = priceData ?? null;
+    row.ggDealsNoData = readGgDealsNoData(prices, row.appId, row.type, displayRegion);
     row.acqPrice = acquisitionPrices[`${row.type}:${row.appId}`] ?? row.acqPrice ?? null;
     replaceBadge(row.el, row.priceData, { ...row, settings: run.settings, cacheKey: row.cacheKey, acqPrice: row.acqPrice });
+    if (!skippedKeys.has(`${row.type}:${row.appId}`) && (priceData || row.ggDealsNoData)) completedRows.push(row);
+    else failedRows.push(row);
     patches.push({
       stptId: row.el.dataset.stptId,
-      update: { price: priceData ? _getBadgePrice(priceData, run.settings) : null, currency: priceData?.prices?.currency ?? 'EUR' },
+      update: {
+        price: priceData ? _getBadgePrice(priceData, run.settings) : null,
+        currency: priceData?.prices?.currency ?? 'EUR',
+        ggDealsNoData: row.ggDealsNoData,
+      },
     });
   }
   state.workstation.updateResolvedPageGames(patches);
+  return { completedRows, failedRows, partialError: prices?.error ?? null };
 }
 
 function scheduleTier4Prices(state, run, rows) {
@@ -196,7 +433,7 @@ function reconcileTiers(state, run, { authoritativeWishlist, authoritativeTradab
     if (!authoritativeWishlist && oldTier === 1 && next.tier !== 1) return;
     if (!authoritativeTradables && oldTier === 2 && next.tier === 4) return;
     row.tier = next.tier;
-    if (row.priceData && !row.fuzzy && row.resolution?.status !== 'delisted') {
+    if (row.priceData && !row.fuzzy) {
       replaceBadge(row.el, row.priceData, { ...row, settings: run.settings, cacheKey: row.cacheKey });
     }
     patches.push({ stptId: row.el.dataset.stptId, update: { tier: row.tier } });
@@ -239,6 +476,7 @@ async function beginRun(state, settings) {
     priceObserver: null,
   };
   state.run = run;
+  sendMessage('ENSURE_STEAM_TRACKER_DATA').catch(() => {});
   const profilePromise = sendMessage('GET_PROFILE', { requestId: run.profileRequestId });
   await sendMessage('BEGIN_RESOLUTION_SESSION', {
     resolutionSessionId: run.pageSessionId,
@@ -246,10 +484,16 @@ async function beginRun(state, settings) {
     totalRows: state.rows.length,
   }).catch(() => {});
 
-  const [cachedProfile, tradablesRead, cachedStates] = await Promise.all([
+  const [cachedProfile, tradablesRead, cachedStates, trackerMatches] = await Promise.all([
     sendMessage('GET_CACHED_PROFILE').catch(() => ({ wishlist: [], partialWishlist: [] })),
     sendMessage('GET_TRADABLES').catch(() => ({ storageError: true, tradables: [] })),
     sendMessage('GET_CACHED_RESOLUTION_STATES', { titles: state.rows.map(row => row.originalTitle) }).catch(() => []),
+    sendMessage('GET_REMOVAL_MATCHES', {
+      items: state.rows.map(row => ({
+        title: row.originalTitle,
+        linkedAppId: row.linkedType === 'app' ? row.linkedAppId : null,
+      })),
+    }).catch(() => ({ matches: [] })),
   ]);
   if (!isCurrent(state, run)) return;
   for (const item of [...(cachedProfile?.wishlist ?? []), ...(cachedProfile?.partialWishlist ?? [])]) {
@@ -269,19 +513,35 @@ async function beginRun(state, settings) {
       resolutionBatchId: meta.batchId,
       rowMultiplicities: meta.rowMultiplicities,
     }),
-    onResolved: (row, resolution) => applyResolution(row, resolution),
-    onBatchResolved: items => hydratePriceBatch(state, run, items),
+    onResolved: (row, resolution) => applySteamResolution(state, run, row, resolution),
+    onBatchResolved: items => Promise.all([
+      hydratePriceBatch(state, run, items),
+      reconcileRemovalRows(state, run, items.map(item => item.row)),
+    ]),
   });
 
-  const hydrated = [];
+  const hydrated = state.rows
+    .filter(row => canPrice(row.resolution))
+    .map(row => ({ row, resolution: row.resolution }));
   (Array.isArray(cachedStates) ? cachedStates : []).forEach((resolution, index) => {
     if (!resolution || !state.rows[index]) return;
     const row = state.rows[index];
+    if (canPrice(row.resolution)) return;
     applyResolution(row, resolution);
     hydrated.push({ row, resolution });
   });
+  state.rows.forEach((row, index) => {
+    if (applyTrackerMatch(state, run, row, trackerMatches?.matches?.[index])) {
+      hydrated.push({ row, resolution: row.resolution });
+    }
+  });
   run.coordinator.markHydrated(hydrated.map(item => item.row));
-  if (hydrated.length) await hydratePriceBatch(state, run, hydrated);
+  if (hydrated.length) {
+    await Promise.all([
+      hydratePriceBatch(state, run, hydrated),
+      reconcileRemovalRows(state, run, hydrated.map(item => item.row)),
+    ]);
+  }
   if (!isCurrent(state, run)) return;
 
   run.coordinator.enqueue(state.rows.filter(row => row.resolutionStatus === 'pending' && row.tier <= 2), { priority: true });
@@ -313,9 +573,11 @@ function resetRows(state) {
     row.type = 'app';
     row.cacheKey = null;
     row.resolution = null;
+    row.removal = null;
     row.resolutionStatus = 'pending';
     row.fuzzy = false;
     row.priceData = null;
+    row.ggDealsNoData = false;
     row.tier = 4;
     row.el.dataset.stptTitle = row.originalTitle;
     row.el.querySelectorAll('.stpt-badge, .stpt-skeleton').forEach(el => el.remove());
@@ -329,21 +591,68 @@ function setupSelectedFetch(state) {
   button.className = 'stpt-floating-fetch-btn';
   button.style.display = 'none';
   const update = () => {
+    if (button.dataset.resultType) return;
     const selected = document.querySelectorAll('.stpt-game-checkbox:checked').length;
     button.style.display = selected ? 'flex' : 'none';
     button.textContent = `Fetch prices for ${selected} game${selected === 1 ? '' : 's'}`;
   };
   document.querySelectorAll('.stpt-game-checkbox').forEach(checkbox => checkbox.addEventListener('change', update));
-  button.addEventListener('click', async () => {
-    const selectedTitles = new Set(Array.from(document.querySelectorAll('.stpt-game-checkbox:checked'))
-      .map(checkbox => checkbox.dataset.stptTitle));
-    const rows = state.rows.filter(row => selectedTitles.has(row.el.dataset.stptTitle) && row.appId);
-    if (!rows.length || !state.run) return;
+  const showResult = (message, type, delay = 4000) => {
+    if (button._resultTimeout) clearTimeout(button._resultTimeout);
+    button.style.display = 'flex';
+    button.textContent = message;
     button.disabled = true;
+    button.dataset.resultType = type;
+    button._resultTimeout = setTimeout(() => {
+      delete button.dataset.resultType;
+      button.disabled = false;
+      update();
+    }, delay);
+  };
+  button.addEventListener('click', async () => {
+    const checked = Array.from(document.querySelectorAll('.stpt-game-checkbox:checked'));
+    const selectedIds = new Set(checked.map(checkbox => checkbox.dataset.stptId));
+    const selectedRows = state.rows.filter(row => selectedIds.has(row.el.dataset.stptId));
+    const rows = selectedRows.filter(row => row.appId);
+    const unresolvedCount = selectedRows.length - rows.length;
+    if (!state.run) return;
+    if (!rows.length) {
+      showResult(unresolvedCount === 1
+        ? 'This game could not be resolved. Resolve it first.'
+        : 'None of the selected games could be resolved.', 'error');
+      return;
+    }
+    button.disabled = true;
+    button.textContent = 'Fetching…';
     try {
-      await fetchRemotePrices(state, state.run, rows);
-      document.querySelectorAll('.stpt-game-checkbox:checked').forEach(checkbox => { checkbox.checked = false; });
+      const result = await fetchRemotePrices(state, state.run, rows, 'selected');
+      if (result.stale) return;
+      const completedIds = new Set(result.completedRows.map(row => row.el.dataset.stptId));
+      checked.forEach(checkbox => {
+        if (completedIds.has(checkbox.dataset.stptId)) checkbox.checked = false;
+      });
+      const failedCount = result.failedRows.length;
+      const completedCount = result.completedRows.length;
+      if (failedCount || unresolvedCount || result.partialError) {
+        const parts = [];
+        if (completedCount) parts.push(`Fetched ${completedCount} successfully`);
+        if (failedCount) parts.push(`${failedCount} could not be fetched`);
+        if (unresolvedCount) parts.push(`${unresolvedCount} could not be resolved`);
+        showResult(`${parts.join(', ')}.`, completedCount ? 'warning' : 'error');
+      } else {
+        showResult(`Fetched ${completedCount} game${completedCount === 1 ? '' : 's'} successfully.`, 'success');
+      }
+    } catch (error) {
+      rows.forEach(row => replaceBadge(row.el, row.priceData, {
+        ...row,
+        settings: state.run?.settings ?? {},
+        cacheKey: row.cacheKey,
+      }));
+      showResult(error?.code === 'GGDEALS_INTERACTIVE_TIMEOUT'
+        ? 'GG.deals timed out. Try again after the rate-limit reset.'
+        : 'An error occurred while fetching prices. Please try again.', 'error');
     } finally {
+      if (button.dataset.resultType) return;
       button.disabled = false;
       update();
     }
@@ -364,7 +673,10 @@ function bindRecheckListener(state) {
         if (!isCurrent(state, run) || row.rowRevision !== revision) return;
         const resolution = resolutions?.[0] ?? { status: 'not-found', failed: true };
         applyResolution(row, resolution);
-        await hydratePriceBatch(state, run, [{ row, resolution }]);
+        await Promise.all([
+          hydratePriceBatch(state, run, [{ row, resolution }]),
+          reconcileRemovalRows(state, run, [row]),
+        ]);
       }).catch(() => {
         if (isCurrent(state, run) && row.rowRevision === revision) {
           applyResolution(row, { status: 'not-found', failed: true, cacheKey: event.detail?.cacheKey });
@@ -385,6 +697,8 @@ export async function startProgressivePage() {
   if (rows.length === 0) return;
   const state = {
     rows: rows.map((row, index) => {
+      const linkedAppId = row.linkedAppId ? String(row.linkedAppId) : null;
+      const linkedType = row.linkedType ? normalizeSteamType(row.linkedType) : null;
       row.el.dataset.stptId = String(index);
       row.el.dataset.stptTitle = row.title;
       injectSkeleton(row.el, true);
@@ -393,13 +707,17 @@ export async function startProgressivePage() {
         originalTitle: row.title,
         appId: null,
         type: 'app',
+        linkedAppId,
+        linkedType,
         tier: 4,
         cacheKey: null,
         resolution: null,
+        removal: null,
         resolutionStatus: 'pending',
         fuzzy: false,
         similarity: null,
         priceData: null,
+        ggDealsNoData: false,
         rowRevision: 0,
       };
     }),
@@ -452,6 +770,23 @@ export async function startProgressivePage() {
       beginRun(state, state.settingsRef.current).catch(() => {});
       return;
     }
+    if (message.type === 'STEAM_TRACKER_UPDATED' && run && isCurrent(state, run)) {
+      const titleReconciliation = reconcileRemovalTitleMatches(
+        state,
+        run,
+        state.rows,
+        { authoritative: true }
+      );
+      Promise.all([
+        reconcileRemovalRows(state, run),
+        titleReconciliation.then(rows => hydratePriceBatch(
+          state,
+          run,
+          rows.map(row => ({ row, resolution: row.resolution }))
+        )),
+      ]).catch(() => {});
+      return;
+    }
     if (message.type === 'GGDEALS_RATE_LIMITED' && run && isCurrent(state, run)) {
       const limited = new Set((message.items ?? []).map(item => `${normalizeSteamType(item.type)}:${item.id}`));
       state.rows.forEach(row => {
@@ -462,6 +797,7 @@ export async function startProgressivePage() {
       });
       return;
     }
+    const previousSettings = state.run?.settings ?? state.settingsRef.current;
     const handled = handleRuntimeMessage(message, {
       rowData: state.rows,
       settingsRef: state.settingsRef,
@@ -478,9 +814,24 @@ export async function startProgressivePage() {
       setWorkstationPrice,
     });
     if (handled && message.type === 'SETTINGS_UPDATED' && state.run) {
-      state.run.settings = message.settings;
-      if (message.settings.selectiveFetch === false) {
-        state.run.coordinator?.enqueue(state.rows.filter(row => row.resolutionStatus === 'pending'));
+      const run = state.run;
+      run.settings = message.settings;
+      const switchedToAutomatic = previousSettings?.selectiveFetch !== false
+        && message.settings.selectiveFetch === false;
+      const enabledRemovedPrices = previousSettings?.fetchRemovedGamePrices !== true
+        && message.settings.fetchRemovedGamePrices === true;
+
+      if (switchedToAutomatic) {
+        run.coordinator?.enqueue(state.rows.filter(row => row.resolutionStatus === 'pending'));
+        const resolvedMissing = state.rows.filter(row => row.appId && !row.priceData);
+        const immediate = resolvedMissing.filter(row => row.tier <= 2);
+        if (immediate.length) fetchRemotePrices(state, run, immediate, 'automatic').catch(() => {});
+        scheduleTier4Prices(state, run, resolvedMissing.filter(row => row.tier > 2));
+      } else if (enabledRemovedPrices && message.settings.selectiveFetch === false) {
+        const removedMissing = state.rows.filter(row => row.removal && row.appId && !row.priceData);
+        const immediate = removedMissing.filter(row => row.tier <= 2);
+        if (immediate.length) fetchRemotePrices(state, run, immediate, 'automatic').catch(() => {});
+        scheduleTier4Prices(state, run, removedMissing.filter(row => row.tier > 2));
       }
     }
   });

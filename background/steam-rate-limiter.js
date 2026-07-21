@@ -55,7 +55,7 @@ function normalizeState(value) {
   };
 }
 
-function retryAfterMs(response, now) {
+export function parseRetryAfterMs(response, now = Date.now()) {
   const value = response.headers?.get?.('Retry-After') ?? response.headers?.get?.('retry-after');
   if (value != null) {
     const seconds = Number(value.trim());
@@ -257,7 +257,7 @@ export function createSteamRequestScheduler({
     bumpBlockRevision(bucket);
     bucketState.consecutive429 = Math.max(bucketState.consecutive429, kindState.consecutive429);
     bucketState.exponent = Math.max(bucketState.exponent, kindState.exponent);
-    const explicitDelay = retryAfterMs(response, now());
+    const explicitDelay = parseRetryAfterMs(response, now());
     const fallback = Math.min(60000, 2000 * (2 ** (kindState.exponent - 1))) + random() * 250;
     const delay = explicitDelay ?? fallback;
     const blockedUntil = now() + Math.max(0, explicitDelay == null ? Math.min(60000, delay) : delay);

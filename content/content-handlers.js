@@ -58,17 +58,28 @@ export async function handleManualResolution(e, deps) {
 
   if (settings.apiKey) {
     try {
-      bundles = await sendMessage('GET_BUNDLES', { appIds: [appId] });
+      bundles = await sendMessage('GET_BUNDLES', {
+        appIds: [appId],
+        fetchIntent: 'manual-resolution',
+      });
     } catch {
       console.warn('[STPT] GET_BUNDLES failed during manual resolution — using empty bundles');
     }
 
     try {
-      prices = await sendMessage('GET_PRICES', { items: [{ id: appId, type }], regions: settings.regions ?? [] });
+      prices = await sendMessage('GET_PRICES', {
+        items: [{ id: appId, type }],
+        regions: settings.regions ?? [],
+        fetchIntent: 'manual-resolution',
+      });
     } catch {
       console.warn('[STPT] GET_PRICES failed during manual resolution — using empty prices');
     }
   }
+
+  const removalPromise = type === 'app'
+    ? Promise.resolve(sendMessage('GET_REMOVAL_STATUSES', { items: [{ id: appId, type }] })).catch(() => null)
+    : Promise.resolve(null);
 
   // Persist inBundle on rowData
   if (row) {
@@ -77,6 +88,16 @@ export async function handleManualResolution(e, deps) {
 
   const region = getDisplayRegion(settings);
   const priceData = readPriceRegion(prices, appId, type, region) ?? null;
+  const ggDealsNoData = Boolean(prices?._meta?.noData?.[`${type}:${appId}`]?.[region]);
+  const removalResponse = await removalPromise;
+  const currentRow = rowData.find(item => item.el === rowEl);
+  const identityStillMatches = String(currentRow?.appId ?? '') === String(appId)
+    && (currentRow?.type ?? 'app') === type;
+  const removal = identityStillMatches
+    ? removalResponse?.statuses?.[`app:${appId}`] ?? null
+    : null;
+  if (!identityStillMatches) return;
+  if (identityStillMatches && currentRow) currentRow.removal = removal;
   const gameInfo = {
     appId,
     type,
@@ -87,6 +108,8 @@ export async function handleManualResolution(e, deps) {
     settings,
     acqPrice: row?.acqPrice ?? null,
     inBundle: type === 'bundle' || row?.inBundle,
+    removal,
+    ggDealsNoData,
     resolution: { status: 'resolved', appId, type },
   };
   replaceBadge(rowEl, priceData, gameInfo);
@@ -94,7 +117,16 @@ export async function handleManualResolution(e, deps) {
 
   if (workstation) {
     const price = priceData ? _getBadgePrice(priceData, settings) : null;
-    const resolvedUpdate = { title, appId, type, price, originalTitle: row?.originalTitle, manuallyResolved: true };
+    const resolvedUpdate = {
+      title,
+      appId,
+      type,
+      price,
+      originalTitle: row?.originalTitle,
+      manuallyResolved: true,
+      removalStatus: removal?.status ?? null,
+      ggDealsNoData,
+    };
     if (priceData) {
       resolvedUpdate.currency = priceData.prices?.currency ?? settings.currency ?? 'EUR';
     }
@@ -114,12 +146,10 @@ export function handleRuntimeMessage(message, deps) {
     workstation, _getBadgePrice, setWorkstationPrice } = deps;
 
   if (message.type === 'SETTINGS_UPDATED') {
-    const oldRegion = settingsRef.current ? getDisplayRegion(settingsRef.current) : null;
     settingsRef.current = message.settings;
     settingsRef.revision = (settingsRef.revision ?? 0) + 1;
     const myRev = settingsRef.revision;
     const newRegion = getDisplayRegion(message.settings);
-    const regionChanged = oldRegion !== newRegion;
 
     rowData.forEach(row => {
       if (!row.appId) return;
@@ -129,6 +159,7 @@ export function handleRuntimeMessage(message, deps) {
           // Stale guard — newer settings update may have landed
           if (settingsRef.revision !== myRev || getDisplayRegion(settingsRef.current) !== newRegion) return true;
           const gameInfo = { ...row, settings: message.settings };
+          row.priceData = priceData;
           replaceBadge(row.el, priceData, gameInfo);
           updateSidebarRow(row.el.dataset.stptId, gameInfo);
           if (workstation) {
@@ -151,38 +182,26 @@ export function handleRuntimeMessage(message, deps) {
       function clearRowStalePrices() {
         // Stale guard — newer update may have already rendered valid state
         if (settingsRef.revision !== myRev || getDisplayRegion(settingsRef.current) !== newRegion) return;
-        row.el.querySelectorAll('.stpt-badge, .stpt-skeleton').forEach(el => el.remove());
+        row.priceData = null;
         if (workstation) {
           workstation.updateResolvedPageGame(row.el.dataset.stptId, { price: null });
         }
-        injectSkeleton(row.el, true);
+        if (row.removal) replaceBadge(row.el, null, { ...row, settings: message.settings });
+        else {
+          row.el.querySelectorAll('.stpt-badge, .stpt-skeleton').forEach(el => el.remove());
+          injectSkeleton(row.el, false);
+        }
       }
 
-      function fetchFreshPrice() {
-        return sendMessage('GET_PRICES', { items: [priceItem(row)], regions: message.settings.regions }).then(prices => {
+      sendMessage('GET_CACHED_PRICES', { items: [priceItem(row)], regions: message.settings.regions }).then(
+        prices => {
           const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
-          if (!applyPrice(priceData)) {
-            clearRowStalePrices();
-          }
-        }).catch(() => {
+          if (!applyPrice(priceData)) clearRowStalePrices();
+        },
+        () => {
           clearRowStalePrices();
-        });
-      }
-
-      if (regionChanged) {
-        fetchFreshPrice();
-      } else {
-        sendMessage('GET_CACHED_PRICES', { items: [priceItem(row)], regions: message.settings.regions }).then(
-          prices => {
-            const priceData = readPriceRegion(prices, row.appId, row.type, newRegion);
-            if (applyPrice(priceData)) return;
-            return fetchFreshPrice();
-          },
-          () => fetchFreshPrice()
-        ).catch(() => {
-          clearRowStalePrices();
-        });
-      }
+        }
+      ).catch(() => clearRowStalePrices());
     });
     return true;
   }

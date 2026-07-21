@@ -714,7 +714,11 @@ export async function initTradables(container) {
     if (appIds.length === 0) return;
 
     try {
-      const prices = await msg(refresh ? 'REFRESH_PRICES' : 'GET_PRICES', { items: appIds, regions: settings.regions });
+      const prices = await msg(refresh ? 'REFRESH_PRICES' : 'GET_PRICES', {
+        items: appIds,
+        regions: settings.regions,
+        fetchIntent: refresh ? 'manual-refresh' : 'automatic',
+      });
       if (!isCurrentInit()) return;
       priceError = prices?.error ?? null;
       if (priceError) console.warn('Some tradables prices failed:', priceError);
