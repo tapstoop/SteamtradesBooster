@@ -10,6 +10,8 @@ const PRICE_TTL = 0; // Permanent until manual refresh
 const BASE_URL = 'https://api.gg.deals/v1';
 const RATE_LIMIT_STORAGE_KEY = 'ggdeals_rate_limit_state';
 const SUB_PRICE_ORIGIN = 'ggdeals-sub-api-v1';
+const DEFAULT_NETWORK_TIMEOUT_MS = 15000;
+export const GGDEALS_NO_DATA_PREFIX = 'ggdeals-no-data:';
 
 const rateLimitState = {
   remaining: 100,
@@ -45,6 +47,19 @@ function normalizePriceType(type) {
 
 function typedResultKey(id, type = 'app') {
   return `${normalizePriceType(type)}:${String(id)}`;
+}
+
+function noDataKey(id, type, region) {
+  return `${GGDEALS_NO_DATA_PREFIX}${normalizePriceType(type)}:${String(id)}:${String(region)}`;
+}
+
+export async function clearGgDealsNoData(itemsOrIds, regions) {
+  const items = normalizePriceItems(itemsOrIds);
+  await Promise.all(items.flatMap(item => regions.map(region => cacheDelete(noDataKey(item.id, item.type, region)))));
+}
+
+async function readGgDealsNoData(item, region) {
+  return safeCacheGet(noDataKey(item.id, item.type, region));
 }
 
 function readPriceResult(results, id, type = 'app') {
@@ -130,7 +145,15 @@ function buildCurrentQuotaBlock({ kind, type, ids, region, status, message }) {
   });
 }
 
-async function fetchBatch(apiKey, ids, region, type = 'app') {
+function interactiveTimeoutError(resetAt = null) {
+  const error = new Error('GG.deals did not answer within 15 seconds. Try again after the rate-limit reset.');
+  error.code = 'GGDEALS_INTERACTIVE_TIMEOUT';
+  error.rateLimited = Number.isFinite(resetAt) && resetAt > Date.now();
+  error.resetAt = error.rateLimited ? resetAt : null;
+  return error;
+}
+
+async function fetchBatch(apiKey, ids, region, type = 'app', timeoutMs = DEFAULT_NETWORK_TIMEOUT_MS) {
   const paths = {
     app: 'prices/by-steam-app-id',
     bundle: 'prices/by-steam-bundle-id',
@@ -138,7 +161,17 @@ async function fetchBatch(apiKey, ids, region, type = 'app') {
   };
   const path = paths[normalizePriceType(type)];
   const url = `${BASE_URL}/${path}/?ids=${ids.join(',')}&key=${encodeURIComponent(apiKey)}&region=${encodeURIComponent(region)}`;
-  const resp = await fetch(url);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let resp;
+  try {
+    resp = await fetch(url, { signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') throw interactiveTimeoutError();
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const rateSnapshot = updateRateLimit(resp);
   const apiCall = buildApiCallSummary({ type, ids, region, status: resp.status });
@@ -227,6 +260,15 @@ async function processQueue() {
 
   try {
     while (queue.length > 0) {
+      const currentTime = Date.now();
+      for (let index = queue.length - 1; index >= 0; index--) {
+        const expiredJob = queue[index];
+        if (expiredJob.expiresAt && expiredJob.expiresAt <= currentTime) {
+          queue.splice(index, 1);
+          expiredJob.reject(interactiveTimeoutError(rateLimitState.resetAt));
+        }
+      }
+      if (queue.length === 0) continue;
       if (rateLimitState.remaining <= 0 && rateLimitState.resetAt > Date.now()) {
         const waitingJob = queue[0];
         if (waitingJob) {
@@ -247,18 +289,28 @@ async function processQueue() {
           });
         }
         const wait = rateLimitState.resetAt - Date.now() + 200;
-        await new Promise(r => setTimeout(r, Math.max(200, wait)));
+        const earliestExpiry = queue.reduce((earliest, queuedJob) => (
+          queuedJob.expiresAt && (!earliest || queuedJob.expiresAt < earliest)
+            ? queuedJob.expiresAt
+            : earliest
+        ), null);
+        const expiryWait = earliestExpiry ? Math.max(1, earliestExpiry - Date.now()) : Infinity;
+        await new Promise(r => setTimeout(r, Math.max(1, Math.min(wait, expiryWait))));
+        continue;
       }
 
       const job = queue.shift();
       try {
-        const data = await fetchBatch(job.apiKey, job.ids, job.region, job.type);
+        const remainingMs = job.expiresAt
+          ? Math.max(1, job.expiresAt - Date.now())
+          : DEFAULT_NETWORK_TIMEOUT_MS;
+        const data = await fetchBatch(job.apiKey, job.ids, job.region, job.type, remainingMs);
         for (const [id, priceData] of Object.entries(data)) {
           if (priceData) {
             await cacheSet(typedPriceKey(id, job.type, job.region), priceData, PRICE_TTL);
           }
         }
-        job.resolve({ region: job.region, type: job.type, data });
+        job.resolve({ region: job.region, type: job.type, ids: job.ids, data });
       } catch (err) {
         if (err.rateLimited) {
           job.onRateLimited?.({
@@ -270,6 +322,11 @@ async function processQueue() {
           });
           queue.unshift(job);
           const rawWait = (err.resetAt || Date.now() + 60000) - Date.now() + 200;
+          if (job.expiresAt && Date.now() + rawWait >= job.expiresAt) {
+            queue.shift();
+            job.reject(interactiveTimeoutError(err.resetAt ?? rateLimitState.resetAt));
+            continue;
+          }
           await new Promise(r => setTimeout(r, Math.max(200, rawWait)));
         } else {
           job.reject(err);
@@ -289,6 +346,14 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
   const subFallbackIds = new Set();
   const subFallbackCache = new Map();
   const subFallbackWarning = 'GG.deals package price could not be refreshed; showing the last official cached response';
+  const negativeCacheItems = new Set(options.negativeCacheItems ?? []);
+  const noData = {};
+
+  function markNoData(item, region, cachedAt = Date.now()) {
+    const key = typedResultKey(item.id, item.type);
+    if (!noData[key]) noData[key] = {};
+    noData[key][region] = { cachedAt };
+  }
 
   function isOfficialSubPrice(value) {
     return value?.priceOrigin === SUB_PRICE_ORIGIN && value?.prices && typeof value.prices === 'object';
@@ -327,6 +392,13 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
       if (cached && !forceRefresh) {
         writePriceResult(results, item.id, item.type, region, { ...cached.value, cachedAt: cached.cachedAt });
       } else {
+        if (!forceRefresh && negativeCacheItems.has(typedResultKey(item.id, item.type))) {
+          const negative = await readGgDealsNoData(item, region);
+          if (negative) {
+            markNoData(item, region, negative.cachedAt);
+            continue;
+          }
+        }
         missing.push(item);
         if (forceRefresh && item.type === 'sub' && cached) {
           subFallbackCache.set(fallbackKey(item.id, region), cached);
@@ -350,7 +422,16 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
       for (let i = 0; i < ids.length; i += 100) {
         const batch = ids.slice(i, i + 100);
         const promise = new Promise((resolve, reject) => {
-            queue.push({ apiKey, ids: batch, type, region, resolve, reject, onRateLimited: options.onRateLimited });
+            queue.push({
+              apiKey,
+              ids: batch,
+              type,
+              region,
+              resolve,
+              reject,
+              onRateLimited: options.onRateLimited,
+              expiresAt: options.maxWaitMs ? Date.now() + options.maxWaitMs : null,
+            });
           }).catch(error => Promise.reject({ error, region, type, ids: batch }));
         fetchPromises.push(promise);
       }
@@ -363,10 +444,18 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
   const failedBatches = settledBatchResults.filter(result => result.status === 'rejected');
   for (const result of settledBatchResults) {
     if (result.status !== 'fulfilled') continue;
-    const { region, type, data } = result.value;
+    const { region, type, ids, data } = result.value;
     for (const [id, priceData] of Object.entries(data)) {
       if (!priceData) continue;
       writePriceResult(results, id, type, region, { ...priceData, cachedAt: Date.now() });
+      await cacheDelete(noDataKey(id, type, region));
+    }
+    for (const id of ids ?? []) {
+      const typedKey = typedResultKey(id, type);
+      if (!negativeCacheItems.has(typedKey) || data?.[id]) continue;
+      const marker = { checkedAt: Date.now() };
+      await cacheSet(noDataKey(id, type, region), marker, 0);
+      markNoData({ id, type }, region, marker.checkedAt);
     }
   }
   if (failedBatches.length > 0) {
@@ -390,6 +479,7 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
     if (!onlySubsFailed) throw failedBatches[0].reason?.error ?? failedBatches[0].reason;
   }
 
+  if (Object.keys(noData).length > 0) results._meta = { ...(results._meta ?? {}), noData };
   return results;
 }
 
@@ -400,6 +490,7 @@ export async function getPrices(apiKey, itemsOrIds, regions, options = {}) {
 export async function getCachedPrices(itemsOrIds, regions) {
   const items = normalizePriceItems(itemsOrIds);
   const results = {};
+  const noData = {};
   for (const region of regions) {
     for (const item of items) {
       const cached = await safeCacheGet(typedPriceKey(item.id, item.type, region));
@@ -408,15 +499,29 @@ export async function getCachedPrices(itemsOrIds, regions) {
       } else if (cached && item.type === 'sub') {
         await cacheDelete(typedPriceKey(item.id, item.type, region));
       }
+      const negative = await readGgDealsNoData(item, region);
+      if (negative) {
+        const key = typedResultKey(item.id, item.type);
+        if (!noData[key]) noData[key] = {};
+        noData[key][region] = { cachedAt: negative.cachedAt };
+      }
     }
   }
+  if (Object.keys(noData).length > 0) results._meta = { noData };
   return results;
 }
 
-export async function getBundles(apiKey, appIds) {
+export async function getBundles(apiKey, appIds, options = {}) {
   const url = `${BASE_URL}/bundles/?ids=${appIds.join(',')}&key=${encodeURIComponent(apiKey)}`;
   try {
-    const resp = await fetch(url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_NETWORK_TIMEOUT_MS);
+    let resp;
+    try {
+      resp = await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
     updateRateLimit(resp);
     if (!resp.ok) return {};
     const json = await resp.json();

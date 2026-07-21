@@ -404,15 +404,15 @@ describe('resolveTitle', () => {
     });
   });
 
-  it('delisted game with confirmed appId exposes confirmed: true', async () => {
+  it('ignores a legacy manual-delisted flag and keeps a confirmed resolution', async () => {
     await confirmResolution('resolve:delisted test', '789', 'Delisted Test', 'app');
-    // Mark as delisted
+    // Legacy flags are no longer part of resolution semantics.
     await global.chrome.storage.local.set({ 'resolve:delisted test:delisted': { value: '1' } });
     const result = await resolveTitle('Delisted Test');
     expect(result).toMatchObject({
       appId: '789',
       type: 'app',
-      status: 'delisted',
+      status: 'hit',
       confirmed: true,
       title: 'Delisted Test',
     });

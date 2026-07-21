@@ -2,6 +2,7 @@
 // Badge injection and resolution logic
 
 import { formatPrice, formatTimestamp, formatFullTimestamp } from './ui-helpers.js';
+import { getRemovalStatusMeta } from '../utils/removal-status.js';
 
 // ── Badge injection ───────────────────────────────────────────────────
 
@@ -29,13 +30,14 @@ export function replaceBadge(el, priceData, gameInfo) {
   const badges = resolveBadges(priceData, gameInfo);
   const createdBadges = [];
 
-  for (const { type, label, priceText, isPrimary } of badges) {
+  for (const { type, label, priceText, isPrimary, title } of badges) {
     const badge = document.createElement('span');
     badge.className = 'stpt-badge';
     badge.dataset.type = type;
     badge.dataset.appid = gameInfo.appId ?? '';
     badge.dataset.itemType = gameInfo.type ?? gameInfo.resolution?.type ?? 'app';
     if (!isPrimary) badge.dataset.secondary = '1';
+    if (title) badge.title = title;
 
     if (label) {
       const labelEl = document.createElement('span');
@@ -124,6 +126,34 @@ export function resolveBadges(priceData, gameInfo) {
   if (gameInfo.tier === 2) labels.push('TRADE');
   if (gameInfo.inBundle) labels.push('BUNDLE');
 
+  const removalMeta = getRemovalStatusMeta(gameInfo.removal?.status);
+
+  if (removalMeta && !gameInfo.fuzzy) {
+    badges.push({
+      type: removalMeta.styleKey,
+      label: removalMeta.label,
+      priceText: priceFormatted,
+      isPrimary: true,
+      title: `Steam status: ${removalMeta.categoryName} (steam-tracker.com)`,
+    });
+    if (isDeal) {
+      badges.push({ type: 'DEAL', label: 'DEAL', priceText: `${priceFormatted} · ATL`, isPrimary: false });
+    }
+    for (const label of labels) {
+      badges.push({ type: label, label, priceText: priceFormatted, isPrimary: false });
+    }
+    if (gameInfo.ggDealsNoData) {
+      badges.push({
+        type: 'no-ggdeals-data',
+        label: 'NO GG.DEALS DATA',
+        priceText: '',
+        isPrimary: false,
+        title: 'GG.deals returned no data for this Steam AppID.',
+      });
+    }
+    return badges;
+  }
+
   // Build badges array with proper priority
   if (isDeal) {
     // DEAL is always primary when present
@@ -160,8 +190,7 @@ export function resolveBadgeType(priceData, gameInfo) {
 }
 
 export function injectQuestionBadge(el, candidates, cacheKey) {
-  const existing = el.querySelector('.stpt-skeleton, .stpt-badge');
-  if (existing) existing.remove();
+  el.querySelectorAll('.stpt-skeleton, .stpt-badge').forEach(existing => existing.remove());
 
   const badge = document.createElement('span');
   badge.className = 'stpt-badge';
@@ -186,8 +215,7 @@ export function injectQuestionBadge(el, candidates, cacheKey) {
 }
 
 export function injectFuzzyBadge(el, resolution) {
-  const existing = el.querySelector('.stpt-skeleton, .stpt-badge');
-  if (existing) existing.remove();
+  el.querySelectorAll('.stpt-skeleton, .stpt-badge').forEach(existing => existing.remove());
 
   const badge = document.createElement('span');
   badge.className = 'stpt-badge';
@@ -214,8 +242,7 @@ export function injectFuzzyBadge(el, resolution) {
 }
 
 export function injectNotFoundBadge(el, cacheKey, title) {
-  const existing = el.querySelector('.stpt-skeleton, .stpt-badge');
-  if (existing) existing.remove();
+  el.querySelectorAll('.stpt-skeleton, .stpt-badge').forEach(existing => existing.remove());
 
   const badge = document.createElement('span');
   badge.className = 'stpt-badge';
@@ -235,8 +262,7 @@ export function injectNotFoundBadge(el, cacheKey, title) {
 }
 
 export function injectDismissedBadge(el, cacheKey, title) {
-  const existing = el.querySelector('.stpt-skeleton, .stpt-badge');
-  if (existing) existing.remove();
+  el.querySelectorAll('.stpt-skeleton, .stpt-badge').forEach(existing => existing.remove());
 
   const badge = document.createElement('span');
   badge.className = 'stpt-badge stpt-badge-dismissed';
@@ -257,56 +283,6 @@ export function injectDismissedBadge(el, cacheKey, title) {
     badge.remove();
     injectSkeleton(el, true);
     el.dispatchEvent(new CustomEvent('stpt-recheck', { bubbles: true, detail: { title, cacheKey } }));
-  });
-
-  el.appendChild(badge);
-}
-
-export function injectDelistedBadge(el, cacheKey, title, priceData = null, gameInfo = null) {
-  const existing = el.querySelector('.stpt-skeleton, .stpt-badge');
-  if (existing) existing.remove();
-
-  const badge = document.createElement('span');
-  badge.className = 'stpt-badge';
-  badge.dataset.type = 'delisted';
-  badge.dataset.appid = gameInfo?.appId ?? '';
-  badge.dataset.itemType = gameInfo?.type ?? gameInfo?.resolution?.type ?? 'app';
-  badge.style.cursor = 'pointer';
-
-  const labelEl = document.createElement('span');
-  labelEl.className = 'stpt-badge-label';
-  labelEl.textContent = 'DELISTED';
-  badge.appendChild(labelEl);
-
-  // Show price if available
-  if (priceData && gameInfo) {
-    const prices = priceData.prices ?? {};
-    const keyshopsEnabled = gameInfo.settings?.keyshopsEnabled;
-    let bestCurrent = prices.currentRetail;
-    if (keyshopsEnabled && prices.currentKeyshops != null) {
-      if (bestCurrent == null || prices.currentKeyshops < bestCurrent) {
-        bestCurrent = prices.currentKeyshops;
-      }
-    }
-    const currency = prices.currency ?? 'EUR';
-    const priceEl = document.createElement('span');
-    priceEl.className = 'stpt-badge-price';
-    priceEl.textContent = formatPrice(bestCurrent, currency);
-    badge.appendChild(priceEl);
-  }
-
-  badge.addEventListener('click', async e => {
-    e.stopPropagation();
-    if (priceData && gameInfo?.appId) {
-      const { openPopover } = await import('./ui-pickers.js');
-      openPopover(badge, priceData, { ...gameInfo, cacheKey, resolution: { status: 'delisted' } });
-    } else {
-      const { sendMessage } = await import('./ui-helpers.js');
-      await sendMessage('SET_UNDELISTED', { cacheKey });
-      badge.remove();
-      injectSkeleton(el, true);
-      el.dispatchEvent(new CustomEvent('stpt-recheck', { bubbles: true, detail: { title, cacheKey } }));
-    }
   });
 
   el.appendChild(badge);

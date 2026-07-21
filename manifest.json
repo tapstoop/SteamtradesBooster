@@ -3,13 +3,17 @@
   "name": "SteamTrades Booster",
   "version": "0.1.5",
   "description": "Enhance steamtrades.com with new UI features and price tracking",
-  "permissions": ["storage", "alarms", "unlimitedStorage"],
+  "permissions": ["storage", "alarms"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  },
   "host_permissions": [
     "https://www.steamtrades.com/*",
     "https://steamtrades.com/*",
     "https://store.steampowered.com/*",
     "https://api.steampowered.com/*",
     "https://steamcommunity.com/*",
+    "https://steam-tracker.com/*",
     "https://gg.deals/*",
     "https://api.gg.deals/*"
   ],

@@ -146,6 +146,58 @@ describe('handleManualResolution', () => {
     expect(workstation.updateGamePrices).toHaveBeenCalled();
   });
 
+  it('applies a cached removal fact after manual app resolution', async () => {
+    const el = makeRowEl({ stptId: 'removed-1', stptTitle: 'Removed Game' });
+    const entry = { el, appId: null, type: 'app', title: 'Removed Game', tier: 2 };
+    rowData.push(entry);
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: null, regions: ['us'] })
+      .mockResolvedValueOnce({
+        statuses: {
+          'app:321': { status: 'removed_banned', categoryId: 20 },
+        },
+      });
+
+    await handleManualResolution(
+      makeEvent(el, { appId: '321', title: 'Removed Game', type: 'app' }),
+      makeDeps()
+    );
+
+    expect(sendMessage).toHaveBeenNthCalledWith(2, 'GET_REMOVAL_STATUSES', {
+      items: [{ id: '321', type: 'app' }],
+    });
+    expect(entry.removal).toEqual({ status: 'removed_banned', categoryId: 20 });
+    expect(replaceBadge).toHaveBeenCalledWith(el, null, expect.objectContaining({
+      removal: { status: 'removed_banned', categoryId: 20 },
+    }));
+    expect(workstation.updateResolvedPageGame).toHaveBeenNthCalledWith(2, 'removed-1', expect.objectContaining({
+      removalStatus: 'removed_banned',
+    }));
+  });
+
+  it('discards a late removal lookup after the row identity changes', async () => {
+    const el = makeRowEl({ stptId: 'removed-race', stptTitle: 'First Game' });
+    const entry = { el, appId: null, type: 'app', title: 'First Game', tier: 4 };
+    rowData.push(entry);
+    let releaseRemoval;
+    sendMessage
+      .mockResolvedValueOnce({ apiKey: null, regions: ['us'] })
+      .mockImplementationOnce(() => new Promise(resolve => { releaseRemoval = resolve; }));
+
+    const pending = handleManualResolution(
+      makeEvent(el, { appId: '111', title: 'First Game', type: 'app' }),
+      makeDeps()
+    );
+    while (!releaseRemoval) await Promise.resolve();
+    entry.appId = '222';
+    releaseRemoval({ statuses: { 'app:111': { status: 'removed_delisted', categoryId: 1 } } });
+    await pending;
+
+    expect(entry.removal).toBeNull();
+    expect(replaceBadge).not.toHaveBeenCalled();
+    expect(workstation.updateResolvedPageGame).toHaveBeenCalledTimes(1);
+  });
+
   it('missing API currency but settings.currency is provided: uses settings.currency', async () => {
     const el = makeRowEl({ stptId: '10', stptTitle: 'Curr A' });
     const entry = { el, appId: null, type: 'app', title: 'Curr A', cacheKey: null, fuzzy: true, tier: 4 };
@@ -937,7 +989,7 @@ describe('handleRuntimeMessage', () => {
     expect(workstation.updateGamePrices).not.toHaveBeenCalled();
   });
 
-  it('SETTINGS_UPDATED with region change fetches fresh prices and rerenders on success', async () => {
+  it('SETTINGS_UPDATED with region change reads cached prices and rerenders on success', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = '2';
     document.body.appendChild(el);
@@ -959,7 +1011,7 @@ describe('handleRuntimeMessage', () => {
     }, makeDeps());
 
     expect(handled).toBe(true);
-    expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.objectContaining({
+    expect(sendMessage).toHaveBeenCalledWith('GET_CACHED_PRICES', expect.objectContaining({
       regions: ['us'],
     }));
 
@@ -970,7 +1022,7 @@ describe('handleRuntimeMessage', () => {
     });
   });
 
-  it('SETTINGS_UPDATED with region change injects skeleton on GET_PRICES rejection', async () => {
+  it('SETTINGS_UPDATED with region change injects an idle skeleton on cache rejection', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = '2b';
     document.body.appendChild(el);
@@ -990,13 +1042,13 @@ describe('handleRuntimeMessage', () => {
     }, makeDeps());
 
     expect(handled).toBe(true);
-    expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.objectContaining({
+    expect(sendMessage).toHaveBeenCalledWith('GET_CACHED_PRICES', expect.objectContaining({
       regions: ['us'],
     }));
 
     // Settle the rejected promise — must not emit unhandled rejection
     await vi.waitFor(() => {
-      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+      expect(injectSkeleton).toHaveBeenCalledWith(el, false);
     });
   });
 
@@ -1033,7 +1085,7 @@ describe('handleRuntimeMessage', () => {
     });
   });
 
-  it('SETTINGS_UPDATED with unchanged region falls back to fresh prices when cache lookup rejects', async () => {
+  it('SETTINGS_UPDATED never falls back to the network when cache lookup rejects', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = '4';
     document.body.appendChild(el);
@@ -1045,11 +1097,7 @@ describe('handleRuntimeMessage', () => {
 
     getDisplayRegion.mockImplementation(() => 'us');
 
-    const freshData = makePriceData(549, 'EUR');
-    sendMessage
-      .mockRejectedValueOnce(new Error('cache unavailable'))
-      .mockResolvedValueOnce({ 'app:202': { us: freshData } });
-    readPriceRegion.mockReturnValueOnce(freshData);
+    sendMessage.mockRejectedValueOnce(new Error('cache unavailable'));
 
     handleRuntimeMessage({
       type: 'SETTINGS_UPDATED',
@@ -1057,12 +1105,10 @@ describe('handleRuntimeMessage', () => {
     }, makeDeps());
 
     await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.any(Object));
-      expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('4', expect.objectContaining({
-        price: 549,
-      }));
+      expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('4', { price: null });
     });
-    expect(injectSkeleton).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
   });
 
   it('SETTINGS_UPDATED with changed region updates workstation state after fresh pricing', async () => {
@@ -1145,7 +1191,7 @@ describe('handleRuntimeMessage', () => {
     expect(workstation.updateGamePrices).not.toHaveBeenCalled();
   });
 
-  it('SETTINGS_UPDATED unchanged region cache miss falls back to GET_PRICES', async () => {
+  it('SETTINGS_UPDATED cache miss stays cache-only', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = 'r3';
     document.body.appendChild(el);
@@ -1156,17 +1202,8 @@ describe('handleRuntimeMessage', () => {
     settingsRef.current = { apiKey: 'key', regions: ['us'], currency: 'EUR' };
     getDisplayRegion.mockImplementation(() => 'us');
 
-    // First call: GET_CACHED_PRICES returns empty (cache miss)
-    // Second call: GET_PRICES returns real data
-    const cachedPrices = {};
-    const freshPrices = { 'app:501': { us: makePriceData(799, 'EUR') } };
-    sendMessage
-      .mockResolvedValueOnce(cachedPrices)
-      .mockResolvedValueOnce(freshPrices);
-
-    readPriceRegion
-      .mockReturnValueOnce(null)        // cache miss
-      .mockReturnValueOnce(makePriceData(799, 'EUR')); // fresh hit
+    sendMessage.mockResolvedValueOnce({});
+    readPriceRegion.mockReturnValueOnce(null);
 
     handleRuntimeMessage({
       type: 'SETTINGS_UPDATED',
@@ -1175,14 +1212,13 @@ describe('handleRuntimeMessage', () => {
 
     await vi.waitFor(() => {
       expect(sendMessage).toHaveBeenCalledWith('GET_CACHED_PRICES', expect.any(Object));
-      expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.any(Object));
-      expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('r3', expect.objectContaining({
-        price: 799,
-      }));
+      expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('r3', { price: null });
     });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(injectSkeleton).toHaveBeenCalledWith(el, false);
   });
 
-  it('SETTINGS_UPDATED unchanged region cache miss GET_PRICES fallback fails: skeleton', async () => {
+  it('SETTINGS_UPDATED cache miss renders an idle skeleton without a fallback request', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = 'r4';
     document.body.appendChild(el);
@@ -1207,11 +1243,12 @@ describe('handleRuntimeMessage', () => {
     }, makeDeps());
 
     await vi.waitFor(() => {
-      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+      expect(injectSkeleton).toHaveBeenCalledWith(el, false);
     });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('SETTINGS_UPDATED cache rejection and fresh-price rejection injects skeleton', async () => {
+  it('SETTINGS_UPDATED cache rejection does not attempt a fresh-price request', async () => {
     const el = document.createElement('span');
     el.dataset.stptId = 'r5';
     document.body.appendChild(el);
@@ -1230,9 +1267,9 @@ describe('handleRuntimeMessage', () => {
     }, makeDeps());
 
     await vi.waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith('GET_PRICES', expect.any(Object));
-      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+      expect(injectSkeleton).toHaveBeenCalledWith(el, false);
     });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it('SETTINGS_UPDATED fresh-price rejection removes stale badges and clears workstation', async () => {
@@ -1263,7 +1300,7 @@ describe('handleRuntimeMessage', () => {
 
     await vi.waitFor(() => {
       expect(el.querySelectorAll('.stpt-badge, .stpt-skeleton')).toHaveLength(0);
-      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+      expect(injectSkeleton).toHaveBeenCalledWith(el, false);
       expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('s1', { price: null });
     });
     expect(workstation.updateGamePrices).not.toHaveBeenCalled();
@@ -1291,7 +1328,7 @@ describe('handleRuntimeMessage', () => {
 
     await vi.waitFor(() => {
       expect(el.querySelector('.stpt-badge')).toBeNull();
-      expect(injectSkeleton).toHaveBeenCalledWith(el, true);
+      expect(injectSkeleton).toHaveBeenCalledWith(el, false);
       expect(workstation.updateResolvedPageGame).toHaveBeenCalledWith('s2', { price: null });
     });
     expect(workstation.updateGamePrices).not.toHaveBeenCalled();

@@ -52,6 +52,7 @@ const popupHtml = `<!DOCTYPE html>
   <link rel="stylesheet" href="tradables.css">
 </head>
 <body>
+  <div id="steam-tracker-alert-slot"></div>
   <div id="tabs">
     <button class="tab active" data-tab="deals">Wishlist</button>
     <button class="tab" data-tab="tradablesDetailed">Tradables detailed</button>

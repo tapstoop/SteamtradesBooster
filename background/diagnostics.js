@@ -15,7 +15,6 @@ export const DEFAULT_RESOLUTION_STATS = {
   ambiguous: 0,
   'not-found': 0,
   dismissed: 0,
-  delisted: 0,
 };
 
 const DEFAULT_DIAGNOSTICS = {
@@ -31,6 +30,20 @@ const DEFAULT_DIAGNOSTICS = {
   lastApiCalls: [],
   recent429Errors: [],
   quotaBlocks: [],
+  steamTracker: {
+    fetchedAt: null,
+    itemCount: 0,
+    unknownCategoryCount: 0,
+    categoryCounts: {},
+    revision: null,
+    lastStatus: 'not-loaded',
+    nextAllowedAt: null,
+    failureCount: 0,
+    lastFailureAt: null,
+    securityLocked: false,
+    securityReason: null,
+    updatedAt: null,
+  },
   updatedAt: null,
 };
 
@@ -66,6 +79,7 @@ function cloneDefaultDiagnostics() {
     ...DEFAULT_DIAGNOSTICS,
     resolutionStats: { ...DEFAULT_RESOLUTION_STATS },
     rateLimit: { ...DEFAULT_DIAGNOSTICS.rateLimit },
+    steamTracker: { ...DEFAULT_DIAGNOSTICS.steamTracker, categoryCounts: {} },
     lastApiCalls: [],
     recent429Errors: [],
     quotaBlocks: [],
@@ -79,6 +93,11 @@ function mergeDiagnostics(raw = {}) {
     ...raw,
     resolutionStats: { ...DEFAULT_RESOLUTION_STATS, ...(raw.resolutionStats ?? {}) },
     rateLimit: { ...DEFAULT_DIAGNOSTICS.rateLimit, ...(raw.rateLimit ?? {}) },
+    steamTracker: {
+      ...DEFAULT_DIAGNOSTICS.steamTracker,
+      ...(raw.steamTracker ?? {}),
+      categoryCounts: { ...(raw.steamTracker?.categoryCounts ?? {}) },
+    },
     lastApiCalls: raw.lastApiCalls ?? raw.rateLimit?.lastCalls ?? [],
     recent429Errors: raw.recent429Errors ?? raw.rateLimit?.recent429s ?? [],
     quotaBlocks: raw.quotaBlocks ?? [],
@@ -309,7 +328,7 @@ function retentionLabel() {
 }
 
 function formatStats(stats = {}) {
-  return `total=${stats.total ?? 0} hit=${stats.hit ?? 0} resolved=${stats.resolved ?? 0} fuzzy=${stats.fuzzy ?? 0} ambiguous=${stats.ambiguous ?? 0} not-found=${stats['not-found'] ?? 0} dismissed=${stats.dismissed ?? 0} delisted=${stats.delisted ?? 0}`;
+  return `total=${stats.total ?? 0} hit=${stats.hit ?? 0} resolved=${stats.resolved ?? 0} fuzzy=${stats.fuzzy ?? 0} ambiguous=${stats.ambiguous ?? 0} not-found=${stats['not-found'] ?? 0} dismissed=${stats.dismissed ?? 0}`;
 }
 
 function formatApiCall(call) {
@@ -346,6 +365,7 @@ export function buildDiagnosticLog({
   const rateErrors = merged.recent429Errors ?? [];
   const quotaBlocks = merged.quotaBlocks ?? [];
   const rate = merged.rateLimit ?? {};
+  const tracker = merged.steamTracker ?? {};
 
   return [
     `SteamTrades Booster v${manifestVersion}`,
@@ -371,5 +391,9 @@ export function buildDiagnosticLog({
     '',
     'Recent quota blocks:',
     ...(quotaBlocks.length ? quotaBlocks.map(formatQuotaBlock) : ['none']),
+    '',
+    'Steam Tracker:',
+    `status=${tracker.lastStatus ?? 'n/a'} fetched=${formatDiagnosticDate(tracker.fetchedAt)} items=${tracker.itemCount ?? 0} unknownCategories=${tracker.unknownCategoryCount ?? 0} failures=${tracker.failureCount ?? 0} lastFailure=${formatDiagnosticDate(tracker.lastFailureAt)} nextAllowedAt=${formatDiagnosticDate(tracker.nextAllowedAt)} securityLocked=${tracker.securityLocked === true} securityReason=${tracker.securityReason ?? 'none'}`,
+    `removed_delisted=${tracker.categoryCounts?.removed_delisted ?? 0} removed_banned=${tracker.categoryCounts?.removed_banned ?? 0} removed_disabled=${tracker.categoryCounts?.removed_disabled ?? 0}`,
   ].join('\n');
 }

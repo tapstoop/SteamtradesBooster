@@ -3,6 +3,7 @@ import { initSettings } from './settings.js';
 import { initDeals } from './deals.js';
 import { initTradablesDetailed } from './tradables-detailed.js';
 import { initTradables } from './tradables.js';
+import { initSteamTrackerAlert } from './security-alert.js';
 
 // Tab state tracking
 const tabInitStatus = { deals: false, tradablesDetailed: false, tradables: false, settings: false };
@@ -17,22 +18,23 @@ function renderTabError(tabContent, error) {
   tabContent.append(state);
 }
 
-function runTabInit(tabName, tabContent) {
+function runTabInit(tabName, tabContent, options = {}) {
   try {
     let initPromise;
     if (tabName === 'deals') initPromise = initDeals(tabContent);
     else if (tabName === 'tradablesDetailed') initPromise = initTradablesDetailed(tabContent);
     else if (tabName === 'tradables') initPromise = initTradables(tabContent);
-    else if (tabName === 'settings') initPromise = initSettings(tabContent);
+    else if (tabName === 'settings') initPromise = initSettings(tabContent, options);
     if (initPromise?.catch) {
       initPromise.catch(error => renderTabError(tabContent, error));
     }
+    return initPromise;
   } catch (error) {
     renderTabError(tabContent, error);
   }
 }
 
-function activateTab(tabName) {
+function activateTab(tabName, options = {}) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   const tabBtn = document.querySelector(`.tab[data-tab="${tabName}"]`);
@@ -46,8 +48,12 @@ function activateTab(tabName) {
     tabInitStatus[tabName] = true;
   }
   // Always re-init the tab content so it re-binds listeners and refreshes data
-  runTabInit(tabName, tabContent);
+  return runTabInit(tabName, tabContent, options);
 }
+
+initSteamTrackerAlert(document.getElementById('steam-tracker-alert-slot'), {
+  onGenerateLog: () => activateTab('settings', { generateDiagnostics: true }),
+});
 
 // Bind tab clicks with stopPropagation to prevent popup close on blur
 document.querySelectorAll('.tab').forEach(tab => {

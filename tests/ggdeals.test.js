@@ -16,7 +16,8 @@ global.chrome = {
 global.fetch = vi.fn();
 
 const { DIAGNOSTICS_KEY } = await import('../background/diagnostics.js');
-const { getPrices, getCachedPrices, getPriceCacheKeys, getPriceResult, isRefreshFallbackPrice } = await import('../background/ggdeals.js');
+const { getPrices, getCachedPrices, getPriceCacheKeys, getPriceResult, isRefreshFallbackPrice,
+  clearGgDealsNoData, GGDEALS_NO_DATA_PREFIX } = await import('../background/ggdeals.js');
 
 function apiResponse(data, headers = {}) {
   return {
@@ -35,6 +36,37 @@ beforeEach(() => {
 });
 
 describe('gg.deals typed prices', () => {
+  it('permanently caches a successful no-data response only for eligible removed apps', async () => {
+    fetch.mockResolvedValueOnce(apiResponse({}));
+
+    const first = await getPrices('key', [{ id: '970620', type: 'app' }], ['eu'], {
+      negativeCacheItems: ['app:970620'],
+    });
+    expect(first._meta.noData['app:970620'].eu).toBeTruthy();
+    expect(store[`${GGDEALS_NO_DATA_PREFIX}app:970620:eu`]).toBeTruthy();
+
+    const second = await getPrices('key', [{ id: '970620', type: 'app' }], ['eu'], {
+      negativeCacheItems: ['app:970620'],
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(second._meta.noData['app:970620'].eu).toBeTruthy();
+
+    await clearGgDealsNoData([{ id: '970620', type: 'app' }], ['eu']);
+    expect(store[`${GGDEALS_NO_DATA_PREFIX}app:970620:eu`]).toBeUndefined();
+  });
+
+  it('does not negative-cache an omitted ordinary app or a failed request', async () => {
+    fetch.mockResolvedValueOnce(apiResponse({}));
+    await getPrices('key', [{ id: '10', type: 'app' }], ['eu']);
+    expect(store[`${GGDEALS_NO_DATA_PREFIX}app:10:eu`]).toBeUndefined();
+
+    fetch.mockRejectedValueOnce(new Error('offline'));
+    await expect(getPrices('key', [{ id: '20', type: 'app' }], ['eu'], {
+      negativeCacheItems: ['app:20'],
+    })).rejects.toThrow('offline');
+    expect(store[`${GGDEALS_NO_DATA_PREFIX}app:20:eu`]).toBeUndefined();
+  });
+
   it('routes app and bundle IDs to separate endpoints and cache keys', async () => {
     fetch
       .mockResolvedValueOnce(apiResponse({
@@ -284,5 +316,17 @@ describe('gg.deals typed prices', () => {
     expect(store.ggdeals_rate_limit_state.remaining).toBe(75);
     expect(store.ggdeals_rate_limit_state.limit).toBe(100);
     expect(store.ggdeals_rate_limit_state.lastUpdatedAt).toBeGreaterThan(0);
+  });
+
+  it('expires an interactive queue job instead of leaving the caller loading forever', async () => {
+    fetch.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+        reject(new DOMException('aborted', 'AbortError'));
+      }, { once: true });
+    }));
+
+    await expect(getPrices('key', [{ id: '999', type: 'app' }], ['eu'], {
+      maxWaitMs: 20,
+    })).rejects.toMatchObject({ code: 'GGDEALS_INTERACTIVE_TIMEOUT' });
   });
 });

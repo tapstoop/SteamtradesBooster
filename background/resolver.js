@@ -1,5 +1,5 @@
 // background/resolver.js
-import { safeCacheGet, cacheSet, cacheDelete, isDismissed, isDelisted } from './cache.js';
+import { safeCacheGet, cacheSet, cacheDelete, isDismissed } from './cache.js';
 import { normalizeTitle, wordSimilarity, normalizeSteamType } from '../utils/similarity.js';
 import { searchSteamStoreTerm } from './steam-search.js';
 import { upsertResolutionSearchEntry } from './resolution-search-index.js';
@@ -92,21 +92,6 @@ export async function resolveTitle(title, options = {}) {
     // Check if user dismissed this title
     if (await isDismissed(key)) {
       return { status: 'dismissed', cacheKey: key };
-    }
-
-    // Check if user marked this as delisted
-    if (await isDelisted(key)) {
-      // Check if there's a confirmed appId or cached resolution for price display
-      const confirmed = await safeCacheGet(`${key}:confirmed`);
-      if (confirmed?.value) {
-        const confirmedTitle = await safeCacheGet(`${key}:confirmed:title`);
-        return resultFromCache(confirmed.value, 'delisted', key, { title: confirmedTitle?.value, confirmed: true });
-      }
-      const cached = await safeCacheGet(key);
-      if (cached?.value) {
-        return resultFromCache(cached.value, 'delisted', key);
-      }
-      return { status: 'delisted', cacheKey: key };
     }
 
     // Check confirmed user choice

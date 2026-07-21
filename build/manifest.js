@@ -51,6 +51,7 @@ export function createPackagedManifest(manifest, { target, includeIcons }) {
     description: manifest.description,
     permissions: manifest.permissions,
     host_permissions: manifest.host_permissions,
+    content_security_policy: manifest.content_security_policy,
     background: createBackground(target),
     content_scripts: manifest.content_scripts,
     action

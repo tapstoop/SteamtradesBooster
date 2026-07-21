@@ -120,6 +120,22 @@ describe('build manifest helpers', () => {
     }
   });
 
+  it('preserves Steam Tracker access in both packaged manifests', () => {
+    expect(repoManifest.host_permissions).toContain('https://steam-tracker.com/*');
+    expect(repoManifest.permissions).not.toContain('unlimitedStorage');
+    expect(repoManifest.content_security_policy.extension_pages).toBe("script-src 'self'; object-src 'none'");
+
+    for (const target of ['chrome', 'firefox']) {
+      const output = createPackagedManifest(repoManifest, {
+        target,
+        includeIcons: true
+      });
+      expect(output.host_permissions).toContain('https://steam-tracker.com/*');
+      expect(output.permissions).not.toContain('unlimitedStorage');
+      expect(output.content_security_policy).toEqual(repoManifest.content_security_policy);
+    }
+  });
+
   it('omits both icons and action.default_icon when the package has no icon directory', () => {
     const manifestWithIcons = {
       ...baseManifest,

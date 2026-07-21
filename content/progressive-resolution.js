@@ -52,7 +52,7 @@ export class ProgressiveResolutionCoordinator {
     if (!key) return;
     let group = this.groups.get(key);
     if (!group) {
-      group = { key, title: this._titleFor(row), rows: [], state: 'pending' };
+      group = { key, title: this._titleFor(row), rows: [], state: 'pending', revision: 0 };
       this.groups.set(key, group);
     }
     group.rows.push(row);
@@ -66,6 +66,21 @@ export class ProgressiveResolutionCoordinator {
       group.state = 'resolved';
       row.resolutionStatus = 'resolved';
     }
+  }
+
+  invalidate(rows) {
+    const invalidatedKeys = new Set();
+    for (const row of rows ?? []) {
+      const key = this._keyFor(row);
+      const group = this.groups.get(key);
+      if (!group || invalidatedKeys.has(key)) continue;
+      invalidatedKeys.add(key);
+      group.revision++;
+      group.state = 'pending';
+      group.rows.forEach(item => { item.resolutionStatus = 'pending'; });
+      this.queuedKeys.delete(key);
+    }
+    if (invalidatedKeys.size) this.queue = this.queue.filter(key => !invalidatedKeys.has(key));
   }
 
   enqueue(rows, { priority = false } = {}) {
@@ -119,8 +134,10 @@ export class ProgressiveResolutionCoordinator {
   }
 
   async _runBatch(keys, batchId) {
-    const groups = keys.map(key => this.groups.get(key)).filter(Boolean);
-    groups.forEach(group => {
+    const entries = keys.map(key => this.groups.get(key)).filter(Boolean)
+      .map(group => ({ group, revision: group.revision }));
+    const groups = entries.map(entry => entry.group);
+    entries.forEach(({ group }) => {
       group.state = 'resolving';
       group.rows.forEach(row => { row.resolutionStatus = 'resolving'; });
     });
@@ -139,7 +156,8 @@ export class ProgressiveResolutionCoordinator {
 
     const applied = [];
     for (let index = 0; index < groups.length; index++) {
-      const group = groups[index];
+      const { group, revision } = entries[index];
+      if (group.revision !== revision) continue;
       const resolution = Array.isArray(results) && results[index]
         ? results[index]
         : { status: 'not-found', failed: true };

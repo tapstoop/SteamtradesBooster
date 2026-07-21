@@ -180,7 +180,7 @@ describe('bundle title resolution contract', () => {
 });
 
 describe('cached resolution state contract', () => {
-  it('returns input-aligned dismissed, delisted, confirmed, and unresolved states', async () => {
+  it('returns input-aligned dismissed, legacy-flagged, confirmed, and unresolved states', async () => {
     storageStore['resolve:dismissed:dismissed'] = { value: '1' };
     storageStore['resolve:delisted'] = { value: { appId: '22', type: 'bundle' } };
     storageStore['resolve:delisted:delisted'] = { value: '1' };
@@ -194,10 +194,48 @@ describe('cached resolution state contract', () => {
 
     expect(result).toEqual([
       { status: 'dismissed', cacheKey: 'resolve:dismissed' },
-      { appId: '22', type: 'bundle', status: 'delisted', cacheKey: 'resolve:delisted' },
+      { appId: '22', type: 'bundle', status: 'hit', cacheKey: 'resolve:delisted' },
       { appId: '33', type: 'sub', status: 'hit', cacheKey: 'resolve:confirmed', confirmed: true, title: 'Confirmed Steam Title' },
       null,
     ]);
+  });
+
+  it('returns cached removal facts only for typed Steam apps', async () => {
+    const {
+      steamTrackerClient,
+      STEAM_TRACKER_CACHE_KEY,
+      STEAM_TRACKER_SCHEMA_VERSION,
+    } = await import('../background/steam-tracker.js');
+    await steamTrackerClient.reset();
+    storageStore[STEAM_TRACKER_CACHE_KEY] = {
+      schemaVersion: STEAM_TRACKER_SCHEMA_VERSION,
+      fetchedAt: Date.now(),
+      revision: 'tracker-test',
+      byId: { 22: { categoryId: 20, name: 'Banned Game' } },
+      byTitle: { 'banned game': ['22'] },
+      itemCount: 1,
+      categoryCounts: { removed_banned: 1 },
+      unknownCategoryCount: 0,
+    };
+
+    const result = await handleMessage({
+      type: 'GET_REMOVAL_STATUSES',
+      items: [
+        { id: '22', type: 'app' },
+        { id: '22', type: 'bundle' },
+        { id: '33', type: 'app' },
+      ],
+    });
+
+    expect(result).toMatchObject({
+      revision: 'tracker-test',
+      hasCache: true,
+      stale: false,
+      statuses: {
+        'app:22': expect.objectContaining({ status: 'removed_banned', categoryId: 20 }),
+      },
+    });
+    expect(Object.keys(result.statuses)).toEqual(['app:22']);
   });
 
   it('aggregates a resolution session by page-row multiplicity without replay double counts', async () => {
@@ -845,6 +883,98 @@ describe('settings and cache safety', () => {
 });
 
 describe('GG.deals rate-limit broadcasts', () => {
+  it('blocks automatic GG.deals requests while selective mode is active', async () => {
+    storageStore.settings = {
+      value: {
+        apiKey: 'KEY',
+        regions: ['eu'],
+        selectiveFetch: true,
+        fetchRemovedGamePrices: true,
+      },
+      cachedAt: Date.now(),
+      expiresAt: 0,
+    };
+
+    const result = await handleMessage({
+      type: 'GET_PRICES',
+      fetchIntent: 'automatic',
+      items: [
+        { id: '261570', type: 'app' },
+        { id: '970620', type: 'app' },
+      ],
+      regions: ['eu'],
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(result._meta.skipped).toEqual([
+      { id: '261570', type: 'app', reason: 'selective-mode' },
+      { id: '970620', type: 'app', reason: 'selective-mode' },
+    ]);
+  });
+
+  it('does not enqueue removed apps when removed-game fetching is disabled', async () => {
+    const { steamTrackerClient, STEAM_TRACKER_CACHE_KEY } = await import('../background/steam-tracker.js');
+    await steamTrackerClient.reset();
+    storageStore[STEAM_TRACKER_CACHE_KEY] = {
+      schemaVersion: 3,
+      fetchedAt: Date.now(),
+      revision: 'removed',
+      byId: { 970620: { categoryId: 3, name: 'Castle Rencounter' } },
+      byTitle: { 'castle rencounter': ['970620'] },
+    };
+    storageStore.settings = {
+      value: { apiKey: 'KEY', regions: ['eu'], selectiveFetch: false, fetchRemovedGamePrices: false },
+      cachedAt: Date.now(),
+      expiresAt: 0,
+    };
+
+    const result = await handleMessage({
+      type: 'GET_PRICES',
+      items: [{ id: '970620', type: 'app' }],
+      regions: ['eu'],
+    });
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(result._meta.skipped[0]).toMatchObject({
+      id: '970620', reason: 'removed-fetch-disabled',
+    });
+  });
+
+  it('allows an explicitly selected removed app even when automatic removed fetching is disabled', async () => {
+    const { steamTrackerClient, STEAM_TRACKER_CACHE_KEY } = await import('../background/steam-tracker.js');
+    await steamTrackerClient.reset();
+    storageStore[STEAM_TRACKER_CACHE_KEY] = {
+      schemaVersion: 3,
+      fetchedAt: Date.now(),
+      revision: 'removed-manual',
+      byId: { 970620: { categoryId: 3, name: 'Castle Rencounter' } },
+      byTitle: { 'castle rencounter': ['970620'] },
+    };
+    storageStore.settings = {
+      value: { apiKey: 'KEY', regions: ['eu'], selectiveFetch: true, fetchRemovedGamePrices: false },
+      cachedAt: Date.now(),
+      expiresAt: 0,
+    };
+    global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: {} }), {
+      status: 200,
+      headers: {
+        'x-ratelimit-limit': '100',
+        'x-ratelimit-remaining': '99',
+        'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 60),
+      },
+    }));
+
+    await handleMessage({
+      type: 'GET_PRICES',
+      fetchIntent: 'selected',
+      items: [{ id: '970620', type: 'app' }],
+      regions: ['eu'],
+    });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][0]).toContain('ids=970620');
+  });
+
   it('broadcasts reset information when a price request hits 429', async () => {
     const resetAt = Math.floor(Date.now() / 1000);
     storageStore.settings = {
@@ -852,6 +982,7 @@ describe('GG.deals rate-limit broadcasts', () => {
         apiKey: 'KEY',
         regions: ['eu'],
         currency: 'EUR',
+        selectiveFetch: false,
       },
       cachedAt: Date.now(),
       expiresAt: 0,

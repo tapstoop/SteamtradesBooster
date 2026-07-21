@@ -109,19 +109,36 @@ export function cleanGameTitle(text) {
 
 function getAnchorTitle(root) {
   const anchors = Array.from(root.querySelectorAll?.('a') ?? []);
-  const preferred = anchors.find(a => /store\.steampowered\.com\/(app|bundle|sub)\//i.test(a.href || '')) ?? anchors[0];
+  const preferred = anchors.find(a => extractSteamIdentity(a)) ?? anchors[0];
   return preferred?.textContent?.trim() ?? '';
 }
 
-function extractSteamType(href) {
-  if (!href) return 'app';
-  const match = href.match(/store\.steampowered\.com\/(app|bundle|sub)\//i);
-  return match ? match[1].toLowerCase() : 'app';
+export function extractSteamIdentity(anchorOrHref) {
+  const href = typeof anchorOrHref === 'string'
+    ? anchorOrHref
+    : anchorOrHref?.getAttribute?.('href') ?? anchorOrHref?.href;
+  if (!href) return null;
+  let url;
+  try {
+    url = new URL(href, 'https://www.steamtrades.com/');
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  if (host === 'store.steampowered.com') {
+    const match = url.pathname.match(/^\/(app|bundle|sub)\/(\d+)(?:\/|$)/i);
+    return match ? { type: match[1].toLowerCase(), appId: match[2] } : null;
+  }
+  if (host === 'steamdb.info') {
+    const match = url.pathname.match(/^\/app\/(\d+)(?:\/|$)/i);
+    return match ? { type: 'app', appId: match[1] } : null;
+  }
+  return null;
 }
 
-function addParsedRow(rows, seenTitles, el, section, title, type = 'app') {
+function addParsedRow(rows, seenTitles, el, section, title, identity = null, { trustedStructure = false } = {}) {
   const cleaned = cleanGameTitle(title);
-  if (cleaned.length < 2 || isNotGame(cleaned)) return false;
+  if (cleaned.length < 2 || isNotGame(cleaned, { allowSentenceLike: trustedStructure })) return false;
 
   const normalized = cleaned.toLowerCase();
   if (seenTitles.has(normalized)) return false;
@@ -131,13 +148,20 @@ function addParsedRow(rows, seenTitles, el, section, title, type = 'app') {
   el.dataset.stptSection = section;
   el.dataset.stptIndex = rows.length;
   el.dataset.stptTitle = cleaned;
-  rows.push({ title: cleaned, el, type });
+  rows.push({
+    title: cleaned,
+    el,
+    type: 'app',
+    appId: null,
+    linkedType: identity?.type ?? null,
+    linkedAppId: identity?.appId ?? null,
+  });
   return true;
 }
 
-function canParseTitle(seenTitles, title) {
+function canParseTitle(seenTitles, title, { trustedStructure = false } = {}) {
   const cleaned = cleanGameTitle(title);
-  if (cleaned.length < 2 || isNotGame(cleaned)) return null;
+  if (cleaned.length < 2 || isNotGame(cleaned, { allowSentenceLike: trustedStructure })) return null;
   if (seenTitles.has(cleaned.toLowerCase())) return null;
   return cleaned;
 }
@@ -155,21 +179,25 @@ function hasUnicodeSuccession(text) {
  * Check if text looks like a sentence (likely not a game name)
  */
 function isSentence(text) {
-  // Game names typically don't start with I', I'm, The, If, But, And followed by full sentences
-  // Also check for common sentence patterns
-  const sentenceStarters = /^(i'm|i |if |but |and |so |however|actually|basically|honestly|seriously|wait|hey|hello|hi |please|thank)/i;
-  const hasQuestionMark = text.includes('?');
-  const hasExclaimMark = text.includes('!');
-  const words = text.split(/\s+/);
-  // Very long "titles" with many words are likely sentences
-  const isVeryLong = words.length > 15;
-  // Contains comma near the end suggesting explanation
-  const hasTrailingExplanation = /,.{20,}$/.test(text);
-  
-  return sentenceStarters.test(text) || 
-         (hasQuestionMark && hasTrailingExplanation) ||
-         (hasExclaimMark && text.length > 50) ||
-         (isVeryLong && hasTrailingExplanation);
+  const normalized = text.trim().toLowerCase();
+  const words = normalized.split(/\s+/).filter(Boolean);
+  const explicitBoilerplate = /^(?:these|those|most of (?:these|the)|although (?:these|the)|because (?:these|the)|please note|no tf2\b)/i;
+  const sentenceStarter = /^(?:i'm|i |if |but |and |so |however|actually|basically|honestly|seriously|wait|hey|hello|hi |please|thank)/i;
+  const tradeOrPayment = /\b(?:paypal|counterstrike|tf2|trade rate|negative feedback|go first|keys? activat|keys? work|willing to trade|payment|paying|offer me)\b/i;
+  const explanatoryVerb = /\b(?:i|we|you|they|these|those|keys?|games?)\s+(?:am|are|is|have|has|cannot|can't|can|will|would|originate|work|activate|play)\b/i;
+  const sentenceBreaks = (normalized.match(/[.!?](?:\s|$)/g) ?? []).length;
+
+  if (explicitBoilerplate.test(normalized)) return true;
+  let score = 0;
+  if (sentenceStarter.test(normalized)) score += 2;
+  if (tradeOrPayment.test(normalized)) score += 2;
+  if (explanatoryVerb.test(normalized)) score += 1;
+  if (sentenceBreaks >= 2) score += 2;
+  else if (/[.!?]$/.test(normalized)) score += 1;
+  if (/,.{20,}$/.test(normalized)) score += 1;
+  // Length is only a weak signal. It never rejects a long title by itself.
+  if (words.length > 15) score += 1;
+  return score >= 3;
 }
 
 /**
@@ -200,7 +228,7 @@ function hasBundleStoreRef(text) {
 /**
  * Check if a line should be filtered out (not a game)
  */
-export function isNotGame(text) {
+export function isNotGame(text, { allowSentenceLike = false } = {}) {
   if (!text || text.length < 2) return true;
   const normalized = text.toLowerCase().trim();
   
@@ -208,7 +236,7 @@ export function isNotGame(text) {
   if (matchesSkipPhrase(text)) return true;
   
   if (hasUnicodeSuccession(text)) return true;
-  if (isSentence(text)) return true;
+  if (!allowSentenceLike && isSentence(text)) return true;
   if (hasBundleStoreRef(text)) return true;
   if (isChoicePattern(text)) return true;
   if (isDateAnnouncement(text)) return true;
@@ -259,22 +287,21 @@ export function parseGameRows() {
     if (el.tagName === 'TR') {
       const cells = Array.from(el.querySelectorAll('td, th'));
       if (cells.length === 0) return;
-      const anchorEl = el.querySelector('a[href*="store.steampowered.com"]');
-      const type = anchorEl ? extractSteamType(anchorEl.getAttribute('href')) : 'app';
+      const identity = Array.from(el.querySelectorAll('a')).map(extractSteamIdentity).find(Boolean) ?? null;
       const anchorTitle = getAnchorTitle(el);
       const firstTextCell = cells.find(cell => {
         const text = cleanGameTitle(cell.textContent);
-        return text.length >= 2 && !matchesSkipPhrase(text) && !isNotGame(text);
+        return text.length >= 2 && !matchesSkipPhrase(text) && !isNotGame(text, { allowSentenceLike: true });
       });
       const rawText = anchorTitle || firstTextCell?.textContent?.trim() || '';
       if (!rawText || matchesSkipPhrase(rawText)) return;
-      if (!canParseTitle(seenTitles, rawText)) return;
+      if (!canParseTitle(seenTitles, rawText, { trustedStructure: true })) return;
 
       const target = firstTextCell ?? cells[0];
       const span = document.createElement('span');
       while (target.firstChild) span.appendChild(target.firstChild);
       target.appendChild(span);
-      addParsedRow(rows, seenTitles, span, section, rawText, type);
+      addParsedRow(rows, seenTitles, span, section, rawText, identity, { trustedStructure: true });
       return;
     }
 
@@ -291,9 +318,10 @@ export function parseGameRows() {
       if (matchesSkipPhrase(rawText)) return;
 
       // PHASE 5B: Hyperlink-first detection for LI elements
-      const anchor = el.querySelector('a');
+      const anchors = Array.from(el.querySelectorAll('a'));
+      const anchor = anchors.find(item => extractSteamIdentity(item)) ?? anchors[0] ?? null;
       const text = anchor ? anchor.textContent.trim() : rawText;
-      if (!canParseTitle(seenTitles, text)) return;
+      if (!canParseTitle(seenTitles, text, { trustedStructure: true })) return;
 
       // Create wrapper span
       const span = document.createElement('span');
@@ -304,7 +332,7 @@ export function parseGameRows() {
       }
       el.appendChild(span);
 
-      addParsedRow(rows, seenTitles, span, section, text);
+      addParsedRow(rows, seenTitles, span, section, text, extractSteamIdentity(anchor), { trustedStructure: true });
       return;
     }
 
@@ -345,9 +373,10 @@ export function parseGameRows() {
       });
 
       let text;
+      let anchor = null;
       if (hasLink) {
         // PHASE 5B: Extract ONLY the anchor text as the game name
-        let anchor = lineNodes.find(n => {
+        anchor = lineNodes.find(n => {
           if (n.nodeType === Node.ELEMENT_NODE) {
             return n.tagName === 'A';
           }
@@ -377,7 +406,8 @@ export function parseGameRows() {
       });
 
       if (isHeaderish) return; // Skip category headers, preserve original HTML
-      if (!canParseTitle(seenTitles, text)) return;
+      const trustedStructure = hasLink || lines.length > 1;
+      if (!canParseTitle(seenTitles, text, { trustedStructure })) return;
 
       // Wrap the original DOM nodes in a game span (preserves links, formatting)
       const span = document.createElement('span');
@@ -386,7 +416,7 @@ export function parseGameRows() {
       el.insertBefore(span, firstNode);
       lineNodes.forEach(n => span.appendChild(n));
 
-      if (addParsedRow(rows, seenTitles, span, section, text)) index++;
+      if (addParsedRow(rows, seenTitles, span, section, text, extractSteamIdentity(anchor), { trustedStructure })) index++;
     });
   };
 
@@ -410,6 +440,7 @@ export function injectCheckboxes(rows) {
     checkbox.type = 'checkbox';
     checkbox.className = 'stpt-game-checkbox';
     checkbox.dataset.stptTitle = el.dataset.stptTitle;
+    checkbox.dataset.stptId = el.dataset.stptId;
     el.dataset.stptCheckbox = '1';
     el.parentNode.insertBefore(checkbox, el);
   });

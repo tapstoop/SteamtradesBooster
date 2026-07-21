@@ -12,6 +12,7 @@ export function applyResolvedRow(rowData, rowEl, resolution) {
   row.manuallyResolved = true;
   row.cacheKey = resolution.cacheKey ?? row.cacheKey;
   row.fuzzy = false;
+  row.removal = null;
   row.resolution = { status: 'resolved', appId: resolution.appId, type: resolution.type ?? row.type ?? 'app' };
 
   return row;

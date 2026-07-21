@@ -23,6 +23,54 @@ test.describe('B1 - Badge injection', () => {
     const fetchBtn = page.locator('#stpt-floating-fetch-btn');
     await expect(fetchBtn).toBeAttached();
   });
+
+  test('reconciles a late Steam Tracker badge ahead of an existing price badge', async ({ extensionContext, navigate, seedFixtures }) => {
+    const { context, extensionId } = extensionContext;
+    await context.route('https://steam-tracker.com/api**', async route => {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          removed_apps: [{ appid: 970620, name: 'Castle Rencounter', type: 'game', category_id: 3 }],
+        }),
+      });
+    });
+
+    const sw = context.serviceWorkers()[0];
+    const extensionPage = await context.newPage();
+    await extensionPage.goto(`chrome-extension://${extensionId}/popup/popup.html`);
+    await extensionPage.evaluate(() => chrome.runtime.sendMessage({ type: 'CLEAR_CACHE' }));
+    await extensionPage.close();
+    await seedFixtures();
+    await sw.evaluate(async () => {
+      await chrome.storage.local.set({
+        'price:970620:eu': {
+          value: {
+            prices: {
+              currentRetail: 299,
+              currentKeyshops: 299,
+              historicalRetail: 299,
+              historicalKeyshops: 299,
+              currency: 'EUR',
+            },
+          },
+          cachedAt: Date.now(),
+          expiresAt: 0,
+        },
+      });
+    });
+
+    const page = await navigate('https://www.steamtrades.com/trade/12345/test');
+    const castleRow = page.locator('.stpt-game-item', { hasText: 'Castle Rencounter' }).first();
+    await expect(castleRow.locator('.stpt-badge[data-type="DEAL"]')).toBeAttached({ timeout: 10000 });
+    await expect(castleRow.locator('.stpt-badge[data-type="removed_disabled"]')).toBeAttached({ timeout: 10000 });
+
+    const badgeTypes = await castleRow.locator('.stpt-badge').evaluateAll(nodes => (
+      nodes.map(node => node.dataset.type)
+    ));
+    expect(badgeTypes.slice(0, 2)).toEqual(['removed_disabled', 'DEAL']);
+  });
 });
 
 test.describe('B2 - Selective fetch', () => {
@@ -53,6 +101,61 @@ test.describe('B2 - Selective fetch', () => {
       const btnText = await fetchBtn.textContent();
       expect(btnText).not.toContain('Fetch prices for 1 game');
     }
+  });
+
+  test('removed-game toggle does not turn selective mode into global automatic fetch', async ({
+    extensionContext,
+    navigate,
+    seedFixtures,
+    setSettings,
+  }) => {
+    const { context, extensionId } = extensionContext;
+    await seedFixtures();
+    await setSettings({
+      apiKey: 'TEST',
+      regions: ['eu'],
+      selectiveFetch: true,
+      fetchRemovedGamePrices: false,
+      showSidebar: true,
+      ggdealsAutoScroll: true,
+      currency: 'EUR',
+      theme: 'dark',
+    });
+    const sw = context.serviceWorkers()[0];
+    await sw.evaluate(async () => {
+      const stored = await chrome.storage.local.get(null);
+      const priceKeys = Object.keys(stored).filter(key => key.startsWith('price:'));
+      if (priceKeys.length) await chrome.storage.local.remove(priceKeys);
+    });
+
+    const ggRequests = [];
+    context.on('request', request => {
+      if (request.url().startsWith('https://api.gg.deals/v1/')) ggRequests.push(request.url());
+    });
+    const tradePage = await navigate('https://www.steamtrades.com/trade/12345/test');
+    await tradePage.waitForSelector('.stpt-game-checkbox', { timeout: 10000 });
+    await tradePage.waitForTimeout(500);
+
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${extensionId}/popup/popup.html`);
+    await popup.locator('[data-tab="settings"]').click();
+    const removedToggle = popup.locator('#s-fetch-removed');
+    await expect(removedToggle).not.toBeChecked();
+    ggRequests.length = 0;
+    await removedToggle.click();
+    await expect(removedToggle).toBeChecked();
+    await tradePage.waitForTimeout(1200);
+    expect(ggRequests).toHaveLength(0);
+
+    await removedToggle.click();
+    await expect(removedToggle).not.toBeChecked();
+    ggRequests.length = 0;
+
+    const removedRow = tradePage.locator('.stpt-game-item', { hasText: 'Castle Rencounter' }).first();
+    await removedRow.locator('xpath=preceding-sibling::input[contains(@class,"stpt-game-checkbox")][1]').click();
+    await tradePage.locator('#stpt-floating-fetch-btn').click();
+    await expect.poll(() => ggRequests.some(url => url.includes('/prices/by-steam-app-id/') && url.includes('970620')), { timeout: 10000 }).toBe(true);
+    await popup.close();
   });
 });
 
@@ -120,7 +223,7 @@ test.describe('B4 - SETTINGS_UPDATED live re-render', () => {
 
     await page.waitForSelector('.stpt-badge', { state: 'attached', timeout: 10000 });
 
-    // Change region to NA via settings — triggers SETTINGS_UPDATED → fetchFreshPrice
+    // Change region to NA via settings — SETTINGS_UPDATED performs a cache-only repaint.
     await setSettings({
       apiKey: 'TEST',
       regions: ['na'],
@@ -131,13 +234,18 @@ test.describe('B4 - SETTINGS_UPDATED live re-render', () => {
       theme: 'dark',
     });
 
-    // After region change, SETTINGS_UPDATED triggers fetchFreshPrice for 'na'.
-    // Since no prices are cached for 'na' and the API mock returns [], the content
-    // script's clearRowStalePrices() removes badges and injectSkeleton() creates
-    // .stpt-skeleton elements — directly proving the live re-render path fired.
-    // Assert BOTH halves: badges cleared AND skeletons present.
-    // If the SETTINGS_UPDATED listener were dropped, badges would never clear → timeout.
-    await expect(page.locator('.stpt-badge')).toHaveCount(0, { timeout: 10000 });
+    // No prices are cached for 'na', so price/tier badges disappear and idle
+    // skeletons return. The independent Steam Tracker removal badge must remain.
+    // This also proves a settings update did not perform a remote price fallback.
+    const priceBadges = page.locator([
+      '.stpt-badge[data-type="DEAL"]',
+      '.stpt-badge[data-type="WISH"]',
+      '.stpt-badge[data-type="TRADE"]',
+      '.stpt-badge[data-type="BUNDLE"]',
+      '.stpt-badge[data-type="NA"]',
+    ].join(','));
+    await expect(priceBadges).toHaveCount(0, { timeout: 10000 });
+    await expect(page.locator('.stpt-badge[data-type^="removed_"]')).toHaveCount(1);
     const skeletonCount = await page.locator('.stpt-skeleton').count();
     expect(skeletonCount).toBeGreaterThan(0);
   });
