@@ -70,6 +70,18 @@ describe('ProgressiveResolutionCoordinator', () => {
     expect(onResolved.mock.calls[0][1]).toMatchObject({ status: 'not-found', failed: true });
   });
 
+  it('marks cached groups as hydrated without erasing semantic row states', () => {
+    const ambiguous = row('Ambiguous');
+    ambiguous.resolutionStatus = 'ambiguous';
+    const pending = row('Resolved cache hit');
+    const coordinator = new ProgressiveResolutionCoordinator({ rows: [ambiguous, pending] });
+
+    coordinator.markHydrated([ambiguous, pending]);
+
+    expect(ambiguous.resolutionStatus).toBe('ambiguous');
+    expect(pending.resolutionStatus).toBe('resolved');
+  });
+
   it('ignores a stale in-flight result after provider invalidation and permits a new lookup', async () => {
     const item = row('Changed Game');
     const deferred = [];

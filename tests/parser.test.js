@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect } from 'vitest';
-import { cleanGameTitle, stripParentheses, parseGameRows, extractSteamIdentity } from '../content/parser.js';
+import { cleanGameTitle, stripParentheses, parseGameRows, extractSteamIdentity, isNotGame, prioritize } from '../content/parser.js';
 
 describe('cleanGameTitle', () => {
   it('preserves numeric commas in titles', () => {
@@ -16,6 +16,27 @@ describe('cleanGameTitle', () => {
   it('keeps anchor text style titles clean for table rows', () => {
     expect(cleanGameTitle('  DARK SOULS™: REMASTERED  ')).toBe('DARK SOULS™: REMASTERED');
   });
+
+  it('removes long decorative borders while preserving meaningful punctuation', () => {
+    expect(cleanGameTitle('════ Hollow Knight ════')).toBe('Hollow Knight');
+    expect(cleanGameTitle('====Game Title====')).toBe('Game Title');
+    expect(cleanGameTitle('◆ ◇ ◆ ◇ Game Title ◆ ◇ ◆ ◇')).toBe('Game Title');
+    expect(cleanGameTitle('[Game Title]')).toBe('[Game Title]');
+    expect(cleanGameTitle('Game Title!!!!')).toBe('Game Title!!!!');
+    expect(cleanGameTitle('NieR:Automata')).toBe('NieR:Automata');
+  });
+
+  it('rejects formatting-only text but preserves Unicode and numeric titles', () => {
+    expect(isNotGame('==================================================================================')).toBe(true);
+    expect(isNotGame('══════')).toBe(true);
+    expect(isNotGame('◆◇◆◇')).toBe(true);
+    expect(isNotGame('🎮🎮🎮🎮')).toBe(true);
+    expect(isNotGame('\u200b\u200c\u200d')).toBe(true);
+    expect(isNotGame('140')).toBe(false);
+    expect(isNotGame('Été')).toBe(false);
+    expect(isNotGame('Игры')).toBe(false);
+    expect(isNotGame('日本語')).toBe(false);
+  });
 });
 
 describe('stripParentheses', () => {
@@ -24,7 +45,59 @@ describe('stripParentheses', () => {
   });
 });
 
+describe('prioritize', () => {
+  it('preserves independent wishlist and tradables membership', () => {
+    const [game] = prioritize(
+      [{ title: 'Shared Game', el: document.createElement('div') }],
+      ['Shared Game'],
+      ['Shared Game']
+    );
+
+    expect(game).toMatchObject({ tier: 1, inWishlist: true, inTradables: true });
+  });
+});
+
 describe('parseGameRows', () => {
+  it('ignores decorative rows across list, paragraph, and table structures without mutating them', () => {
+    document.body.innerHTML = `
+      <div class="have"><div class="markdown">
+        <ul><li id="list-separator">================================</li></ul>
+        <p><span id="paragraph-separator">══════</span><br>Real Game</p>
+        <table><tr id="table-separator"><td>◆◇◆◇◆◇</td></tr></table>
+      </div></div>
+    `;
+
+    expect(parseGameRows().map(row => row.title)).toEqual(['Real Game']);
+    expect(document.querySelector('#list-separator').classList.contains('stpt-game-item')).toBe(false);
+    expect(document.querySelector('#paragraph-separator').classList.contains('stpt-game-item')).toBe(false);
+    expect(document.querySelector('#table-separator .stpt-game-item')).toBeNull();
+  });
+
+  it('deduplicates decorated variants after cleaning', () => {
+    document.body.innerHTML = `
+      <div class="have"><div class="markdown"><ul>
+        <li>════ Hollow Knight ════</li>
+        <li>Hollow Knight</li>
+      </ul></div></div>
+    `;
+
+    expect(parseGameRows().map(row => row.title)).toEqual(['Hollow Knight']);
+  });
+
+  it('keeps symbol-only titles only when backed by a trusted Steam identity', () => {
+    document.body.innerHTML = `
+      <div class="have"><div class="markdown"><ul>
+        <li><a href="#">★★★★</a></li>
+        <li><a href="https://store.steampowered.com/app/1234/">!!!!</a></li>
+        <li><a href="https://steamdb.info/app/5678/">++++</a></li>
+      </ul></div></div>
+    `;
+
+    expect(parseGameRows()).toEqual([
+      expect.objectContaining({ title: '!!!!', linkedAppId: '1234', linkedType: 'app' }),
+      expect.objectContaining({ title: '++++', linkedAppId: '5678', linkedType: 'app' }),
+    ]);
+  });
   it('extracts bundle type from Steam bundle links in table rows', () => {
     document.body.innerHTML = `
       <div class="have">

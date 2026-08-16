@@ -8,9 +8,39 @@ import {
   createSectionHeader,
   createVirtualList,
   createEmptyState,
-  formatPrice
+  COMPACT_BADGE_FILTERS,
+  formatPrice,
+  getCompactBadgeFilterKeys,
+  getResolutionBadgeDescriptor,
+  hasDualTitle,
 } from './ui-components.js';
 import { normalizeSteamType } from '../utils/similarity.js';
+
+const WORKSTATION_PATCH_FIELDS = Object.freeze([
+  'el',
+  'section',
+  'originalTitle',
+  'title',
+  'name',
+  'appId',
+  'type',
+  'tier',
+  'manuallyResolved',
+  'resolutionStatus',
+  'resolution',
+  'cacheKey',
+  'candidates',
+  'fuzzy',
+  'similarity',
+  'removalStatus',
+  'ggDealsNoData',
+  'inWishlist',
+  'inTradables',
+  'price',
+  'currency',
+]);
+
+let workstationInstanceSequence = 0;
 
 
 export function tradeEntityKey(game) {
@@ -22,7 +52,6 @@ export class SidebarWorkstation {
   constructor(tradeSimulator) {
     this.sim = tradeSimulator;
     this.pageGames = [];
-    this.wishlistGames = [];
     this.tradableGames = [];
     this.inTrade = { trader: [], mine: [] };
     this.sortBy = 'title';
@@ -32,6 +61,14 @@ export class SidebarWorkstation {
     this.searchQuery = '';
     this.tradableSearchQuery = '';
     this.showOriginalTitle = true;
+    this.activeBadgeFilters = new Set();
+    this._resolutionOpenToken = 0;
+    this._instanceId = ++workstationInstanceSequence;
+    this._jumpTarget = null;
+    this._jumpHighlightTimer = null;
+    this._pageGameIndex = new Map();
+    this._renderFrame = null;
+    this._pendingRender = this._emptyRenderRequest();
     this.onGamesUpdated = null;
     this._init();
   }
@@ -83,10 +120,12 @@ export class SidebarWorkstation {
     this._setupResizeHandlers();
 
     this.el.querySelector('.stpt-ws-close').addEventListener('click', () => {
+      this._setFilterMenuOpen(false);
       this.el.style.display = 'none';
     });
 
     this.el.querySelector('.stpt-ws-col-toggle').addEventListener('click', () => {
+      this._setFilterMenuOpen(false);
       this.el.classList.add('collapsed');
       this._saveCollapsedState(true);
     });
@@ -98,7 +137,7 @@ export class SidebarWorkstation {
 
     document.body.appendChild(this.el);
     this._restoreCollapsedState();
-    this._setupOriginalTitleToggle();
+    this._setupViewOptions();
   }
 
   _restoreShowOriginalTitle() {
@@ -112,11 +151,82 @@ export class SidebarWorkstation {
     }
   }
 
-  _setupOriginalTitleToggle() {
+  _setupViewOptions() {
     const optionsRow = this.el.querySelector('.stpt-ws-data .stpt-ws-options');
     if (!optionsRow) return;
+
+    const filterGroup = document.createElement('div');
+    filterGroup.className = 'stpt-ws-filter-group';
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'stpt-ws-filter-trigger';
+    trigger.setAttribute('aria-haspopup', 'true');
+    trigger.setAttribute('aria-expanded', 'false');
+    const triggerText = document.createElement('span');
+    triggerText.textContent = 'Filters';
+    const triggerCount = document.createElement('span');
+    triggerCount.className = 'stpt-ws-filter-count';
+    triggerCount.hidden = true;
+    const caret = document.createElement('span');
+    caret.className = 'stpt-ws-filter-caret';
+    caret.textContent = '▾';
+    trigger.append(triggerText, triggerCount, caret);
+    filterGroup.appendChild(trigger);
+
+    const menu = document.createElement('div');
+    menu.id = `stpt-ws-filter-menu-${this._instanceId}`;
+    menu.className = 'stpt-ws-filter-menu';
+    menu.setAttribute('role', 'group');
+    menu.setAttribute('aria-label', 'Game badge filters');
+    menu.hidden = true;
+    trigger.setAttribute('aria-controls', menu.id);
+
+    for (const option of COMPACT_BADGE_FILTERS) {
+      const label = document.createElement('label');
+      label.className = 'stpt-ws-filter-option';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = false;
+      checkbox.value = option.key;
+      const badge = document.createElement('span');
+      badge.className = `stpt-game-compact-badge ${option.className}`;
+      badge.textContent = option.badgeLabel;
+      const optionText = document.createElement('span');
+      optionText.className = 'stpt-ws-filter-option-text';
+      optionText.textContent = option.label;
+      label.append(checkbox, badge, optionText);
+      menu.appendChild(label);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) this.activeBadgeFilters.add(option.key);
+        else this.activeBadgeFilters.delete(option.key);
+        const count = this.activeBadgeFilters.size;
+        triggerCount.textContent = String(count);
+        triggerCount.hidden = count === 0;
+        trigger.setAttribute('aria-label', count === 0 ? 'Filters' : `Filters, ${count} active`);
+        this._renderDataList();
+      });
+    }
+    filterGroup.appendChild(menu);
+    optionsRow.appendChild(filterGroup);
+    this._filterTriggerEl = trigger;
+    this._filterMenuEl = menu;
+    trigger.addEventListener('click', event => {
+      event.stopPropagation();
+      this._setFilterMenuOpen(menu.hidden);
+    });
+    this._onFilterDocumentClick = event => {
+      if (!filterGroup.contains(event.target)) this._setFilterMenuOpen(false);
+    };
+    this._onFilterDocumentKeydown = event => {
+      if (event.key !== 'Escape' || menu.hidden) return;
+      event.preventDefault();
+      this._setFilterMenuOpen(false, { focusTrigger: true });
+    };
+    document.addEventListener('click', this._onFilterDocumentClick);
+    document.addEventListener('keydown', this._onFilterDocumentKeydown);
+
     const label = document.createElement('label');
-    label.className = 'stpt-ws-orig-title-toggle';
+    label.className = 'stpt-ws-option-toggle stpt-ws-orig-title-toggle';
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = this.showOriginalTitle;
@@ -133,6 +243,13 @@ export class SidebarWorkstation {
       }
       this._renderDataList();
     });
+  }
+
+  _setFilterMenuOpen(open, { focusTrigger = false } = {}) {
+    if (!this._filterMenuEl || !this._filterTriggerEl) return;
+    this._filterMenuEl.hidden = !open;
+    this._filterTriggerEl.setAttribute('aria-expanded', String(open));
+    if (focusTrigger) this._filterTriggerEl.focus();
   }
 
   _setupResizeHandlers() {
@@ -249,13 +366,14 @@ export class SidebarWorkstation {
   _setupDataColumn() {
     const searchContainer = this._dataCol.querySelector('.stpt-ws-search');
 
-    const searchInput = createSearchBar({
+    const searchControl = createSearchBar({
       placeholder: 'Search games...',
       onSearch: (query) => {
         this.searchQuery = query.toLowerCase();
         this._renderDataList();
       }
     });
+    const searchInput = searchControl.querySelector('input');
     searchContainer.appendChild(searchInput);
 
     const sortSelect = createSortSelect({
@@ -281,6 +399,49 @@ export class SidebarWorkstation {
     this._dataList.appendChild(this._virtualList.container);
   }
 
+  _emptyRenderRequest() {
+    return {
+      data: false,
+      wishlist: false,
+      tradables: false,
+      inTrade: false,
+      sim: false,
+      preserveScroll: true,
+    };
+  }
+
+  _requestRender(flags, { preserveScroll = true } = {}) {
+    for (const key of ['data', 'wishlist', 'tradables', 'inTrade', 'sim']) {
+      if (flags?.[key]) this._pendingRender[key] = true;
+    }
+    if (flags?.data && !preserveScroll) this._pendingRender.preserveScroll = false;
+    if (this.el.style.display === 'none' || this._renderFrame != null) return;
+    const requestFrame = globalThis.requestAnimationFrame
+      ?? (callback => globalThis.setTimeout(callback, 0));
+    this._renderFrame = requestFrame(() => {
+      this._renderFrame = null;
+      this._flushPendingRender();
+    });
+  }
+
+  _flushPendingRender() {
+    if (this.el.style.display === 'none') return;
+    const request = this._pendingRender;
+    this._pendingRender = this._emptyRenderRequest();
+    if (request.data) this._renderDataList({ preserveScroll: request.preserveScroll });
+    if (request.wishlist) this._renderWishlistSection();
+    if (request.tradables) this._renderTradablesSection();
+    if (request.inTrade) this._renderInTrade();
+    if (request.sim) this._updateSimStats();
+  }
+
+  _rebuildPageGameIndex() {
+    this._pageGameIndex = new Map();
+    this.pageGames.forEach((game, index) => {
+      if (game?.stptId != null) this._pageGameIndex.set(String(game.stptId), index);
+    });
+  }
+
   _renderDataRow(game, index) {
     const isInTrade = this._isInTrade(game);
     return createGameRow({
@@ -290,8 +451,82 @@ export class SidebarWorkstation {
       isInTradables: game.inTradables,
       isInTrade,
       showOriginalTitle: this.showOriginalTitle,
+      onNavigate: selectedGame => this._navigateToPageGame(selectedGame),
+      onResolve: (selectedGame, anchorEl) => this._openResolutionForGame(selectedGame, anchorEl),
       onAction: () => this._addToMyGames(game)
     });
+  }
+
+  _clearJumpHighlight() {
+    if (this._jumpHighlightTimer) clearTimeout(this._jumpHighlightTimer);
+    this._jumpHighlightTimer = null;
+    this._jumpTarget?.classList?.remove('stpt-game-jump-target');
+    this._jumpTarget = null;
+  }
+
+  _highlightPageGame(target) {
+    this._clearJumpHighlight();
+    target.classList.remove('stpt-game-jump-target');
+    void target.offsetWidth;
+    target.classList.add('stpt-game-jump-target');
+    this._jumpTarget = target;
+    this._jumpHighlightTimer = setTimeout(() => this._clearJumpHighlight(), 1400);
+  }
+
+  _navigateToPageGame(game) {
+    const stptId = String(game?.stptId ?? '');
+    const currentGame = this.pageGames.find(item => String(item.stptId ?? '') === stptId);
+    const target = currentGame?.el;
+    if (!target?.isConnected) return false;
+
+    this._setFilterMenuOpen(false);
+    this._highlightPageGame(target);
+    const reduceMotion = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+    target.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' });
+    return true;
+  }
+
+  async _openResolutionForGame(game, anchorEl) {
+    const token = ++this._resolutionOpenToken;
+    const stptId = String(game?.stptId ?? '');
+    const initialGame = this.pageGames.find(item => String(item.stptId ?? '') === stptId);
+    const initialDescriptor = getResolutionBadgeDescriptor(initialGame);
+    if (!initialGame?.el?.isConnected || !anchorEl?.isConnected || !initialDescriptor?.interactive) return;
+
+    if (!this._navigateToPageGame(initialGame)) return;
+    try {
+      const [pickers] = await Promise.all([
+        import('./ui-pickers.js'),
+        new Promise(resolve => setTimeout(resolve, 150)),
+      ]);
+      if (token !== this._resolutionOpenToken) return;
+      const currentGame = this.pageGames.find(item => String(item.stptId ?? '') === stptId);
+      const currentDescriptor = getResolutionBadgeDescriptor(currentGame);
+      if (!currentGame?.el?.isConnected || !anchorEl.isConnected) return;
+      if (!currentDescriptor?.interactive || currentDescriptor.kind !== initialDescriptor.kind) return;
+
+      if (currentDescriptor.kind === 'ambiguous') {
+        pickers.openCandidatePicker(
+          anchorEl,
+          currentGame.candidates ?? currentGame.resolution?.candidates ?? [],
+          currentGame.cacheKey ?? currentGame.resolution?.cacheKey,
+          currentGame.el,
+          { position: 'fixed' }
+        );
+      } else if (currentDescriptor.kind === 'not-found') {
+        pickers.openNotFoundPicker(
+          anchorEl,
+          currentGame.cacheKey ?? currentGame.resolution?.cacheKey,
+          currentGame.originalTitle || currentGame.title,
+          currentGame.el,
+          { position: 'fixed' }
+        );
+      } else if (currentDescriptor.kind === 'fuzzy') {
+        pickers.openFuzzyPicker(anchorEl, currentGame.resolution, currentGame.el, { position: 'fixed' });
+      }
+    } catch (error) {
+      console.warn('[STPT] Failed to open workstation resolution picker:', error?.message ?? error);
+    }
   }
 
   _setupSimBox() {
@@ -489,15 +724,26 @@ export class SidebarWorkstation {
   _filterGames(games, query) {
     if (!query) return games;
     return games.filter(g => {
-      const name = (g.title || g.name || '').toLowerCase();
-      return name.includes(query);
+      const resolvedName = (g.title || g.name || '').toLowerCase();
+      const originalName = (g.originalTitle || '').toLowerCase();
+      return resolvedName.includes(query) || originalName.includes(query);
     });
   }
 
-  _renderDataList() {
+  _renderDataList({ preserveScroll = false } = {}) {
     // Only show games from the "I have" (have) section, not "I want"
-    const haveGames = this.pageGames.filter(g => g.section === 'have');
-    const filtered = this._filterGames(haveGames, this.searchQuery);
+    const haveGames = this.pageGames.filter(game => (
+      game.section === 'have' && game.resolution?.status !== 'dismissed'
+    ));
+    const badgeFiltered = haveGames.filter(game => {
+      if (this.activeBadgeFilters.size === 0) return true;
+      const keys = getCompactBadgeFilterKeys(game);
+      for (const key of this.activeBadgeFilters) {
+        if (keys.has(key)) return true;
+      }
+      return false;
+    });
+    const filtered = this._filterGames(badgeFiltered, this.searchQuery);
     const sorted = this._sortGames(filtered);
     if (this._allGamesCountEl) {
       this._allGamesCountEl.textContent = `Total: ${filtered.length}`;
@@ -506,12 +752,12 @@ export class SidebarWorkstation {
         : `${filtered.length} games`;
     }
     this._updateVirtualListHeight(sorted);
-    this._virtualList.setItems(sorted);
+    this._virtualList.setItems(sorted, { preserveScroll });
   }
 
   _hasAnyDualTitle(games) {
     if (!this.showOriginalTitle) return false;
-    return games.some(g => g.manuallyResolved && g.originalTitle && g.title && g.originalTitle !== g.title);
+    return games.some(hasDualTitle);
   }
 
   _updateVirtualListHeight(games) {
@@ -680,6 +926,7 @@ export class SidebarWorkstation {
 
   setPageGames(games) {
     this.pageGames = games || [];
+    this._rebuildPageGameIndex();
     this._renderDataList();
     this._renderWishlistSection();
     this._renderTradablesSection();
@@ -688,21 +935,27 @@ export class SidebarWorkstation {
   updateGamePrices(priceMap) {
     // priceMap: { appId: { price: numberInCents, currency: string } }
     if (!priceMap) return;
+    let changed = false;
+    let wishlist = false;
+    let tradables = false;
+    let inTrade = false;
     this.pageGames.forEach(game => {
       if (game.appId) {
         const type = normalizeSteamType(game.type);
         const typedKey = `${type}:${game.appId}`;
         const data = priceMap[typedKey] ?? (type === 'app' ? priceMap[game.appId] : null);
         if (!data) return;
+        if (game.price === (data.price ?? null) && game.currency === (data.currency ?? 'EUR')) return;
         game.price = data.price ?? null;
         game.currency = data.currency ?? 'EUR';
+        changed = true;
+        wishlist ||= game.section === 'have' && game.inWishlist === true;
+        tradables ||= game.section === 'want' && game.inTradables === true;
+        inTrade ||= this._isInTrade(game);
       }
     });
-    this._renderDataList();
-    this._renderWishlistSection();
-    this._renderTradablesSection();
-    this._renderInTrade();
-    this._updateSimStats();
+    if (!changed) return;
+    this._requestRender({ data: true, wishlist, tradables, inTrade, sim: inTrade });
   }
 
   updateResolvedPageGame(stptId, update) {
@@ -720,36 +973,59 @@ export class SidebarWorkstation {
       .map(patch => [String(patch.stptId), patch.update]));
     if (updates.size === 0) return;
 
-    const apply = game => {
+    const apply = (game, update = updates.get(String(game.stptId ?? ''))) => {
+      if (!update) return game;
+      const next = { ...game };
+      for (const field of WORKSTATION_PATCH_FIELDS) {
+        if (Object.hasOwn(update, field)) next[field] = update[field];
+      }
+      if (Object.hasOwn(update, 'title') && !Object.hasOwn(update, 'name')) {
+        next.name = update.title;
+      }
+      if (Object.hasOwn(update, 'tier')) {
+        if (!Object.hasOwn(update, 'inWishlist')) next.inWishlist = update.tier === 1;
+        if (!Object.hasOwn(update, 'inTradables')) next.inTradables = update.tier === 2;
+      }
+      return next;
+    };
+
+    let changed = false;
+    let wishlist = false;
+    let tradables = false;
+    for (const [stptId, update] of updates) {
+      const index = this._pageGameIndex.get(stptId);
+      if (index == null) continue;
+      const previous = this.pageGames[index];
+      const next = apply(previous, update);
+      this.pageGames[index] = next;
+      changed = true;
+      wishlist ||= (previous.section === 'have' && previous.inWishlist === true)
+        || (next.section === 'have' && next.inWishlist === true);
+      tradables ||= (previous.section === 'want' && previous.inTradables === true)
+        || (next.section === 'want' && next.inTradables === true);
+    }
+    if (!changed) return;
+
+    let inTradeChanged = false;
+    const keepSimulatableIdentity = game => {
+      if (!updates.has(String(game.stptId ?? ''))) return true;
+      return game.resolution?.status !== 'dismissed' && game.appId != null;
+    };
+    const patchTrade = games => games.map(game => {
       const update = updates.get(String(game.stptId ?? ''));
       if (!update) return game;
-      return {
-        ...game,
-        title: update.title ?? game.title,
-        name: update.name ?? update.title ?? game.name,
-        appId: update.appId ?? game.appId,
-        type: update.type ?? game.type,
-        originalTitle: ('originalTitle' in update) ? update.originalTitle : game.originalTitle,
-        manuallyResolved: ('manuallyResolved' in update) ? update.manuallyResolved : game.manuallyResolved,
-        price: ('price' in update) ? update.price : (game.price ?? null),
-        currency: ('currency' in update) ? update.currency : (game.currency ?? 'EUR'),
-      };
-    };
-    this.pageGames = this.pageGames.map(apply);
-    this.inTrade.mine = this.inTrade.mine.map(apply);
-    this.inTrade.trader = this.inTrade.trader.map(apply);
-    this._renderDataList();
-    this._renderWishlistSection();
-    this._renderTradablesSection();
-    this._renderInTrade();
-    this._updateSimStats();
-  }
-
-  setWishlistGames(games) {
-    this.wishlistGames = games || [];
-    this._renderDataList();
-    this._renderWishlistSection();
-    this._renderTradablesSection();
+      inTradeChanged = true;
+      return apply(game, update);
+    }).filter(keepSimulatableIdentity);
+    this.inTrade.mine = patchTrade(this.inTrade.mine);
+    this.inTrade.trader = patchTrade(this.inTrade.trader);
+    this._requestRender({
+      data: true,
+      wishlist,
+      tradables,
+      inTrade: inTradeChanged,
+      sim: inTradeChanged,
+    });
   }
 
   setTradableGames(games) {
@@ -757,8 +1033,7 @@ export class SidebarWorkstation {
       if (typeof g === 'string') return { name: g };
       return { appId: g.appId, type: g.type ?? 'app', name: g.name ?? g.title };
     });
-    this._renderDataList();
-    this._renderTradablesSection();
+    this._requestRender({ tradables: true });
   }
 
   updateTradablePrices(priceMap) {
@@ -773,9 +1048,7 @@ export class SidebarWorkstation {
         game.currency = data.currency ?? 'EUR';
       }
     });
-    this._renderTradablesSection();
-    this._renderInTrade();
-    this._updateSimStats();
+    this._requestRender({ tradables: true });
   }
 
   addTraderGame(game) {
@@ -798,13 +1071,24 @@ export class SidebarWorkstation {
 
   show() {
     this.el.style.display = 'flex';
+    this._requestRender({});
   }
 
   hide() {
+    this._setFilterMenuOpen(false);
     this.el.style.display = 'none';
   }
 
   destroy() {
+    this._clearJumpHighlight();
+    const cancelFrame = globalThis.cancelAnimationFrame
+      ?? (frame => globalThis.clearTimeout(frame));
+    if (this._renderFrame != null) cancelFrame(this._renderFrame);
+    this._renderFrame = null;
+    this._pendingRender = this._emptyRenderRequest();
+    this._virtualList?.destroy?.();
+    if (this._onFilterDocumentClick) document.removeEventListener('click', this._onFilterDocumentClick);
+    if (this._onFilterDocumentKeydown) document.removeEventListener('keydown', this._onFilterDocumentKeydown);
     if (this.el && this.el.parentNode) {
       this.el.parentNode.removeChild(this.el);
     }

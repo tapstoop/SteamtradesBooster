@@ -48,9 +48,11 @@ function canPrice(resolution) {
     && !resolution.fuzzy;
 }
 
-function workstationGame(row, settings) {
+export function toWorkstationGame(row, settings = {}) {
+  const resolution = row.resolution ?? null;
   return {
     stptId: row.el.dataset.stptId,
+    el: row.el,
     appId: row.appId,
     type: row.type,
     title: row.title,
@@ -59,12 +61,59 @@ function workstationGame(row, settings) {
     price: row.priceData ? _getBadgePrice(row.priceData, settings) : null,
     tier: row.tier,
     section: row.section ?? row.el.dataset.stptSection,
-    inWishlist: row.tier === 1,
-    inTradables: row.tier === 2,
-    currency: settings.regions?.[0] || 'EUR',
+    inWishlist: row.inWishlist ?? row.tier === 1,
+    inTradables: row.inTradables ?? row.tier === 2,
+    currency: row.priceData?.prices?.currency ?? settings.currency ?? 'EUR',
+    resolutionStatus: row.resolutionStatus ?? 'pending',
+    resolution,
+    cacheKey: row.cacheKey ?? resolution?.cacheKey ?? null,
+    candidates: resolution?.candidates ?? [],
+    fuzzy: row.fuzzy === true,
+    similarity: row.similarity ?? resolution?.similarity ?? null,
     removalStatus: row.removal?.status ?? null,
     ggDealsNoData: row.ggDealsNoData === true,
   };
+}
+
+function syncWorkstationRows(state, run, rows) {
+  if (!state.workstation) return;
+  const uniqueRows = new Map();
+  for (const row of rows ?? []) {
+    const stptId = row?.el?.dataset?.stptId;
+    if (stptId != null) uniqueRows.set(String(stptId), row);
+  }
+  if (uniqueRows.size === 0) return;
+  const settings = run?.settings ?? state.settingsRef?.current ?? {};
+  state.workstation.updateResolvedPageGames([...uniqueRows.values()].map(row => ({
+    stptId: row.el.dataset.stptId,
+    update: toWorkstationGame(row, settings),
+  })));
+}
+
+function createWorkstationBridge(state) {
+  return {
+    updateResolvedPageGame: (...args) => state.workstation?.updateResolvedPageGame(...args),
+    updateGamePrices: (...args) => state.workstation?.updateGamePrices(...args),
+  };
+}
+
+function ensureWorkstation(state, settings = state.settingsRef?.current ?? {}) {
+  if (!state.workstation) {
+    state.workstation = new SidebarWorkstation(new TradeSimulator(0.1));
+    window.__stpt_workstation = state.workstation;
+    state.workstation.setPageGames(state.rows.map(row => toWorkstationGame(row, settings)));
+    state.workstation.setTradableGames(state.run?.tradables ?? []);
+  }
+  state.workstation.show();
+  return state.workstation;
+}
+
+function applyWorkstationVisibility(state, settings) {
+  if (settings?.showSidebar === false) {
+    state.workstation?.hide();
+    return;
+  }
+  ensureWorkstation(state, settings);
 }
 
 function isCurrent(state, run) {
@@ -83,7 +132,7 @@ function applyResolution(row, resolution) {
   row.similarity = resolution?.similarity ?? null;
   row.resolution = resolution;
   row.removal = resolution?.removal ?? null;
-  row.resolutionStatus = status === 'not-found' && resolution?.failed ? 'failed' : 'resolved';
+  row.resolutionStatus = status === 'not-found' && resolution?.failed ? 'failed' : status;
   row.el.dataset.stptTitle = row.title;
 
   const checkbox = row.el.previousElementSibling?.classList?.contains('stpt-game-checkbox')
@@ -113,14 +162,6 @@ function renderTrackerOnlyRow(state, run, row) {
     cacheKey: row.cacheKey,
     acqPrice: row.acqPrice ?? null,
   });
-  state.workstation.updateResolvedPageGames([{
-    stptId: row.el.dataset.stptId,
-    update: {
-      appId: row.appId,
-      type: row.type,
-      removalStatus: row.removal?.status ?? null,
-    },
-  }]);
 }
 
 function applyTrackerMatch(state, run, row, match) {
@@ -249,8 +290,10 @@ async function reconcileRemovalTitleMatches(state, run, rows = state.rows, { inc
   });
   if (invalidated.length) {
     run.coordinator?.invalidate(invalidated);
+    syncWorkstationRows(state, run, invalidated);
     run.coordinator?.enqueue(invalidated, { priority: true });
   }
+  if (hydrated.length) syncWorkstationRows(state, run, hydrated);
   return hydrated;
 }
 
@@ -273,7 +316,7 @@ async function reconcileRemovalRows(state, run, rows = state.rows) {
   const response = await sendMessage('GET_REMOVAL_STATUSES', { items: uniqueItems }).catch(() => null);
   if (!response || !isCurrent(state, run)) return;
 
-  const patches = [];
+  const changedRows = [];
   for (const candidate of candidates) {
     const { row, appId, rowRevision, removalLookupRevision } = candidate;
     if (!row.el?.isConnected || row.rowRevision !== rowRevision) continue;
@@ -288,12 +331,9 @@ async function reconcileRemovalRows(state, run, rows = state.rows) {
       cacheKey: row.cacheKey,
       acqPrice: row.acqPrice ?? null,
     });
-    patches.push({
-      stptId: row.el.dataset.stptId,
-      update: { removalStatus: nextRemoval?.status ?? null },
-    });
+    changedRows.push(row);
   }
-  if (patches.length) state.workstation.updateResolvedPageGames(patches);
+  syncWorkstationRows(state, run, changedRows);
 }
 
 async function hydratePriceBatch(state, run, items) {
@@ -312,7 +352,6 @@ async function hydratePriceBatch(state, run, items) {
   ]);
   if (!isCurrent(state, run)) return;
 
-  const patches = [];
   for (const row of rows) {
     const displayRegion = getDisplayRegion(run.settings);
     const priceData = readPriceRegion(cachedPrices, row.appId, row.type, displayRegion);
@@ -330,22 +369,8 @@ async function hydratePriceBatch(state, run, items) {
         acqPrice: row.acqPrice ?? null,
       });
     }
-    patches.push({
-      stptId: row.el.dataset.stptId,
-      update: {
-        title: row.title,
-        appId: row.appId,
-        type: row.type,
-        tier: row.tier,
-        originalTitle: row.originalTitle,
-        manuallyResolved: row.manuallyResolved ?? false,
-        price: priceData ? _getBadgePrice(priceData, run.settings) : null,
-        currency: priceData?.prices?.currency ?? run.settings.currency ?? 'EUR',
-        ggDealsNoData: row.ggDealsNoData,
-      },
-    });
   }
-  state.workstation.updateResolvedPageGames(patches);
+  syncWorkstationRows(state, run, rows);
 
   if (run.settings.selectiveFetch === false) {
     const missingTierPrices = rows.filter(row => row.tier <= 2 && !row.priceData && row.el.querySelector('.stpt-skeleton'));
@@ -374,7 +399,6 @@ async function fetchRemotePrices(state, run, rows, fetchIntent = 'automatic') {
   ]);
   if (!isCurrent(state, run)) return { completedRows: [], failedRows: rows, stale: true };
   const acquisitionPrices = Object.fromEntries(acquisitionEntries);
-  const patches = [];
   const completedRows = [];
   const failedRows = [];
   const skippedKeys = new Set((prices?._meta?.skipped ?? []).map(item => `${item.type ?? 'app'}:${item.id}`));
@@ -388,16 +412,8 @@ async function fetchRemotePrices(state, run, rows, fetchIntent = 'automatic') {
     replaceBadge(row.el, row.priceData, { ...row, settings: run.settings, cacheKey: row.cacheKey, acqPrice: row.acqPrice });
     if (!skippedKeys.has(`${row.type}:${row.appId}`) && (priceData || row.ggDealsNoData)) completedRows.push(row);
     else failedRows.push(row);
-    patches.push({
-      stptId: row.el.dataset.stptId,
-      update: {
-        price: priceData ? _getBadgePrice(priceData, run.settings) : null,
-        currency: priceData?.prices?.currency ?? 'EUR',
-        ggDealsNoData: row.ggDealsNoData,
-      },
-    });
   }
-  state.workstation.updateResolvedPageGames(patches);
+  syncWorkstationRows(state, run, rows);
   return { completedRows, failedRows, partialError: prices?.error ?? null };
 }
 
@@ -424,22 +440,29 @@ function scheduleTier4Prices(state, run, rows) {
 function reconcileTiers(state, run, { authoritativeWishlist, authoritativeTradables }) {
   if (!isCurrent(state, run)) return;
   const tiered = prioritize(state.rows.map(row => ({ ...row, title: row.originalTitle })), [...run.wishlist], run.tradables);
-  const patches = [];
+  const changedRows = [];
   const promoted = [];
   tiered.forEach((next, index) => {
     const row = state.rows[index];
     const oldTier = row.tier;
-    if (oldTier === next.tier) return;
-    if (!authoritativeWishlist && oldTier === 1 && next.tier !== 1) return;
-    if (!authoritativeTradables && oldTier === 2 && next.tier === 4) return;
-    row.tier = next.tier;
+    const inWishlist = authoritativeWishlist
+      ? next.inWishlist
+      : Boolean(row.inWishlist || next.inWishlist);
+    const inTradables = authoritativeTradables
+      ? next.inTradables
+      : Boolean(row.inTradables || next.inTradables);
+    const tier = inWishlist ? 1 : inTradables ? 2 : 4;
+    if (oldTier === tier && row.inWishlist === inWishlist && row.inTradables === inTradables) return;
+    row.tier = tier;
+    row.inWishlist = inWishlist;
+    row.inTradables = inTradables;
     if (row.priceData && !row.fuzzy) {
       replaceBadge(row.el, row.priceData, { ...row, settings: run.settings, cacheKey: row.cacheKey });
     }
-    patches.push({ stptId: row.el.dataset.stptId, update: { tier: row.tier } });
+    changedRows.push(row);
     if (row.resolutionStatus === 'pending' && row.tier <= 2) promoted.push(row);
   });
-  if (patches.length) state.workstation.updateResolvedPageGames(patches);
+  syncWorkstationRows(state, run, changedRows);
   if (promoted.length) run.coordinator?.enqueue(promoted, { priority: true });
 }
 
@@ -502,8 +525,7 @@ async function beginRun(state, settings) {
   }
   if (!tradablesRead?.storageError) run.tradables = tradablesRead?.tradables ?? [];
   reconcileTiers(state, run, { authoritativeWishlist: false, authoritativeTradables: !tradablesRead?.storageError });
-  state.workstation.setWishlistGames([...run.wishlist]);
-  state.workstation.setTradableGames(run.tradables);
+  state.workstation?.setTradableGames(run.tradables);
 
   run.coordinator = new ProgressiveResolutionCoordinator({
     rows: state.rows,
@@ -514,10 +536,13 @@ async function beginRun(state, settings) {
       rowMultiplicities: meta.rowMultiplicities,
     }),
     onResolved: (row, resolution) => applySteamResolution(state, run, row, resolution),
-    onBatchResolved: items => Promise.all([
-      hydratePriceBatch(state, run, items),
-      reconcileRemovalRows(state, run, items.map(item => item.row)),
-    ]),
+    onBatchResolved: items => {
+      syncWorkstationRows(state, run, items.map(item => item.row));
+      return Promise.all([
+        hydratePriceBatch(state, run, items),
+        reconcileRemovalRows(state, run, items.map(item => item.row)),
+      ]);
+    },
   });
 
   const hydrated = state.rows
@@ -537,6 +562,7 @@ async function beginRun(state, settings) {
   });
   run.coordinator.markHydrated(hydrated.map(item => item.row));
   if (hydrated.length) {
+    syncWorkstationRows(state, run, hydrated.map(item => item.row));
     await Promise.all([
       hydratePriceBatch(state, run, hydrated),
       reconcileRemovalRows(state, run, hydrated.map(item => item.row)),
@@ -561,8 +587,7 @@ async function beginRun(state, settings) {
     }
     run.tradables = profile.tradables ?? run.tradables;
     reconcileTiers(state, run, { authoritativeWishlist: profile?.profileComplete === true, authoritativeTradables: true });
-    state.workstation.setWishlistGames([...run.wishlist]);
-    state.workstation.setTradableGames(run.tradables);
+    state.workstation?.setTradableGames(run.tradables);
   }).catch(() => {});
 }
 
@@ -576,13 +601,18 @@ function resetRows(state) {
     row.removal = null;
     row.resolutionStatus = 'pending';
     row.fuzzy = false;
+    row.similarity = null;
+    row.manuallyResolved = false;
     row.priceData = null;
     row.ggDealsNoData = false;
     row.tier = 4;
+    row.inWishlist = false;
+    row.inTradables = false;
     row.el.dataset.stptTitle = row.originalTitle;
     row.el.querySelectorAll('.stpt-badge, .stpt-skeleton').forEach(el => el.remove());
     injectSkeleton(row.el, true);
   });
+  syncWorkstationRows(state, state.run, state.rows);
 }
 
 function setupSelectedFetch(state) {
@@ -673,6 +703,7 @@ function bindRecheckListener(state) {
         if (!isCurrent(state, run) || row.rowRevision !== revision) return;
         const resolution = resolutions?.[0] ?? { status: 'not-found', failed: true };
         applyResolution(row, resolution);
+        syncWorkstationRows(state, run, [row]);
         await Promise.all([
           hydratePriceBatch(state, run, [{ row, resolution }]),
           reconcileRemovalRows(state, run, [row]),
@@ -680,8 +711,21 @@ function bindRecheckListener(state) {
       }).catch(() => {
         if (isCurrent(state, run) && row.rowRevision === revision) {
           applyResolution(row, { status: 'not-found', failed: true, cacheKey: event.detail?.cacheKey });
+          syncWorkstationRows(state, run, [row]);
         }
       });
+  });
+}
+
+function bindDismissListener(state) {
+  document.addEventListener('stpt-dismiss', event => {
+    const row = state.rows.find(item => item.el === event.target);
+    if (!row) return;
+    applyResolution(row, {
+      status: 'dismissed',
+      cacheKey: event.detail?.cacheKey ?? row.cacheKey,
+    });
+    syncWorkstationRows(state, state.run, [row]);
   });
 }
 
@@ -710,6 +754,8 @@ export async function startProgressivePage() {
         linkedAppId,
         linkedType,
         tier: 4,
+        inWishlist: false,
+        inTradables: false,
         cacheKey: null,
         resolution: null,
         removal: null,
@@ -721,12 +767,13 @@ export async function startProgressivePage() {
         rowRevision: 0,
       };
     }),
-    workstation: new SidebarWorkstation(new TradeSimulator(0.1)),
+    workstation: null,
+    workstationBridge: null,
     settingsRef: { current: settings, revision: 0 },
     run: null,
   };
-  window.__stpt_workstation = state.workstation;
-  state.workstation.setPageGames(state.rows.map(row => workstationGame(row, settings)));
+  state.workstationBridge = createWorkstationBridge(state);
+  applyWorkstationVisibility(state, settings);
 
   if (settings.selectiveFetch !== false) {
     injectCheckboxes(state.rows);
@@ -734,7 +781,7 @@ export async function startProgressivePage() {
   }
   bindManualResolutionListener(document, {
     rowData: state.rows,
-    workstation: state.workstation,
+    workstation: state.workstationBridge,
     sendMessage,
     replaceBadge,
     updateSidebarRow: () => {},
@@ -747,6 +794,7 @@ export async function startProgressivePage() {
     setWorkstationPrice,
   });
   bindRecheckListener(state);
+  bindDismissListener(state);
 
   chrome.runtime.onMessage.addListener(message => {
     const run = state.run;
@@ -809,13 +857,14 @@ export async function startProgressivePage() {
       readPriceRegion,
       priceItem,
       normalizeSteamType,
-      workstation: state.workstation,
+      workstation: state.workstationBridge,
       _getBadgePrice,
       setWorkstationPrice,
     });
     if (handled && message.type === 'SETTINGS_UPDATED' && state.run) {
       const run = state.run;
       run.settings = message.settings;
+      applyWorkstationVisibility(state, message.settings);
       const switchedToAutomatic = previousSettings?.selectiveFetch !== false
         && message.settings.selectiveFetch === false;
       const enabledRemovedPrices = previousSettings?.fetchRemovedGamePrices !== true

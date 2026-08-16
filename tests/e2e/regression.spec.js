@@ -73,6 +73,118 @@ test.describe('B1 - Badge injection', () => {
   });
 });
 
+test.describe('Issue 19 - All Page Games', () => {
+  test('shows compact states, title navigation, and dropdown badge filters', async ({
+    extensionContext,
+    navigate,
+    seedFixtures,
+    setSettings,
+  }) => {
+    const steamId = '76561198000000000';
+    await setSettings({
+      apiKey: 'TEST',
+      regions: ['eu'],
+      selectiveFetch: true,
+      showSidebar: true,
+      ggdealsAutoScroll: true,
+      currency: 'EUR',
+      theme: 'dark',
+      steamId,
+    });
+    await seedFixtures();
+    const sw = extensionContext.context.serviceWorkers()[0];
+    await sw.evaluate(async ({ steamId }) => {
+      const entry = value => ({ value, cachedAt: Date.now(), expiresAt: 0 });
+      await chrome.storage.local.set({
+        [`wishlist:${steamId}`]: entry({
+          schemaVersion: 2,
+          complete: true,
+          wishlist: ['Ori and the Blind Forest'],
+          total: 1,
+          failedAppIds: [],
+          updatedAt: Date.now(),
+        }),
+        tradables_list: entry([{ appId: '367520', type: 'app', name: 'Hollow Knight' }]),
+        'resolve:ori and the blind forest:confirmed': entry({ appId: '261570', type: 'app' }),
+        'resolve:ori and the blind forest:confirmed:title': entry('Ori Steam Canonical'),
+      });
+    }, { steamId });
+
+    const page = await navigate('https://www.steamtrades.com/trade/12345/test');
+    const dataRows = page.locator('.stpt-ws-data .stpt-game-row');
+    await expect(dataRows).toHaveCount(3, { timeout: 10000 });
+
+    const firstRow = dataRows.filter({ hasText: 'Ori and the Blind Forest' });
+    await expect(firstRow.locator('.stpt-game-title')).toHaveText('Ori and the Blind Forest');
+    await expect(firstRow.locator('.stpt-game-source-title')).toHaveText('→ Ori Steam Canonical');
+    await expect(firstRow.locator('.stpt-game-compact-badge.wish')).toHaveText('W');
+    await expect(dataRows.filter({ hasText: 'Hollow Knight' }).locator('.stpt-game-compact-badge.trade')).toHaveText('T');
+    await expect(dataRows.filter({ hasText: 'Castle Rencounter' }).locator('.stpt-game-compact-badge.removed_disabled')).toHaveText('P');
+
+    const oriSourceRow = page.locator('.stpt-game-item', { hasText: 'Ori and the Blind Forest' }).first();
+    const hollowSourceRow = page.locator('.stpt-game-item', { hasText: 'Hollow Knight' }).first();
+    await firstRow.locator('.stpt-game-title-container').click();
+    await expect(oriSourceRow).toHaveClass(/stpt-game-jump-target/);
+    await dataRows.filter({ hasText: 'Hollow Knight' }).locator('.stpt-game-title-container').click();
+    await expect(oriSourceRow).not.toHaveClass(/stpt-game-jump-target/);
+    await expect(hollowSourceRow).toHaveClass(/stpt-game-jump-target/);
+
+    const filterTrigger = page.locator('.stpt-ws-filter-trigger');
+    const filterMenu = page.locator('.stpt-ws-filter-menu');
+    await expect(filterMenu).toBeHidden();
+    await filterTrigger.click();
+    await expect(filterMenu.locator('input[type="checkbox"]')).toHaveCount(10);
+    await filterMenu.locator('input[value="wish"]').check();
+    await expect(filterMenu).toBeVisible();
+    await expect(dataRows).toHaveCount(1);
+    await filterMenu.locator('input[value="trade"]').check();
+    await expect(dataRows).toHaveCount(2);
+    await expect(filterTrigger.locator('.stpt-ws-filter-count')).toHaveText('2');
+
+    await page.locator('.stpt-ws-orig-title-toggle input').uncheck();
+    await expect(dataRows.filter({ hasText: 'Ori Steam Canonical' }).locator('.stpt-game-title')).toHaveText('Ori Steam Canonical');
+    await expect(page.locator('.stpt-ws-data .stpt-game-source-title')).toHaveCount(0);
+  });
+
+  test('keeps progressive badges active while lazily creating the disabled workstation', async ({
+    navigate,
+    seedFixtures,
+    setSettings,
+  }) => {
+    await setSettings({
+      apiKey: 'TEST',
+      regions: ['eu'],
+      selectiveFetch: true,
+      showSidebar: false,
+      currency: 'EUR',
+    });
+    await seedFixtures();
+    const page = await navigate('https://www.steamtrades.com/trade/12345/test');
+
+    await expect(page.locator('.stpt-game-item .stpt-badge').first()).toBeAttached({ timeout: 10000 });
+    await expect(page.locator('.stpt-workstation')).toHaveCount(0);
+
+    await setSettings({
+      apiKey: 'TEST',
+      regions: ['eu'],
+      selectiveFetch: true,
+      showSidebar: true,
+      currency: 'EUR',
+    });
+    await expect(page.locator('.stpt-workstation')).toBeVisible();
+    await expect(page.locator('.stpt-ws-data .stpt-game-row')).toHaveCount(3);
+
+    await setSettings({
+      apiKey: 'TEST',
+      regions: ['eu'],
+      selectiveFetch: true,
+      showSidebar: false,
+      currency: 'EUR',
+    });
+    await expect(page.locator('.stpt-workstation')).toBeHidden();
+  });
+});
+
 test.describe('B2 - Selective fetch', () => {
   test('checkbox toggles fetch button text', async ({ navigate, seedFixtures }) => {
     await seedFixtures();

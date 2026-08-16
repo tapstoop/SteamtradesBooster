@@ -107,6 +107,93 @@ describe('SidebarWorkstation all games count', () => {
     ]);
   });
 
+  it('coalesces progressive patches and only renders affected sections', () => {
+    workstation.setPageGames([
+      { stptId: 'plain', title: 'Plain', section: 'have', resolutionStatus: 'pending' },
+      { stptId: 'wish', title: 'Wish', section: 'have', inWishlist: true, resolutionStatus: 'pending' },
+    ]);
+    vi.runAllTimers();
+    const dataRender = vi.spyOn(workstation, '_renderDataList');
+    const wishlistRender = vi.spyOn(workstation, '_renderWishlistSection');
+    const tradablesRender = vi.spyOn(workstation, '_renderTradablesSection');
+    const tradeRender = vi.spyOn(workstation, '_renderInTrade');
+
+    workstation.updateResolvedPageGame('plain', { resolutionStatus: 'resolving' });
+    workstation.updateResolvedPageGame('plain', {
+      appId: '1',
+      resolutionStatus: 'resolved',
+      resolution: { status: 'resolved', appId: '1' },
+    });
+
+    expect(workstation.pageGames[0].resolutionStatus).toBe('resolved');
+    vi.runAllTimers();
+    expect(dataRender).toHaveBeenCalledTimes(1);
+    expect(wishlistRender).not.toHaveBeenCalled();
+    expect(tradablesRender).not.toHaveBeenCalled();
+    expect(tradeRender).not.toHaveBeenCalled();
+
+    workstation.updateResolvedPageGame('wish', { price: 500, currency: 'EUR' });
+    vi.runAllTimers();
+    expect(dataRender).toHaveBeenCalledTimes(2);
+    expect(wishlistRender).toHaveBeenCalledTimes(1);
+    expect(tradablesRender).not.toHaveBeenCalled();
+  });
+
+  it('defers DOM work while hidden and flushes the latest state once when shown', () => {
+    workstation.setPageGames([
+      { stptId: 'hidden', title: 'Hidden', section: 'have', resolutionStatus: 'pending' },
+    ]);
+    vi.runAllTimers();
+    const dataRender = vi.spyOn(workstation, '_renderDataList');
+    workstation.hide();
+
+    workstation.updateResolvedPageGame('hidden', { resolutionStatus: 'resolving' });
+    workstation.updateResolvedPageGame('hidden', {
+      resolutionStatus: 'failed',
+      resolution: { status: 'not-found', failed: true },
+    });
+    vi.runAllTimers();
+    expect(dataRender).not.toHaveBeenCalled();
+
+    workstation.show();
+    vi.runAllTimers();
+    expect(dataRender).toHaveBeenCalledTimes(1);
+    expect(workstation.el.querySelector('.stpt-game-compact-badge.failed')).not.toBeNull();
+  });
+
+  it('does not rerender All Page Games when only the external tradables collection changes', () => {
+    workstation.setPageGames([
+      { stptId: 'plain', title: 'Plain', section: 'have' },
+    ]);
+    vi.runAllTimers();
+    const dataRender = vi.spyOn(workstation, '_renderDataList');
+    const tradablesRender = vi.spyOn(workstation, '_renderTradablesSection');
+
+    workstation.setTradableGames([{ appId: '2', type: 'app', name: 'External Tradable' }]);
+    vi.runAllTimers();
+
+    expect(dataRender).not.toHaveBeenCalled();
+    expect(tradablesRender).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves virtual-list scroll position across progressive patches', () => {
+    workstation.setPageGames(Array.from({ length: 20 }, (_, index) => ({
+      stptId: String(index),
+      title: `Game ${String(index).padStart(2, '0')}`,
+      section: 'have',
+      appId: String(index + 1),
+    })));
+    vi.runAllTimers();
+    const list = workstation._virtualList.container;
+    list.scrollTop = 72;
+    list.dispatchEvent(new Event('scroll'));
+
+    workstation.updateResolvedPageGame('10', { price: 500, currency: 'EUR' });
+    vi.runAllTimers();
+
+    expect(list.scrollTop).toBe(72);
+  });
+
   it('clears price when update explicitly passes null, and recalculates simulator totals', () => {
     workstation.setPageGames([
       { stptId: 'a', title: 'Game A', section: 'have', appId: '1', type: 'app', price: 1234, currency: 'EUR' },
@@ -225,7 +312,7 @@ describe('SidebarWorkstation all games count', () => {
 
   // ── Dual-title rendering ────────────────────────────────────────────
 
-  it('renders original title as secondary line when manuallyResolved and titles differ', () => {
+  it('renders the page title first and the resolved Steam title second', () => {
     workstation.setPageGames([
       { stptId: 'dt1', title: 'Resolved Steam Title', originalTitle: 'Original Page Name', manuallyResolved: true, section: 'have', appId: '1', type: 'app', price: 500, currency: 'EUR', inWishlist: false, inTradables: false },
     ]);
@@ -233,10 +320,10 @@ describe('SidebarWorkstation all games count', () => {
 
     const row = workstation.el.querySelector('.stpt-game-row');
     const primaryTitle = row.querySelector('.stpt-game-title');
-    expect(primaryTitle.textContent).toBe('Resolved Steam Title');
-    const originalTitle = row.querySelector('.stpt-game-original-title');
-    expect(originalTitle).not.toBeNull();
-    expect(originalTitle.textContent).toBe('→ Original Page Name');
+    expect(primaryTitle.textContent).toBe('Original Page Name');
+    const sourceTitle = row.querySelector('.stpt-game-source-title');
+    expect(sourceTitle).not.toBeNull();
+    expect(sourceTitle.textContent).toBe('→ Resolved Steam Title');
   });
 
   it('does not render original title when titles are equal', () => {
@@ -246,7 +333,7 @@ describe('SidebarWorkstation all games count', () => {
     vi.runAllTimers();
 
     const row = workstation.el.querySelector('.stpt-game-row');
-    expect(row.querySelector('.stpt-game-original-title')).toBeNull();
+    expect(row.querySelector('.stpt-game-source-title')).toBeNull();
   });
 
   it('does not render original title for auto-resolved (non-manual) games', () => {
@@ -256,7 +343,7 @@ describe('SidebarWorkstation all games count', () => {
     vi.runAllTimers();
 
     const row = workstation.el.querySelector('.stpt-game-row');
-    expect(row.querySelector('.stpt-game-original-title')).toBeNull();
+    expect(row.querySelector('.stpt-game-source-title')).toBeNull();
   });
 
   it('does not render original title when showOriginalTitle is toggled off', () => {
@@ -267,7 +354,7 @@ describe('SidebarWorkstation all games count', () => {
     vi.runAllTimers();
 
     const row = workstation.el.querySelector('.stpt-game-row');
-    expect(row.querySelector('.stpt-game-original-title')).toBeNull();
+    expect(row.querySelector('.stpt-game-source-title')).toBeNull();
   });
 
   // ── Have-only: want-section games are excluded from All Page Games ───
@@ -284,6 +371,256 @@ describe('SidebarWorkstation all games count', () => {
     expect(rows.length).toBe(2);
     const titles = Array.from(rows).map(r => r.querySelector('.stpt-game-title').textContent);
     expect(titles).toEqual(['Have Game 1', 'Have Game 2']);
+  });
+
+  it('combines wishlist and tradables filters as an OR union', () => {
+    workstation.setPageGames([
+      { stptId: 'wishlist', title: 'Wishlist Game', section: 'have', appId: '1', inWishlist: true, inTradables: false },
+      { stptId: 'tradable', title: 'Tradable Game', section: 'have', appId: '2', inWishlist: false, inTradables: true },
+      { stptId: 'both', title: 'Both Game', section: 'have', appId: '3', inWishlist: true, inTradables: true },
+      { stptId: 'neither', title: 'Other Game', section: 'have', appId: '4', inWishlist: false, inTradables: false },
+    ]);
+    vi.runAllTimers();
+
+    const wishlist = workstation.el.querySelector('.stpt-ws-filter-menu input[value="wish"]');
+    const tradables = workstation.el.querySelector('.stpt-ws-filter-menu input[value="trade"]');
+    expect(wishlist.checked).toBe(false);
+    expect(tradables.checked).toBe(false);
+    expect(workstation.el.querySelectorAll('.stpt-ws-data .stpt-game-row')).toHaveLength(4);
+
+    wishlist.click();
+    vi.runAllTimers();
+    expect(workstation.el.querySelectorAll('.stpt-ws-data .stpt-game-row')).toHaveLength(2);
+    expect(workstation.el.querySelector('.stpt-ws-all-count').textContent).toBe('Total: 2');
+
+    tradables.click();
+    vi.runAllTimers();
+    expect(workstation.el.querySelectorAll('.stpt-ws-data .stpt-game-row')).toHaveLength(3);
+
+    wishlist.click();
+    vi.runAllTimers();
+    expect(workstation.el.querySelectorAll('.stpt-ws-data .stpt-game-row')).toHaveLength(2);
+  });
+
+  it('exposes all badge filters in a compact keyboard-accessible dropdown', () => {
+    const trigger = workstation.el.querySelector('.stpt-ws-filter-trigger');
+    const menu = workstation.el.querySelector('.stpt-ws-filter-menu');
+    const options = menu.querySelectorAll('input[type="checkbox"]');
+
+    expect(menu.hidden).toBe(true);
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(options).toHaveLength(10);
+
+    trigger.click();
+    expect(menu.hidden).toBe(false);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+
+    options[0].click();
+    expect(menu.hidden).toBe(false);
+    expect(trigger.querySelector('.stpt-ws-filter-count').textContent).toBe('1');
+    expect(trigger.getAttribute('aria-label')).toBe('Filters, 1 active');
+
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(menu.hidden).toBe(true);
+
+    trigger.click();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(menu.hidden).toBe(true);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('combines search with badge filters using AND semantics', () => {
+    workstation.setPageGames([
+      { stptId: 'w-alpha', title: 'Alpha Wish', section: 'have', inWishlist: true },
+      { stptId: 'w-beta', title: 'Beta Wish', section: 'have', inWishlist: true },
+      { stptId: 't-alpha', title: 'Alpha Trade', section: 'have', inTradables: true },
+    ]);
+    vi.runAllTimers();
+
+    workstation.el.querySelector('.stpt-ws-filter-menu input[value="wish"]').click();
+    const search = workstation.el.querySelector('.stpt-ws-data .stpt-ws-search input');
+    search.value = 'alpha';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    vi.advanceTimersByTime(250);
+
+    const titles = [...workstation.el.querySelectorAll('.stpt-ws-data .stpt-game-title')]
+      .map(element => element.textContent);
+    expect(titles).toEqual(['Alpha Wish']);
+    expect(workstation.el.querySelector('.stpt-ws-all-count').textContent).toBe('Total: 1');
+  });
+
+  it('updates status-filter results as progressive resolution changes state', () => {
+    workstation.setPageGames([{
+      stptId: 'missing',
+      title: 'Missing Game',
+      section: 'have',
+      resolution: { status: 'not-found' },
+    }]);
+    vi.runAllTimers();
+    workstation.el.querySelector('.stpt-ws-filter-menu input[value="not-found"]').click();
+    vi.runAllTimers();
+    expect(workstation.el.querySelectorAll('.stpt-ws-data .stpt-game-row')).toHaveLength(1);
+
+    workstation.updateResolvedPageGame('missing', {
+      appId: '123',
+      resolutionStatus: 'resolved',
+      resolution: { status: 'hit', appId: '123' },
+    });
+    vi.runAllTimers();
+    expect(workstation.el.querySelectorAll('.stpt-ws-data .stpt-game-row')).toHaveLength(0);
+    expect(workstation.el.querySelector('.stpt-ws-all-count').textContent).toBe('Total: 0');
+  });
+
+  it('clamps virtual scroll when active filters shrink progressive results', () => {
+    workstation.setPageGames(Array.from({ length: 20 }, (_, index) => ({
+      stptId: String(index),
+      title: `Pending ${index}`,
+      section: 'have',
+      resolutionStatus: 'pending',
+    })));
+    vi.runAllTimers();
+    workstation.el.querySelector('.stpt-ws-filter-menu input[value="pending"]').click();
+    vi.runAllTimers();
+    const list = workstation._virtualList.container;
+    list.scrollTop = 360;
+    list.dispatchEvent(new Event('scroll'));
+
+    workstation.updateResolvedPageGames(workstation.pageGames.map(game => ({
+      stptId: game.stptId,
+      update: { resolutionStatus: 'failed' },
+    })));
+    vi.runAllTimers();
+
+    expect(list.scrollTop).toBe(0);
+  });
+
+  it('navigates from an unbadged title and temporarily highlights its current source row', () => {
+    const sourceRow = document.createElement('div');
+    sourceRow.className = 'stpt-game-item';
+    sourceRow.scrollIntoView = vi.fn();
+    document.body.appendChild(sourceRow);
+    workstation.setPageGames([{
+      stptId: 'plain',
+      el: sourceRow,
+      title: 'Plain Game',
+      section: 'have',
+    }]);
+    vi.runAllTimers();
+
+    workstation.el.querySelector('.stpt-game-title-container').click();
+
+    expect(sourceRow.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    expect(sourceRow.classList).toContain('stpt-game-jump-target');
+    vi.advanceTimersByTime(1400);
+    expect(sourceRow.classList).not.toContain('stpt-game-jump-target');
+  });
+
+  it('honors reduced motion and safely ignores a detached source row', () => {
+    const previousMatchMedia = globalThis.matchMedia;
+    globalThis.matchMedia = vi.fn(() => ({ matches: true }));
+    const sourceRow = document.createElement('div');
+    sourceRow.scrollIntoView = vi.fn();
+    document.body.appendChild(sourceRow);
+    workstation.setPageGames([{ stptId: 'motion', el: sourceRow, title: 'Motion', section: 'have' }]);
+    vi.runAllTimers();
+
+    workstation.el.querySelector('.stpt-game-title-container').click();
+    expect(sourceRow.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'center' });
+
+    sourceRow.remove();
+    expect(workstation._navigateToPageGame(workstation.pageGames[0])).toBe(false);
+    expect(sourceRow.scrollIntoView).toHaveBeenCalledTimes(1);
+    globalThis.matchMedia = previousMatchMedia;
+  });
+
+  it('moves the jump highlight when different titles are clicked successively', () => {
+    const first = document.createElement('div');
+    const second = document.createElement('div');
+    first.scrollIntoView = vi.fn();
+    second.scrollIntoView = vi.fn();
+    document.body.append(first, second);
+    workstation.setPageGames([
+      { stptId: 'first', el: first, title: 'First', section: 'have' },
+      { stptId: 'second', el: second, title: 'Second', section: 'have' },
+    ]);
+    vi.runAllTimers();
+    const titleButtons = workstation.el.querySelectorAll('.stpt-ws-data .stpt-game-title-container');
+
+    titleButtons[0].click();
+    titleButtons[1].click();
+
+    expect(first.classList).not.toContain('stpt-game-jump-target');
+    expect(second.classList).toContain('stpt-game-jump-target');
+  });
+
+  it('restarts the highlight timeout when the same visible title is clicked again', () => {
+    const sourceRow = document.createElement('div');
+    sourceRow.scrollIntoView = vi.fn();
+    document.body.appendChild(sourceRow);
+    workstation.setPageGames([{
+      stptId: 'repeat',
+      el: sourceRow,
+      title: 'Repeat',
+      section: 'have',
+    }]);
+    vi.runAllTimers();
+    const titleButton = workstation.el.querySelector('.stpt-ws-data .stpt-game-title-container');
+
+    titleButton.click();
+    vi.advanceTimersByTime(1000);
+    titleButton.click();
+    vi.advanceTimersByTime(500);
+
+    expect(sourceRow.classList).toContain('stpt-game-jump-target');
+    expect(sourceRow.scrollIntoView).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(900);
+    expect(sourceRow.classList).not.toContain('stpt-game-jump-target');
+  });
+
+  it('removes dismissed games from the page list and active simulation', () => {
+    workstation.setPageGames([
+      { stptId: 'dismissed', title: 'Dismiss Me', section: 'have', appId: '1', price: 100 },
+    ]);
+    workstation.addTraderGame(workstation.pageGames[0]);
+
+    workstation.updateResolvedPageGame('dismissed', {
+      appId: null,
+      resolutionStatus: 'dismissed',
+      resolution: { status: 'dismissed' },
+    });
+    vi.runAllTimers();
+
+    expect(workstation.el.querySelectorAll('.stpt-game-row')).toHaveLength(0);
+    expect(workstation.inTrade.trader).toHaveLength(0);
+  });
+
+  it('opens the source-row candidate picker from a compact resolution badge', async () => {
+    const sourceRow = document.createElement('div');
+    sourceRow.className = 'stpt-game-item';
+    document.body.appendChild(sourceRow);
+    const candidates = [{ id: '10', name: 'Resolved Candidate', type: 'app' }];
+    workstation.setPageGames([{
+      stptId: 'ambiguous',
+      el: sourceRow,
+      title: 'Unknown Game',
+      originalTitle: 'Unknown Game',
+      section: 'have',
+      appId: null,
+      resolutionStatus: 'ambiguous',
+      cacheKey: 'resolve:unknown-game',
+      candidates,
+      resolution: { status: 'ambiguous', cacheKey: 'resolve:unknown-game', candidates },
+    }]);
+    vi.runAllTimers();
+
+    const badge = workstation.el.querySelector('.stpt-game-compact-badge.ambiguous');
+    const opening = workstation._openResolutionForGame(workstation.pageGames[0], badge);
+    await vi.advanceTimersByTimeAsync(150);
+    await opening;
+
+    expect(document.querySelector('.stpt-candidates')).not.toBeNull();
+    expect(document.querySelector('.stpt-candidates').textContent).toContain('Resolved Candidate');
+    expect(document.querySelector('.stpt-candidates').style.position).toBe('fixed');
   });
 
   // ── Checkbox toggle ─────────────────────────────────────────────────
@@ -304,7 +641,7 @@ describe('SidebarWorkstation all games count', () => {
     vi.runAllTimers();
 
     const row = workstation.el.querySelector('.stpt-game-row');
-    expect(row.querySelector('.stpt-game-original-title')).toBeNull();
+    expect(row.querySelector('.stpt-game-source-title')).toBeNull();
 
     // Toggle back on
     cb.checked = true;
@@ -312,7 +649,7 @@ describe('SidebarWorkstation all games count', () => {
     vi.runAllTimers();
 
     const row2 = workstation.el.querySelector('.stpt-game-row');
-    expect(row2.querySelector('.stpt-game-original-title')).not.toBeNull();
+    expect(row2.querySelector('.stpt-game-source-title')).not.toBeNull();
   });
 
   // ── Virtual list height ─────────────────────────────────────────────
@@ -404,9 +741,9 @@ describe('SidebarWorkstation all games count', () => {
     expect(pg.manuallyResolved).toBe(true);
   });
 
-  // ── Search and sort use resolved title ───────────────────────────────
+  // ── Search both titles and sort by resolved title ────────────────────
 
-  it('search matches resolved title, not original title', () => {
+  it('search matches both the resolved and original titles', () => {
     workstation.setPageGames([
       { stptId: 'sr1', title: 'Resolved Name', originalTitle: 'Original Name', manuallyResolved: true, section: 'have', appId: '1', type: 'app', price: null, currency: 'EUR', inWishlist: false, inTradables: false },
     ]);
@@ -420,12 +757,12 @@ describe('SidebarWorkstation all games count', () => {
 
     expect(workstation.el.querySelectorAll('.stpt-game-row').length).toBe(1);
 
-    // Search for original title → no match
+    // Search for original title → match
     search.value = 'Original';
     search.dispatchEvent(new Event('input', { bubbles: true }));
     vi.advanceTimersByTime(250);
 
-    expect(workstation.el.querySelectorAll('.stpt-game-row').length).toBe(0);
+    expect(workstation.el.querySelectorAll('.stpt-game-row').length).toBe(1);
   });
 
   it('sort orders by resolved title even when original title differs', () => {
@@ -435,9 +772,9 @@ describe('SidebarWorkstation all games count', () => {
     ]);
     vi.runAllTimers();
 
-    const titles = Array.from(workstation.el.querySelectorAll('.stpt-game-row'))
-      .map(r => r.querySelector('.stpt-game-title').textContent);
-    expect(titles).toEqual(['A Resolved', 'B Resolved']);
+    const sourceTitles = Array.from(workstation.el.querySelectorAll('.stpt-game-row'))
+      .map(row => row.querySelector('.stpt-game-source-title').textContent);
+    expect(sourceTitles).toEqual(['→ A Resolved', '→ B Resolved']);
   });
 
   // ── localStorage persistence on toggle ──────────────────────────────

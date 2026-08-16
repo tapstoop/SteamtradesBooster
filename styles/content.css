@@ -273,7 +273,22 @@
   border-radius: 2px;
 }
 .stpt-candidates .stpt-cand-item:hover { background: #1a2030; }
-.stpt-candidates .stpt-cand-dismiss { color: #555; font-style: italic; }
+.stpt-candidates .stpt-cand-dismiss {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: #ef4444;
+  font-style: normal;
+  font-weight: 600;
+}
+.stpt-candidates .stpt-cand-dismiss:hover,
+.stpt-candidates .stpt-cand-dismiss:focus-visible {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.12);
+  outline: 1px solid rgba(239, 68, 68, 0.45);
+}
 
 .stpt-error-log-link {
   width: 100%;
@@ -610,8 +625,12 @@
 
 .stpt-ws-options {
   display: flex;
-  justify-content: flex-end;
-  padding: 4px 8px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-height: 30px;
+  padding: 3px 8px;
   border-bottom: 1px solid #334155;
   background: #0f172a;
 }
@@ -676,6 +695,7 @@
 
 .stpt-ws-search {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 8px 12px;
   border-bottom: 1px solid #334155;
@@ -684,6 +704,7 @@
 
 .stpt-ws-search-input {
   flex: 1;
+  min-width: 120px;
   background: #1e293b;
   border: 1px solid #475569;
   border-radius: 4px;
@@ -700,6 +721,8 @@
 }
 
 .stpt-ws-sort-select {
+  flex: 0 0 88px;
+  width: 88px;
   background: #1e293b;
   border: 1px solid #475569;
   border-radius: 4px;
@@ -771,14 +794,6 @@
   background: rgba(59, 130, 246, 0.15);
 }
 
-.stpt-game-row.in-wishlist {
-  border-left: 3px solid #8b5cf6;
-}
-
-.stpt-game-row.in-tradables {
-  border-left: 3px solid #10b981;
-}
-
 .stpt-game-row.in-trade-used {
   opacity: 0.5;
 }
@@ -804,7 +819,49 @@
   overflow: hidden;
 }
 
-.stpt-game-row .stpt-game-original-title {
+.stpt-game-row button.stpt-game-title-container {
+  appearance: none;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stpt-game-row button.stpt-game-title-container:focus-visible {
+  border-radius: 2px;
+  outline: 1px solid #66c0f4;
+  outline-offset: 2px;
+}
+
+.stpt-game-item.stpt-game-jump-target {
+  border-radius: 2px;
+  background: rgba(102, 192, 244, 0.14);
+  box-shadow: 0 0 0 2px rgba(102, 192, 244, 0.65);
+  animation: stpt-game-jump-highlight 1.4s ease-out;
+}
+
+@keyframes stpt-game-jump-highlight {
+  0%, 65% {
+    background: rgba(102, 192, 244, 0.22);
+    box-shadow: 0 0 0 2px rgba(102, 192, 244, 0.85);
+  }
+  100% {
+    background: rgba(102, 192, 244, 0.14);
+    box-shadow: 0 0 0 2px rgba(102, 192, 244, 0.65);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stpt-game-item.stpt-game-jump-target {
+    animation: none;
+  }
+}
+
+.stpt-game-row .stpt-game-source-title {
   font-size: 9px;
   color: #64748b;
   white-space: nowrap;
@@ -812,7 +869,100 @@
   text-overflow: ellipsis;
 }
 
-.stpt-ws-orig-title-toggle {
+.stpt-ws-filter-group {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.stpt-ws-filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid #475569;
+  border-radius: 4px;
+  background: #1e293b;
+  color: #cbd5e1;
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.stpt-ws-filter-trigger:hover,
+.stpt-ws-filter-trigger:focus-visible,
+.stpt-ws-filter-trigger[aria-expanded="true"] {
+  border-color: #66c0f4;
+  outline: none;
+}
+
+.stpt-ws-filter-count {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #3b82f6;
+  color: #fff;
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+}
+
+.stpt-ws-filter-caret {
+  color: #94a3b8;
+  font-size: 8px;
+}
+
+.stpt-ws-filter-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(190px, calc(100vw - 24px));
+  max-height: min(320px, calc(100vh - 130px));
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid #475569;
+  border-radius: 5px;
+  background: #0f172a;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.stpt-ws-filter-menu[hidden] {
+  display: none;
+}
+
+.stpt-ws-filter-option {
+  display: grid;
+  grid-template-columns: 14px 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 27px;
+  padding: 3px 5px;
+  border-radius: 3px;
+  color: #cbd5e1;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.stpt-ws-filter-option:hover,
+.stpt-ws-filter-option:focus-within {
+  background: #1e293b;
+}
+
+.stpt-ws-filter-option input {
+  margin: 0;
+}
+
+.stpt-ws-filter-option-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.stpt-ws-option-toggle {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -823,7 +973,7 @@
   white-space: nowrap;
 }
 
-.stpt-ws-orig-title-toggle input {
+.stpt-ws-option-toggle input {
   margin: 0;
   cursor: pointer;
 }
@@ -834,21 +984,67 @@
   white-space: nowrap;
 }
 
-.stpt-game-row .stpt-game-badge {
+.stpt-game-compact-badge {
+  appearance: none;
+  border: 0;
   font-size: 9px;
   font-weight: 700;
   padding: 2px 5px;
   border-radius: 3px;
   letter-spacing: 0.3px;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
 
-.stpt-game-row .stpt-game-badge.w {
-  background: #8b5cf6;
+.stpt-game-compact-badge.wish {
+  background: #66c0f4;
+  color: #111;
+}
+.stpt-game-compact-badge.trade {
+  background: #4ecdc4;
+  color: #111;
+}
+.stpt-game-compact-badge.removed_delisted {
+  background: #ff4444;
+  color: #111;
+}
+.stpt-game-compact-badge.removed_disabled {
+  background: #f97316;
+  color: #111;
+}
+.stpt-game-compact-badge.removed_banned {
+  background: #9f1239;
   color: #fff;
 }
-.stpt-game-row .stpt-game-badge.t {
-  background: #10b981;
-  color: #fff;
+.stpt-game-compact-badge.resolution {
+  min-width: 24px;
+  background: #243050;
+  color: #94a3b8;
+}
+button.stpt-game-compact-badge.resolution {
+  cursor: pointer;
+}
+button.stpt-game-compact-badge.resolution:hover,
+button.stpt-game-compact-badge.resolution:focus-visible {
+  filter: brightness(1.2);
+  outline: 1px solid currentColor;
+}
+.stpt-game-compact-badge.ambiguous {
+  background: #cc88cc;
+  color: #111;
+}
+.stpt-game-compact-badge.not-found {
+  background: #1a1a1a;
+  color: #777;
+}
+.stpt-game-compact-badge.fuzzy {
+  background: #d99a27;
+  color: #111;
+}
+.stpt-game-compact-badge.failed {
+  background: #7f1d1d;
+  color: #fecaca;
 }
 
 .stpt-game-row .stpt-game-action {

@@ -33,6 +33,14 @@ export async function handleManualResolution(e, deps) {
     originalTitle: currentTitle,
     cacheKey,
   });
+  if (row) {
+    row.resolutionStatus = 'resolved';
+    row.resolution = { status: 'resolved', appId, type };
+    row.candidates = null;
+    row.fuzzy = false;
+    row.similarity = null;
+    row.manuallyResolved = true;
+  }
 
   // Immediately remove any ambiguous/not-found badge and inject a loading skeleton
   rowEl.querySelectorAll('.stpt-badge, .stpt-skeleton').forEach(el => el.remove());
@@ -41,7 +49,19 @@ export async function handleManualResolution(e, deps) {
   // Update workstation identity before awaiting settings/prices (omit price so
   // explicit-null semantics remain intact until pricing completes)
   if (workstation) {
-    workstation.updateResolvedPageGame(rowEl.dataset.stptId, { title, appId, type, originalTitle: currentTitle, manuallyResolved: true });
+    workstation.updateResolvedPageGame(rowEl.dataset.stptId, {
+      title,
+      appId,
+      type,
+      originalTitle: currentTitle,
+      manuallyResolved: true,
+      resolutionStatus: 'resolved',
+      resolution: row?.resolution,
+      cacheKey,
+      candidates: null,
+      fuzzy: false,
+      similarity: null,
+    });
   }
 
   // Fetch settings, bundles, and prices with individual recovery
@@ -124,6 +144,12 @@ export async function handleManualResolution(e, deps) {
       price,
       originalTitle: row?.originalTitle,
       manuallyResolved: true,
+      resolutionStatus: 'resolved',
+      resolution: currentRow?.resolution,
+      cacheKey,
+      candidates: null,
+      fuzzy: false,
+      similarity: null,
       removalStatus: removal?.status ?? null,
       ggDealsNoData,
     };

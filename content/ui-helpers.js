@@ -45,23 +45,27 @@ export function closeAll(selector) {
   document.querySelectorAll(selector).forEach(el => el.remove());
 }
 
-export function positionNear(floatEl, anchorEl) {
+export function positionNear(floatEl, anchorEl, { position = 'absolute' } = {}) {
+  const isFixed = position === 'fixed';
+  const offsetX = isFixed ? 0 : window.scrollX;
+  const offsetY = isFixed ? 0 : window.scrollY;
   document.body.appendChild(floatEl);
   const rect = anchorEl.getBoundingClientRect();
-  let top = rect.bottom + window.scrollY + 4;
-  let left = rect.left + window.scrollX;
+  let top = rect.bottom + offsetY + 4;
+  let left = rect.left + offsetX;
 
   // Flip if overflows viewport
   const vpW = window.innerWidth;
   const vpH = window.innerHeight;
+  floatEl.style.position = isFixed ? 'fixed' : 'absolute';
   floatEl.style.visibility = 'hidden';
   floatEl.style.top = `${top}px`;
   floatEl.style.left = `${left}px`;
 
   requestAnimationFrame(() => {
     const fRect = floatEl.getBoundingClientRect();
-    if (fRect.right > vpW) left = Math.max(0, vpW - fRect.width - 8);
-    if (fRect.bottom > vpH) top = rect.top + window.scrollY - fRect.height - 4;
+    if (fRect.right > vpW) left = offsetX + Math.max(0, vpW - fRect.width - 8);
+    if (fRect.bottom > vpH) top = rect.top + offsetY - fRect.height - 4;
     floatEl.style.left = `${left}px`;
     floatEl.style.top = `${top}px`;
     floatEl.style.visibility = 'visible';

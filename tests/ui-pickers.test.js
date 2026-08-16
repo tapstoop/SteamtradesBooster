@@ -7,9 +7,11 @@ import {
   createPickerStatusMessage,
   createPopoverBody,
   openCandidatePicker,
+  openFuzzyPicker,
   openNotFoundPicker,
   openPopover,
 } from '../content/ui-pickers.js';
+import { positionNear } from '../content/ui-helpers.js';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   url: 'https://www.steamtrades.com/trade/example',
@@ -76,6 +78,42 @@ describe('picker DOM builders', () => {
   });
 });
 
+describe('picker positioning', () => {
+  it('uses viewport coordinates for fixed pickers and document coordinates otherwise', () => {
+    Object.defineProperties(window, {
+      scrollX: { configurable: true, value: 30 },
+      scrollY: { configurable: true, value: 500 },
+    });
+    const anchor = document.createElement('button');
+    anchor.getBoundingClientRect = () => ({
+      top: 90,
+      right: 140,
+      bottom: 120,
+      left: 40,
+      width: 100,
+      height: 30,
+    });
+    document.body.appendChild(anchor);
+
+    const fixed = document.createElement('div');
+    positionNear(fixed, anchor, { position: 'fixed' });
+    expect(fixed.style.position).toBe('fixed');
+    expect(fixed.style.left).toBe('40px');
+    expect(fixed.style.top).toBe('124px');
+
+    const absolute = document.createElement('div');
+    positionNear(absolute, anchor);
+    expect(absolute.style.position).toBe('absolute');
+    expect(absolute.style.left).toBe('70px');
+    expect(absolute.style.top).toBe('624px');
+
+    Object.defineProperties(window, {
+      scrollX: { configurable: true, value: 0 },
+      scrollY: { configurable: true, value: 0 },
+    });
+  });
+});
+
 describe('picker interactions', () => {
   it('confirms a candidate and dispatches the resolution event', async () => {
     const anchor = document.createElement('button');
@@ -92,6 +130,7 @@ describe('picker interactions', () => {
       'candidate-key',
       row
     );
+    expect(document.querySelector('.stpt-candidates').style.position).toBe('absolute');
     document.querySelector('.stpt-cand-item')?.click();
     await vi.waitFor(() => expect(sendMessageMock).toHaveBeenCalled());
 
@@ -108,6 +147,53 @@ describe('picker interactions', () => {
       cacheKey: 'candidate-key',
       type: 'sub',
     }]);
+  });
+
+  it('keeps a workstation candidate picker fixed to its viewport anchor', () => {
+    const anchor = document.createElement('button');
+    const row = document.createElement('div');
+    document.body.append(anchor, row);
+
+    openCandidatePicker(
+      anchor,
+      [{ id: '321', name: 'Candidate Game', type: 'app' }],
+      'candidate-key',
+      row,
+      { position: 'fixed' }
+    );
+
+    expect(document.querySelector('.stpt-candidates').style.position).toBe('fixed');
+  });
+
+  it('persists and broadcasts a fuzzy dismissal from the source row', async () => {
+    const row = document.createElement('div');
+    row.className = 'stpt-game-item';
+    row.dataset.stptTitle = 'Original title';
+    const anchor = document.createElement('button');
+    row.appendChild(anchor);
+    document.body.appendChild(row);
+    const dismissals = [];
+    document.addEventListener('stpt-dismiss', event => dismissals.push(event.detail), { once: true });
+
+    openFuzzyPicker(anchor, {
+      status: 'hit',
+      fuzzy: true,
+      similarity: 80,
+      title: 'Resolved title',
+      cacheKey: 'resolve:original-title',
+    }, row);
+    document.querySelector('.stpt-cand-dismiss').click();
+
+    await vi.waitFor(() => expect(dismissals).toHaveLength(1));
+    expect(sendMessageMock).toHaveBeenCalledWith({
+      type: 'SET_DISMISSED',
+      cacheKey: 'resolve:original-title',
+    }, expect.any(Function));
+    expect(dismissals[0]).toEqual({
+      cacheKey: 'resolve:original-title',
+      title: 'Original title',
+    });
+    expect(row.querySelector('[data-type="dismissed"]')).not.toBeNull();
   });
 });
 
@@ -263,6 +349,18 @@ describe('openNotFoundPicker', () => {
     document.body.append(anchor, row);
     openNotFoundPicker(anchor, 'resolve:missing', '', row);
     expect(document.querySelector('.stpt-candidates')?.textContent).not.toMatch(/delisted game/i);
+  });
+
+  it('renders the dismiss action as a keyboard-focusable button', () => {
+    const anchor = document.createElement('button');
+    const row = document.createElement('span');
+    document.body.append(anchor, row);
+    openNotFoundPicker(anchor, 'resolve:missing', '', row);
+
+    const dismiss = document.querySelector('.stpt-cand-dismiss');
+    expect(dismiss.tagName).toBe('BUTTON');
+    expect(dismiss.type).toBe('button');
+    expect(dismiss.textContent).toBe('Not a game — dismiss');
   });
 });
 

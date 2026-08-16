@@ -76,6 +76,14 @@ export function createPickerStatusMessage(text, color = '#555') {
   return status;
 }
 
+function createDismissAction(text) {
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'stpt-cand-item stpt-cand-dismiss';
+  dismiss.textContent = text;
+  return dismiss;
+}
+
 export function anchorStillMatches(anchorEl, gameInfo, itemType) {
   if (!document.body.contains(anchorEl)) return false;
   const expectedType = normalizeSteamType(itemType);
@@ -113,7 +121,29 @@ function appendErrorLogLink(container) {
 
 // ── Candidate / Fuzzy / Not-found pickers ─────────────────────────────
 
-export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
+async function dismissResolution(rowEl, cacheKey, title) {
+  try {
+    await sendMessage('SET_DISMISSED', { cacheKey });
+  } catch (error) {
+    console.warn('[STPT] SET_DISMISSED failed:', error);
+    return false;
+  }
+
+  if (!rowEl) return true;
+  rowEl.querySelector('.stpt-badge')?.remove();
+  const checkbox = rowEl.previousElementSibling?.classList?.contains('stpt-game-checkbox')
+    ? rowEl.previousElementSibling
+    : null;
+  checkbox?.remove();
+  injectDismissedBadge(rowEl, cacheKey, title);
+  rowEl.dispatchEvent(new CustomEvent('stpt-dismiss', {
+    bubbles: true,
+    detail: { cacheKey, title },
+  }));
+  return true;
+}
+
+export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl, positionOptions) {
   closeAll('.stpt-candidates');
   const picker = document.createElement('div');
   picker.className = 'stpt-candidates';
@@ -137,28 +167,19 @@ export function openCandidatePicker(anchorEl, candidates, cacheKey, rowEl) {
     picker.appendChild(item);
   });
 
-  const dismiss = document.createElement('div');
-  dismiss.className = 'stpt-cand-item stpt-cand-dismiss';
-  dismiss.textContent = 'None of these — not a game';
+  const dismiss = createDismissAction('None of these — not a game');
   dismiss.addEventListener('click', async () => {
     picker.remove();
-    await sendMessage('SET_DISMISSED', { cacheKey });
-    const existing = rowEl.querySelector('.stpt-badge');
-    if (existing) existing.remove();
-    const checkbox = rowEl.previousElementSibling?.classList?.contains('stpt-game-checkbox')
-      ? rowEl.previousElementSibling
-      : null;
-    if (checkbox) checkbox.remove();
-    injectDismissedBadge(rowEl, cacheKey, rowEl.dataset.stptTitle);
+    await dismissResolution(rowEl, cacheKey, rowEl.dataset.stptTitle);
   });
   picker.appendChild(dismiss);
   appendErrorLogLink(picker);
 
-  positionNear(picker, anchorEl);
+  positionNear(picker, anchorEl, positionOptions);
   setTimeout(() => document.addEventListener('click', () => picker.remove(), { once: true }), 0);
 }
 
-export function openFuzzyPicker(anchorEl, resolution) {
+export function openFuzzyPicker(anchorEl, resolution, rowEl = anchorEl.closest('.stpt-game-item'), positionOptions) {
   closeAll('.stpt-candidates');
   const picker = document.createElement('div');
   picker.className = 'stpt-candidates';
@@ -175,31 +196,18 @@ export function openFuzzyPicker(anchorEl, resolution) {
   });
   picker.appendChild(matchedItem);
 
-  const dismiss = document.createElement('div');
-  dismiss.className = 'stpt-cand-item stpt-cand-dismiss';
-  dismiss.textContent = 'Wrong game — dismiss';
+  const dismiss = createDismissAction('Wrong game — dismiss');
   dismiss.addEventListener('click', async () => {
     picker.remove();
-    await sendMessage('SET_DISMISSED', { cacheKey: resolution.cacheKey });
-    const results = await sendMessage('RESOLVE_TITLES', { titles: [resolution.title] });
-    if (results[0]?.status === 'ambiguous') {
-      const existing = anchorEl.closest('.stpt-game-item');
-      if (existing) {
-        const skeleton = existing.querySelector('.stpt-badge');
-        if (skeleton) skeleton.remove();
-        // Import here to avoid top-level circular dependency
-        const { injectQuestionBadge } = await import('./ui-badges.js');
-        injectQuestionBadge(existing, results[0].candidates, results[0].cacheKey);
-      }
-    }
+    await dismissResolution(rowEl, resolution.cacheKey, rowEl?.dataset.stptTitle ?? resolution.title);
   });
   picker.appendChild(dismiss);
 
-  positionNear(picker, anchorEl);
+  positionNear(picker, anchorEl, positionOptions);
   setTimeout(() => document.addEventListener('click', () => picker.remove(), { once: true }), 0);
 }
 
-export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
+export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl, positionOptions) {
   closeAll('.stpt-candidates');
   const picker = document.createElement('div');
   picker.className = 'stpt-candidates';
@@ -299,26 +307,17 @@ export function openNotFoundPicker(anchorEl, cacheKey, title, rowEl) {
     performSearch(title);
   }
 
-  const dismiss = document.createElement('div');
-  dismiss.className = 'stpt-cand-item stpt-cand-dismiss';
-  dismiss.textContent = 'Not a game — dismiss';
+  const dismiss = createDismissAction('Not a game — dismiss');
   dismiss.style.cssText = 'border-top:1px solid #1e1e2e;margin-top:5px;';
   dismiss.addEventListener('click', async () => {
     closePicker();
-    await sendMessage('SET_DISMISSED', { cacheKey });
-    const existing = rowEl.querySelector('.stpt-badge');
-    if (existing) existing.remove();
-    const checkbox = rowEl.previousElementSibling?.classList?.contains('stpt-game-checkbox')
-      ? rowEl.previousElementSibling
-      : null;
-    if (checkbox) checkbox.remove();
-    injectDismissedBadge(rowEl, cacheKey, title);
+    await dismissResolution(rowEl, cacheKey, title);
   });
   picker.appendChild(dismiss);
 
   appendErrorLogLink(picker);
 
-  positionNear(picker, anchorEl);
+  positionNear(picker, anchorEl, positionOptions);
 
   setTimeout(() => {
     searchInput.focus();

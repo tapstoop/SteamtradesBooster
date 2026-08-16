@@ -64,7 +64,9 @@ export class ProgressiveResolutionCoordinator {
       const group = this.groups.get(this._keyFor(row));
       if (!group) continue;
       group.state = 'resolved';
-      row.resolutionStatus = 'resolved';
+      if (!row.resolutionStatus || row.resolutionStatus === 'pending') {
+        row.resolutionStatus = 'resolved';
+      }
     }
   }
 

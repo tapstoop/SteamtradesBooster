@@ -13,6 +13,45 @@ function stripListPrefixes(text) {
     .trim();
 }
 
+function hasUnicodeLetterOrNumber(text) {
+  return /[\p{L}\p{N}]/u.test(text);
+}
+
+function isDecorativeToken(token) {
+  return token.length > 0 && !hasUnicodeLetterOrNumber(token);
+}
+
+function stripDecorativeBorders(text) {
+  let tokens = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+  let leadingDecorationLength = 0;
+  let leadingTokenCount = 0;
+  while (leadingTokenCount < tokens.length && isDecorativeToken(tokens[leadingTokenCount])) {
+    leadingDecorationLength += Array.from(tokens[leadingTokenCount]).length;
+    leadingTokenCount++;
+  }
+  if (leadingDecorationLength >= 4 && leadingTokenCount < tokens.length) {
+    tokens = tokens.slice(leadingTokenCount);
+  }
+
+  let trailingDecorationLength = 0;
+  let trailingTokenCount = 0;
+  while (trailingTokenCount < tokens.length && isDecorativeToken(tokens[tokens.length - 1 - trailingTokenCount])) {
+    trailingDecorationLength += Array.from(tokens[tokens.length - 1 - trailingTokenCount]).length;
+    trailingTokenCount++;
+  }
+  if (trailingDecorationLength >= 4 && trailingTokenCount < tokens.length) {
+    tokens = tokens.slice(0, tokens.length - trailingTokenCount);
+  }
+
+  let cleaned = tokens.join(' ');
+  const leadingAttached = cleaned.match(/^[^\p{L}\p{N}\s]{4,}/u)?.[0] ?? '';
+  const trailingAttached = cleaned.match(/[^\p{L}\p{N}\s]{4,}$/u)?.[0] ?? '';
+  if (leadingAttached && trailingAttached && cleaned.length > leadingAttached.length + trailingAttached.length) {
+    cleaned = cleaned.slice(leadingAttached.length, cleaned.length - trailingAttached.length).trim();
+  }
+  return cleaned;
+}
+
 /**
  * PHASE 5B: Strip region/platform/suffix tags from game names.
  * Preserves the core game name while removing noise like region locks, keyshop tags, prices.
@@ -104,7 +143,9 @@ export function stripParentheses(text) {
 }
 
 export function cleanGameTitle(text) {
-  return stripParentheses(stripSuffixes(stripListPrefixes(text ?? ''))).replace(/\s+/g, ' ').trim();
+  const withoutSuffixes = stripSuffixes(text ?? '');
+  const withoutBorders = stripDecorativeBorders(withoutSuffixes);
+  return stripParentheses(stripListPrefixes(withoutBorders)).replace(/\s+/g, ' ').trim();
 }
 
 function getAnchorTitle(root) {
@@ -138,7 +179,7 @@ export function extractSteamIdentity(anchorOrHref) {
 
 function addParsedRow(rows, seenTitles, el, section, title, identity = null, { trustedStructure = false } = {}) {
   const cleaned = cleanGameTitle(title);
-  if (cleaned.length < 2 || isNotGame(cleaned, { allowSentenceLike: trustedStructure })) return false;
+  if (cleaned.length < 2 || isNotGame(cleaned, { allowSentenceLike: trustedStructure, trustedIdentity: Boolean(identity) })) return false;
 
   const normalized = cleaned.toLowerCase();
   if (seenTitles.has(normalized)) return false;
@@ -159,9 +200,9 @@ function addParsedRow(rows, seenTitles, el, section, title, identity = null, { t
   return true;
 }
 
-function canParseTitle(seenTitles, title, { trustedStructure = false } = {}) {
+function canParseTitle(seenTitles, title, { trustedStructure = false, trustedIdentity = false } = {}) {
   const cleaned = cleanGameTitle(title);
-  if (cleaned.length < 2 || isNotGame(cleaned, { allowSentenceLike: trustedStructure })) return null;
+  if (cleaned.length < 2 || isNotGame(cleaned, { allowSentenceLike: trustedStructure, trustedIdentity })) return null;
   if (seenTitles.has(cleaned.toLowerCase())) return null;
   return cleaned;
 }
@@ -228,14 +269,15 @@ function hasBundleStoreRef(text) {
 /**
  * Check if a line should be filtered out (not a game)
  */
-export function isNotGame(text, { allowSentenceLike = false } = {}) {
+export function isNotGame(text, { allowSentenceLike = false, trustedIdentity = false } = {}) {
   if (!text || text.length < 2) return true;
   const normalized = text.toLowerCase().trim();
   
   // PHASE 5A: Skip phrases
   if (matchesSkipPhrase(text)) return true;
   
-  if (hasUnicodeSuccession(text)) return true;
+  if (!trustedIdentity && !hasUnicodeLetterOrNumber(normalized)) return true;
+  if (!trustedIdentity && hasUnicodeSuccession(text)) return true;
   if (!allowSentenceLike && isSentence(text)) return true;
   if (hasBundleStoreRef(text)) return true;
   if (isChoicePattern(text)) return true;
@@ -295,7 +337,7 @@ export function parseGameRows() {
       });
       const rawText = anchorTitle || firstTextCell?.textContent?.trim() || '';
       if (!rawText || matchesSkipPhrase(rawText)) return;
-      if (!canParseTitle(seenTitles, rawText, { trustedStructure: true })) return;
+      if (!canParseTitle(seenTitles, rawText, { trustedStructure: true, trustedIdentity: Boolean(identity) })) return;
 
       const target = firstTextCell ?? cells[0];
       const span = document.createElement('span');
@@ -320,8 +362,9 @@ export function parseGameRows() {
       // PHASE 5B: Hyperlink-first detection for LI elements
       const anchors = Array.from(el.querySelectorAll('a'));
       const anchor = anchors.find(item => extractSteamIdentity(item)) ?? anchors[0] ?? null;
+      const identity = extractSteamIdentity(anchor);
       const text = anchor ? anchor.textContent.trim() : rawText;
-      if (!canParseTitle(seenTitles, text, { trustedStructure: true })) return;
+      if (!canParseTitle(seenTitles, text, { trustedStructure: true, trustedIdentity: Boolean(identity) })) return;
 
       // Create wrapper span
       const span = document.createElement('span');
@@ -332,7 +375,7 @@ export function parseGameRows() {
       }
       el.appendChild(span);
 
-      addParsedRow(rows, seenTitles, span, section, text, extractSteamIdentity(anchor), { trustedStructure: true });
+      addParsedRow(rows, seenTitles, span, section, text, identity, { trustedStructure: true });
       return;
     }
 
@@ -407,7 +450,8 @@ export function parseGameRows() {
 
       if (isHeaderish) return; // Skip category headers, preserve original HTML
       const trustedStructure = hasLink || lines.length > 1;
-      if (!canParseTitle(seenTitles, text, { trustedStructure })) return;
+      const identity = extractSteamIdentity(anchor);
+      if (!canParseTitle(seenTitles, text, { trustedStructure, trustedIdentity: Boolean(identity) })) return;
 
       // Wrap the original DOM nodes in a game span (preserves links, formatting)
       const span = document.createElement('span');
@@ -416,7 +460,7 @@ export function parseGameRows() {
       el.insertBefore(span, firstNode);
       lineNodes.forEach(n => span.appendChild(n));
 
-      if (addParsedRow(rows, seenTitles, span, section, text, extractSteamIdentity(anchor), { trustedStructure })) index++;
+      if (addParsedRow(rows, seenTitles, span, section, text, identity, { trustedStructure })) index++;
     });
   };
 
@@ -475,13 +519,9 @@ export function prioritize(rows, wishlist, tradables) {
 
   return rows.map(row => {
     const norm = row.title.toLowerCase().trim();
-    let tier;
-    // PHASE 5C: Fuzzy matching for wishlist/tradables
-    if (wishSet.includes(norm)) tier = 1;
-    else if (fuzzySetMatch(row.title, wishSet)) tier = 1;
-    else if (tradeSet.includes(norm)) tier = 2;
-    else if (fuzzySetMatch(row.title, tradeSet)) tier = 2;
-    else tier = 4; // viewport/on-demand handled by intersection observer
-    return { ...row, tier };
+    const inWishlist = wishSet.includes(norm) || fuzzySetMatch(row.title, wishSet);
+    const inTradables = tradeSet.includes(norm) || fuzzySetMatch(row.title, tradeSet);
+    const tier = inWishlist ? 1 : inTradables ? 2 : 4;
+    return { ...row, tier, inWishlist, inTradables };
   });
 }
